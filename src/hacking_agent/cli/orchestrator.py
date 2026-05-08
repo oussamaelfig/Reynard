@@ -57,6 +57,7 @@ from hacking_agent.agents import (
 )
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
+from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.providers import ProviderRegistry
@@ -186,13 +187,25 @@ class Orchestrator:
         target_url: str,
         max_iterations: int = 30,
         interactive: bool = False,
+        objective: str = "",
+        lab_profile: dict | None = None,
     ):
         self.target_url = target_url
+        self.objective = objective
+        self.lab_profile = lab_profile or {}
         self.interactive = interactive
         self.logger = SessionLogger()
 
         # ---- shared subsystems ----
         self.memory = AgentMemory(target_url=target_url)
+        if self.objective:
+            self.memory.add_fact("task_objective", self.objective, source="cli")
+        if self.lab_profile:
+            self.memory.add_fact(
+                "lab_profile", self.lab_profile.get("id", "unknown"), source="cli"
+            )
+            if self.lab_profile.get("platform"):
+                self.memory.add_fact("platform", self.lab_profile["platform"], source="cli")
         self.sm = StateMachine(
             StateMachineConfig(max_iterations=max_iterations)
         )
@@ -254,10 +267,16 @@ class Orchestrator:
         self._print_banner()
         emit("session_start", {
             "target": self.target_url,
+            "objective": self.objective,
+            "lab_profile": self.lab_profile,
             "max_iterations": self.sm.config.max_iterations,
             "providers": self.registry.describe(),
         })
         self.logger.log(f"Target: {self.target_url}")
+        if self.objective:
+            self.logger.log(f"Objective: {self.objective}")
+        if self.lab_profile:
+            self.logger.log(f"Lab profile: {json.dumps(self.lab_profile, default=str)}")
         self.logger.log(f"Config: max_iter={self.sm.config.max_iterations}")
         self.logger.log(f"Providers:\n{self.registry.describe()}")
 
@@ -324,6 +343,8 @@ class Orchestrator:
             decision: CoordinatorDecision = self.coordinator.decide(
                 target_url=self.target_url,
                 last_result=self.last_result,
+                objective=self.objective,
+                lab_profile=self.lab_profile,
             )
         except Exception as e:
             console.print(f"[red]Coordinator failure: {e}[/]")
@@ -335,7 +356,11 @@ class Orchestrator:
                     next_agent="recon",
                     task=AgentTask(
                         task_description="Perform initial reconnaissance on the target.",
-                        context={"target_url": self.target_url},
+                        context={
+                            "target_url": self.target_url,
+                            "objective": self.objective,
+                            "lab_profile": self.lab_profile,
+                        },
                     ),
                     reasoning="Coordinator failed — fallback to recon.",
                 )
@@ -369,17 +394,39 @@ class Orchestrator:
         agent_name: AgentName = decision.next_agent  # type: ignore[assignment]
         task: AgentTask = decision.task  # type: ignore[assignment]
 
-        # Inject target_url into context if missing
-        if "target_url" not in task.context:
-            task = task.model_copy(
-                update={"context": {**task.context, "target_url": self.target_url}}
-            )
+        # Inject normalized target/objective/lab profile into every specialist task.
+        context = {**task.context, "target_url": self.target_url}
+        if self.objective:
+            context["objective"] = self.objective
+        if self.lab_profile:
+            context["lab_profile"] = self.lab_profile
+        task = task.model_copy(update={"context": context})
 
         # Inject methodology for exploitation tasks
-        if agent_name == "exploitation" and task.target_vulnerability_id:
-            vuln_entity = self.memory.get_entity(task.target_vulnerability_id)
-            if vuln_entity:
-                vuln_type = vuln_entity.attrs.get("vuln_type", "")
+        if agent_name == "exploitation":
+            vuln_type = ""
+            # Try 1: Get vuln_type from the explicit target vulnerability entity
+            if task.target_vulnerability_id:
+                vuln_entity = self.memory.get_entity(task.target_vulnerability_id)
+                if vuln_entity:
+                    vuln_type = vuln_entity.attrs.get("vuln_type", "")
+            # Try 2: Infer vuln_type from any theoretical vulnerability in the KG
+            if not vuln_type:
+                all_vulns = self.memory.ranked_query(
+                    "Vulnerability", min_pheromone=0.0, status="theoretical"
+                )
+                if all_vulns:
+                    vuln_type = all_vulns[0].attrs.get("vuln_type", "")
+            # Try 3: Infer from the task description itself
+            if not vuln_type:
+                desc_lower = task.task_description.lower()
+                for keyword in ["sqli", "sql injection", "xss", "ssrf", "ssti",
+                                "idor", "jwt", "deserialization", "smuggling",
+                                "cache", "nosql", "command injection", "rce"]:
+                    if keyword in desc_lower:
+                        vuln_type = keyword
+                        break
+            if vuln_type:
                 methodology = load_methodology(vuln_type)
                 if methodology:
                     task = task.model_copy(
@@ -387,6 +434,9 @@ class Orchestrator:
                             **task.context,
                             "methodology": methodology,
                         }}
+                    )
+                    self.logger.log(
+                        f"[METHODOLOGY] Injected methodology for vuln_type={vuln_type}"
                     )
 
         self.sm.transition(Event.DECISION_DONE, f"dispatching {agent_name}")
@@ -472,6 +522,12 @@ class Orchestrator:
             for poc in result.pocs_recorded:
                 if poc.verdict != "success" or not poc.vuln_id:
                     continue
+                if poc.request_summary.startswith("FAST_PATH_VALIDATED:"):
+                    self.logger.log(
+                        f"Skipping validator for {poc.id} "
+                        "(deterministic fast-path already compared baseline/probe)"
+                    )
+                    continue
                 if not self.sm.can_call_tool("http_request"):
                     # Don't burn the last drop of budget on validation -
                     # better to ship the unvalidated PoC than nothing.
@@ -519,6 +575,8 @@ class Orchestrator:
             task_description="Generate the final penetration test report.",
             context={
                 "target_url": self.target_url,
+                "objective": self.objective,
+                "lab_profile": self.lab_profile,
                 "session_duration": f"{time.time() - self.session_start:.1f}s",
                 "total_iterations": self.sm.iteration,
             },
@@ -556,6 +614,8 @@ class Orchestrator:
                 "poc_id": poc_id,
                 "vuln_id": vuln_id,
                 "target_url": self.target_url,
+                "objective": self.objective,
+                "lab_profile": self.lab_profile,
             },
         )
         try:
@@ -585,8 +645,18 @@ class Orchestrator:
     def _print_banner(self) -> None:
         burp_status = "[green]Reachable[/]" if burp_mod.get_client().is_available() else "[red]Offline (MCP extension not running)[/]"
         caido_status = "[green]Configured[/]" if caido_mod.get_client().is_configured() else "[yellow]Not configured (set CAIDO_PAT)[/]"
+        objective_line = (
+            f"[bold white]Objective:[/] {self.objective[:160]}\n"
+            if self.objective else ""
+        )
+        profile_line = (
+            f"[bold white]Lab profile:[/] {self.lab_profile.get('id', '')}\n"
+            if self.lab_profile else ""
+        )
         banner = Panel(
             f"[bold white]🎯 Target:[/] {self.target_url}\n"
+            f"{objective_line}"
+            f"{profile_line}"
             f"[bold white]⚙  Max iterations:[/] {self.sm.config.max_iterations}\n"
             f"[bold white]🔍 Burp Suite MCP:[/] {burp_status}\n"
             f"[bold white]Caido Cloud API:[/] {caido_status}\n"
@@ -714,6 +784,14 @@ def main() -> None:
         console.print("Usage: python orchestrator.py \"https://TARGET_URL\"")
         sys.exit(1)
 
+    raw_target = args.target
+    target_url, objective = normalize_target_input(raw_target)
+    lab_profile = detect_lab_profile(raw_target, target_url)
+    if target_url != raw_target:
+        console.print(f"[dim]Parsed target URL: {target_url}[/]")
+    if lab_profile:
+        console.print(f"[dim]Detected lab profile: {lab_profile.get('id')}[/]")
+
     dashboard = None
     if args.ui:
         dashboard = start_dashboard(args.ui_host, args.ui_port)
@@ -744,9 +822,11 @@ def main() -> None:
             console.print(f"[yellow]OOB init failed: {e}[/]")
 
     orchestrator = Orchestrator(
-        target_url=args.target,
+        target_url=target_url,
         max_iterations=args.max_iterations,
         interactive=args.interactive,
+        objective=objective,
+        lab_profile=lab_profile,
     )
 
     result = orchestrator.run()

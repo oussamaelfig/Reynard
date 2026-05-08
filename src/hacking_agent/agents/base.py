@@ -208,16 +208,38 @@ class BudgetedToolExecutor:
         if tool_name == "run_shell":
             cmd = args.get("command", "")
             if "curl" in cmd:
-                return f"SHELL_CURL {cmd[:120]}"
+                return f"SHELL_CURL {cmd.strip()}"
+        if tool_name == "tool_inventory":
+            return (
+                f"TOOL_INVENTORY {args.get('role', 'general')} "
+                f"check={bool(args.get('check_container', False))}"
+            )
         if tool_name == "caido_cloud_api":
             return f"CAIDO {args.get('operation', '')} {json.dumps(args.get('args', {}), sort_keys=True)[:120]}"
         if tool_name == "caido_cloud_request":
             return f"CAIDO_RAW {args.get('method', 'GET')} {args.get('path', '')}"
+        if tool_name.startswith("burp_"):
+            return f"BURP {tool_name} {json.dumps(args, sort_keys=True)[:160]}"
+        if tool_name == "discover_apis":
+            return f"DISCOVER_APIS {str(args.get('base_url', '')).rstrip('/')}"
+        if tool_name == "extract_js_endpoints":
+            return f"EXTRACT_JS {str(args.get('url', '')).rstrip('/')}"
+        if tool_name == "nuclei_scan":
+            return f"NUCLEI {str(args.get('url', '')).rstrip('/')} {args.get('severity', '')}"
+        if tool_name == "web_search":
+            return f"WEB_SEARCH {args.get('focus', 'ctf')} {str(args.get('query', '')).strip().lower()}"
+        if tool_name == "web_fetch":
+            return f"WEB_FETCH {str(args.get('url', '')).rstrip('/')}"
         return None
 
     def _brief_args(self, tool_name: str, args: dict) -> str:
         if tool_name == "run_shell":
             return f"$ {args.get('command', '')[:100]}"
+        if tool_name == "tool_inventory":
+            return (
+                f"tool inventory role={args.get('role', 'general')} "
+                f"check={bool(args.get('check_container', False))}"
+            )
         if tool_name == "http_request":
             return f"{args.get('method', 'GET')} {args.get('url', '')[:100]}"
         if tool_name in ("browser_navigate", "browser_execute_js", "browser_interact"):
@@ -228,6 +250,18 @@ class BudgetedToolExecutor:
             return f"{args.get('operation', '')} {json.dumps(args.get('args', {}))[:80]}"
         if tool_name == "caido_cloud_request":
             return f"{args.get('method', 'GET')} {args.get('path', '')[:100]}"
+        if tool_name.startswith("burp_"):
+            return f"{tool_name} {json.dumps(args)[:80]}"
+        if tool_name == "discover_apis":
+            return f"discover {args.get('base_url', '')[:100]}"
+        if tool_name == "extract_js_endpoints":
+            return f"extract-js {args.get('url', '')[:100]}"
+        if tool_name == "nuclei_scan":
+            return f"nuclei {args.get('url', '')[:80]} sev={args.get('severity', '')}"
+        if tool_name == "web_search":
+            return f"search {args.get('focus', 'ctf')} :: {args.get('query', '')[:80]}"
+        if tool_name == "web_fetch":
+            return f"fetch {args.get('url', '')[:100]}"
         return json.dumps(args)[:100]
 
     def _redact_args(self, args: dict[str, Any]) -> dict[str, Any]:

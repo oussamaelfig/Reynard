@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-CONTAINER_NAME = os.getenv("CONTAINER_NAME", "hacking-agent-kali")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
 OOB_LOG_PATH = "/data/oob/interactsh.jsonl"
 OOB_PID_PATH = "/data/oob/interactsh.pid"
 OOB_HOST_PATH = "/data/oob/base_host.txt"

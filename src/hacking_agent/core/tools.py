@@ -23,12 +23,14 @@ import subprocess
 import json
 import os
 import re
+import shlex
 import time
 from typing import Any
 
 from hacking_agent.core import differ as differ_mod
 from hacking_agent.core import oob
 from hacking_agent.core import sessions as session_mod
+from hacking_agent.core.tool_catalog import known_command_names, render_tool_catalog
 from hacking_agent.core import web_research as web_research_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
@@ -36,7 +38,7 @@ from hacking_agent.integrations import caido as caido_mod
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CONTAINER_NAME = os.getenv("CONTAINER_NAME", "hacking-agent-kali")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
 COOKIE_JAR_PATH = "/data/cookies/cookies.txt"  # legacy default
 DEFAULT_TIMEOUT = 120  # seconds for shell commands
 MAX_OUTPUT_LENGTH = 50000  # truncate very long outputs
@@ -55,7 +57,8 @@ TOOL_SCHEMAS = [
                 "Returns stdout, stderr, and exit code. Use this for ALL pentesting "
                 "tools (nmap, sqlmap, ffuf, burp, curl, python scripts, etc.). "
                 "Commands run as root. The container has full network access and "
-                "all Z4nzu hackingtool suite installed. Use bash -c for pipes/redirects."
+                "all Z4nzu hackingtool suite installed. If unsure which tool fits, "
+                "call tool_inventory first. Use bash -c for pipes/redirects."
             ),
             "parameters": {
                 "type": "object",
@@ -77,6 +80,35 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tool_inventory",
+            "description": (
+                "Return the Kali/CTF tool-selection catalog: which tools exist, "
+                "when to use them, when to avoid them, and examples. Optionally "
+                "checks actual command availability inside the Docker container. "
+                "Use this before guessing tool names or repeatedly doing manual work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": ["general", "recon", "exploitation"],
+                        "description": "Catalog focus. Default: general.",
+                    },
+                    "check_container": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, run command -v checks inside the container. "
+                            "Default false for speed."
+                        ),
+                    },
+                },
             },
         },
     },
@@ -966,6 +998,56 @@ def run_shell(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     return json.dumps(result, indent=2)
 
 
+def tool_inventory(role: str = "general", check_container: bool = False) -> str:
+    """Return the curated tool catalog and optional in-container availability."""
+    role = (role or "general").lower()
+    data: dict[str, Any] = {
+        "role": role,
+        "container": CONTAINER_NAME,
+        "catalog": render_tool_catalog(role),
+        "notes": [
+            "Prefer direct non-interactive commands over interactive wrappers.",
+            "Z4nzu hackingtool is installed at /opt/hackingtool/hackingtool.py, "
+            "but direct tools are usually better for automation.",
+            "Caido support here is Cloud API only; use it for Caido account, "
+            "workspace, team, subscription, and PAT operations, not local proxy history.",
+        ],
+    }
+
+    if check_container:
+        names = known_command_names()
+        quoted_names = " ".join(shlex.quote(name) for name in names)
+        cmd = (
+            f"for t in {quoted_names}; do "
+            "p=$(command -v \"$t\" 2>/dev/null || true); "
+            "if [ -n \"$p\" ]; then printf '%s=%s\\n' \"$t\" \"$p\"; "
+            "else printf '%s=\\n' \"$t\"; fi; "
+            "done; "
+            "if [ -f /opt/hackingtool/hackingtool.py ]; then "
+            "printf 'hackingtool=/opt/hackingtool/hackingtool.py\\n'; "
+            "else printf 'hackingtool=\\n'; fi"
+        )
+        result = _docker_exec(cmd, timeout=20)
+        available: dict[str, str] = {}
+        missing: list[str] = []
+        for line in result.get("stdout", "").splitlines():
+            if "=" not in line:
+                continue
+            name, path = line.split("=", 1)
+            if path:
+                available[name] = path
+            else:
+                missing.append(name)
+        data["availability_check"] = {
+            "exit_code": result.get("exit_code"),
+            "available": available,
+            "missing": missing,
+            "stderr": result.get("stderr", ""),
+        }
+
+    return json.dumps(data, indent=2)
+
+
 def read_file(path: str) -> str:
     """Read a file from inside the Kali container."""
     result = _docker_exec(f"cat '{path}'")
@@ -1581,6 +1663,10 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     "run_shell": lambda args: run_shell(
         command=args["command"],
         timeout=args.get("timeout", DEFAULT_TIMEOUT),
+    ),
+    "tool_inventory": lambda args: tool_inventory(
+        role=args.get("role", "general"),
+        check_container=args.get("check_container", False),
     ),
     "read_file": lambda args: read_file(
         path=args["path"],

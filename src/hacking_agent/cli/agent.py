@@ -22,7 +22,7 @@ Environment Variables:
   DEEPSEEK_API_KEY   — API key for DeepSeek
   API_BASE_URL       — Override base URL (default: https://api.deepseek.com)
   MODEL_NAME         — Override model name (default: deepseek-chat)
-  CONTAINER_NAME     — Docker container name (default: hacking-agent-kali)
+  CONTAINER_NAME     — Docker container name (default: reynard-kali)
   MAX_ITERATIONS     — Max tool call iterations (default: 500)
 =============================================================================
 """
@@ -53,6 +53,7 @@ from hacking_agent.core.paths import (
     ensure_runtime_dirs,
 )
 from hacking_agent.core.strategy import StrategyEngine
+from hacking_agent.core.tool_catalog import render_tool_catalog
 from hacking_agent.core.tools import TOOL_SCHEMAS, execute_tool
 from hacking_agent.ui.live import start_dashboard
 
@@ -192,6 +193,7 @@ You are following a strict 6-phase exploitation pipeline. Check your current pha
 # AVAILABLE TOOLS
 
 - run_shell: Execute commands in Kali (nmap, sqlmap, ffuf, curl, scripts, etc.)
+- tool_inventory: Tool catalog with when-to-use guidance and optional container checks
 - read_file / write_file / list_dir: File operations in the container
 - http_request: HTTP with persistent cookie jar (auto cookie management)
 - browser_navigate: Render pages with JavaScript via Lightpanda headless browser
@@ -381,7 +383,7 @@ class HackingAgent:
             f"[bold green]Agent Initialized[/]\n"
             f"Model: {model}\n"
             f"API: {base_url}\n"
-            f"Container: {os.getenv('CONTAINER_NAME', 'hacking-agent-kali')}\n"
+            f"Container: {os.getenv('CONTAINER_NAME', 'reynard-kali')}\n"
             f"Architecture: Structured Exploitation Engine v2.0",
             title="🤖 Reynard",
             border_style="green",
@@ -397,6 +399,7 @@ class HackingAgent:
         """
         # Base prompt + methodology files
         prompt_parts = [SYSTEM_PROMPT]
+        prompt_parts.append(render_tool_catalog("general"))
         prompt_parts.append(load_methodologies())
 
         # Inject current memory state
@@ -568,12 +571,29 @@ class HackingAgent:
         elif tool_name == "run_shell":
             cmd = arguments.get("command", "")
             if "curl" in cmd:
-                return f"SHELL_CURL {cmd[:120]}"
+                return f"SHELL_CURL {cmd.strip()}"
             return None  # Don't track non-curl shell commands as payloads
+        elif tool_name == "tool_inventory":
+            return (
+                f"TOOL_INVENTORY {arguments.get('role', 'general')} "
+                f"check={bool(arguments.get('check_container', False))}"
+            )
         elif tool_name == "caido_cloud_api":
             return f"CAIDO {arguments.get('operation', '')} {json.dumps(arguments.get('args', {}), sort_keys=True)[:120]}"
         elif tool_name == "caido_cloud_request":
             return f"CAIDO_RAW {arguments.get('method', 'GET')} {arguments.get('path', '')}"
+        elif tool_name.startswith("burp_"):
+            return f"BURP {tool_name} {json.dumps(arguments, sort_keys=True)[:160]}"
+        elif tool_name == "discover_apis":
+            return f"DISCOVER_APIS {str(arguments.get('base_url', '')).rstrip('/')}"
+        elif tool_name == "extract_js_endpoints":
+            return f"EXTRACT_JS {str(arguments.get('url', '')).rstrip('/')}"
+        elif tool_name == "nuclei_scan":
+            return f"NUCLEI {str(arguments.get('url', '')).rstrip('/')} {arguments.get('severity', '')}"
+        elif tool_name == "web_search":
+            return f"WEB_SEARCH {arguments.get('focus', 'ctf')} {str(arguments.get('query', '')).strip().lower()}"
+        elif tool_name == "web_fetch":
+            return f"WEB_FETCH {str(arguments.get('url', '')).rstrip('/')}"
         return None
 
     def _redact_args(self, args: dict) -> dict:
@@ -805,6 +825,11 @@ class HackingAgent:
             console.print(f"\n[bold cyan]🔧 Tool #{logger.tool_call_count} [{phase}]: {tool_name}[/]")
             if tool_name == "run_shell":
                 console.print(f"[dim]   $ {arguments.get('command', '?')[:120]}[/]")
+            elif tool_name == "tool_inventory":
+                console.print(
+                    f"[dim]   role={arguments.get('role', 'general')} "
+                    f"check={bool(arguments.get('check_container', False))}[/]"
+                )
             elif tool_name == "http_request":
                 console.print(f"[dim]   {arguments.get('method', 'GET')} {arguments.get('url', '?')[:100]}[/]")
             elif tool_name in ("browser_navigate", "browser_execute_js", "browser_interact"):

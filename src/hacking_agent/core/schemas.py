@@ -48,7 +48,7 @@ EntityType = Literal[
 ]
 
 ToolName = Literal[
-    "run_shell", "read_file", "write_file", "list_dir",
+    "run_shell", "tool_inventory", "read_file", "write_file", "list_dir",
     "http_request", "browser_navigate", "browser_execute_js",
     "browser_interact", "analyze_response",
     # Out-of-band interaction (interactsh)
@@ -63,6 +63,10 @@ ToolName = Literal[
     "caido_cloud_api", "caido_cloud_request",
     # Web research
     "web_search", "web_fetch",
+    # Burp Suite MCP
+    "burp_send_http1_request", "burp_get_scanner_issues",
+    "burp_generate_collaborator_payload", "burp_get_collaborator_interactions",
+    "burp_create_repeater_tab", "burp_send_to_intruder",
 ]
 
 

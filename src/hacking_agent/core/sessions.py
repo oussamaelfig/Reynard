@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-CONTAINER_NAME = os.getenv("CONTAINER_NAME", "hacking-agent-kali")
+CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
 SESSION_DIR = "/data/sessions"
 
 

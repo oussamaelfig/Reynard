@@ -100,6 +100,7 @@ class StateMachineConfig:
     max_consecutive_failures: int = 3         # Force pivot after this many
     per_tool_budgets: dict[str, int] = field(default_factory=lambda: {
         "run_shell":              80,
+        "tool_inventory":         30,
         "http_request":           150,   # bumped — used by diff/baseline tools too
         "browser_navigate":       40,
         "browser_execute_js":     40,
@@ -127,6 +128,13 @@ class StateMachineConfig:
         # Web research
         "web_search":             30,
         "web_fetch":              40,
+        # Burp Suite MCP
+        "burp_send_http1_request": 80,
+        "burp_get_scanner_issues": 20,
+        "burp_generate_collaborator_payload": 30,
+        "burp_get_collaborator_interactions": 60,
+        "burp_create_repeater_tab": 30,
+        "burp_send_to_intruder":   20,
     })
 
 

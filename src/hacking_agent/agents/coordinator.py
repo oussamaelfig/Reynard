@@ -25,6 +25,7 @@ from hacking_agent.core.paths import METHODOLOGIES_DIR
 from hacking_agent.core.providers import LLMProvider
 from hacking_agent.core.schemas import AgentResult, AgentTask, CoordinatorDecision
 from hacking_agent.core.state_machine import StateMachine
+from hacking_agent.core.tool_catalog import render_tool_catalog
 
 console = Console()
 
@@ -57,6 +58,10 @@ Every finding in the Knowledge Graph has a HEAT score ([HOT] > [WARM] >
 Always prefer working on the HOTTEST findings first.
 
 # ROUTING RULES (apply in order; first match wins)
+0. If a high-confidence lab profile is supplied, avoid broad generic recon.
+   Route only enough recon to confirm the named endpoint/parameter, then
+   analyst/exploitation. Do not ask recon to repeat discover_apis on simple
+   single-purpose PortSwigger labs.
 1. KG has no Target with technology fact     → recon
 2. KG has endpoints/JS but zero Vulnerability entities → analyst
 3. KG has Vulnerability with status=theoretical AND no PoC yet
@@ -93,9 +98,13 @@ class CoordinatorAgent:
         self.evidence = evidence
 
     def decide(self, target_url: str,
-               last_result: AgentResult | None = None) -> CoordinatorDecision:
+               last_result: AgentResult | None = None,
+               objective: str = "",
+               lab_profile: dict | None = None) -> CoordinatorDecision:
         """Pick the next specialist. Validates output strictly via Pydantic."""
-        prompt = self._build_user_prompt(target_url, last_result)
+        prompt = self._build_user_prompt(
+            target_url, last_result, objective, lab_profile
+        )
         decision = self.provider.call_typed(
             COORDINATOR_SYSTEM, prompt, CoordinatorDecision
         )
@@ -109,14 +118,26 @@ class CoordinatorAgent:
         return decision
 
     def _build_user_prompt(self, target_url: str,
-                            last_result: AgentResult | None) -> str:
+                            last_result: AgentResult | None,
+                            objective: str = "",
+                            lab_profile: dict | None = None) -> str:
         sections: list[str] = [
             f"# TARGET\n{target_url}",
             f"\n# STATE MACHINE\n{self.sm.snapshot()}",
+            f"\n{render_tool_catalog('general')}",
             f"\n{self.memory.kg_snapshot()}",
             f"\n{self.memory.failure_summary(10)}",
             f"\n{self.evidence.summarize()}",
         ]
+        if objective:
+            sections.insert(1, f"\n# USER OBJECTIVE\n{objective}")
+        if lab_profile:
+            sections.insert(
+                2,
+                f"\n# LAB PROFILE\n{lab_profile}\n"
+                "Use this as a high-confidence prior. Confirm with the target, "
+                "but do not waste iterations rediscovering generic surface area."
+            )
 
         # ---- Pheromone-ranked priority queue ----
         # Present theoretical vulnerabilities sorted by heat so the
