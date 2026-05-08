@@ -9,7 +9,8 @@ from hacking_agent.core.paths import LOG_DIR
 from hacking_agent.core.schemas import PoC, ToolDecision
 from hacking_agent.core.scope import ScopeGuard, ScopeViolation
 from hacking_agent.core.state_machine import StateMachine
-from hacking_agent.core.tools import execute_tool
+from hacking_agent.core.tool_catalog import render_tool_catalog
+from hacking_agent.core.tools import TOOL_FUNCTIONS, TOOL_SCHEMAS, execute_tool
 
 
 class EvidenceLifecycleTests(unittest.TestCase):
@@ -85,6 +86,24 @@ class ScopeGuardTests(unittest.TestCase):
         with self.assertRaises(ScopeViolation):
             guard.validate("run_shell", {"command": "nmap -sV 10.10.10.11"})
 
+    def test_caido_local_send_is_scope_checked(self):
+        guard = ScopeGuard.from_target_url("https://lab.example.com")
+        guard.validate("caido_local_api", {
+            "operation": "send_raw",
+            "args": {
+                "raw_request": "GET / HTTP/1.1\r\nHost: lab.example.com\r\n\r\n",
+                "hostname": "lab.example.com",
+            },
+        })
+        with self.assertRaises(ScopeViolation):
+            guard.validate("caido_local_api", {
+                "operation": "send_raw",
+                "args": {
+                    "raw_request": "GET / HTTP/1.1\r\nHost: evil.example.net\r\n\r\n",
+                    "hostname": "evil.example.net",
+                },
+            })
+
     def test_budgeted_executor_blocks_before_tool_execution(self):
         guard = ScopeGuard.from_target_url("https://lab.example.com")
         executor = BudgetedToolExecutor(AgentMemory(), StateMachine(), scope_guard=guard)
@@ -133,6 +152,22 @@ class TargetParsingTests(unittest.TestCase):
 
 
 class ToolRegressionTests(unittest.TestCase):
+    def test_tool_registry_and_schema_count_match_after_caido_local(self):
+        self.assertEqual(len(TOOL_FUNCTIONS), len(TOOL_SCHEMAS))
+        self.assertIn("caido_local_api", TOOL_FUNCTIONS)
+
+    def test_tool_catalog_prefers_caido_local_over_burp_for_replay(self):
+        catalog = render_tool_catalog("general")
+        self.assertIn("Caido Local Bridge", catalog)
+        self.assertIn("Prefer Caido Local Bridge over Burp MCP", catalog)
+
+    def test_caido_local_unknown_operation_is_stable_json(self):
+        raw = execute_tool("caido_local_api", {
+            "operation": "unknown",
+            "args": {},
+        })
+        self.assertIn("Unknown Caido local operation", raw)
+
     def test_analyze_response_tool_imports_package_analyzer(self):
         raw = execute_tool("analyze_response", {
             "response_body": "HTTP/1.1 200 OK\n\nhello <b>probe</b>",

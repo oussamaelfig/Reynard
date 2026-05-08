@@ -61,6 +61,8 @@ ToolName = Literal[
     "nuclei_scan", "extract_js_endpoints", "discover_apis",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
+    # Caido local Replay/history bridge
+    "caido_local_api",
     # Web research
     "web_search", "web_fetch",
     # Burp Suite MCP

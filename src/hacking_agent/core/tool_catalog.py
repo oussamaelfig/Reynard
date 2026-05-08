@@ -141,6 +141,13 @@ CATALOG: tuple[ToolEntry, ...] = (
         "oob_get_domain(label='xxe'); embed returned domain; oob_poll(token)",
     ),
     ToolEntry(
+        "Caido Local Bridge",
+        "preferred API/replay/proxy workflow",
+        "A local Caido bridge plugin is reachable and you need Replay, request collections, HTTP history, or manual-review artifacts.",
+        "The bridge status is offline; fall back to http_request/browser tools. Cloud API is not a Replay/proxy API.",
+        "caido_local_api(operation='send_raw', args={raw_request, hostname, port, https})",
+    ),
+    ToolEntry(
         "Caido Cloud API",
         "Caido account/team/workspace automation",
         "You need Caido Cloud user/team/subscription/workspace/PAT operations.",
@@ -149,9 +156,9 @@ CATALOG: tuple[ToolEntry, ...] = (
     ),
     ToolEntry(
         "Burp MCP",
-        "Burp-driven traffic/repeater/intruder",
-        "Burp MCP extension is online and you need Burp traffic tooling.",
-        "MCP is offline or http_request is enough.",
+        "fallback Burp-specific traffic/repeater/intruder",
+        "Burp MCP extension is online and you specifically need Burp Collaborator, Scanner, Intruder, or an existing Burp workflow.",
+        "MCP is offline, Caido Local Bridge can handle Replay/history, or http_request is enough.",
         "burp_create_repeater_tab(raw_request=..., hostname=...)",
     ),
     ToolEntry(
@@ -171,7 +178,7 @@ def render_tool_catalog(role: str = "general") -> str:
         names = {
             "http_request", "curl", "ffuf", "gobuster/dirb/wfuzz", "nuclei",
             "nmap", "whatweb/nikto", "subfinder/httpx/httprobe/waybackurls",
-            "Lightpanda browser_*", "Caido Cloud API", "Burp MCP",
+            "Lightpanda browser_*", "Caido Local Bridge", "Caido Cloud API", "Burp MCP",
             "/opt/hackingtool/hackingtool.py",
         }
     elif role == "exploitation":
@@ -179,14 +186,14 @@ def render_tool_catalog(role: str = "general") -> str:
             "http_request", "curl", "sqlmap", "hydra", "john/hashcat",
             "metasploit/searchsploit", "Lightpanda browser_*", "OOB interactsh",
             "adb/apktool/jadx/frida/objection", "binwalk/radare2/steghide/foremost",
-            "Caido Cloud API", "Burp MCP", "/opt/hackingtool/hackingtool.py",
+            "Caido Local Bridge", "Caido Cloud API", "Burp MCP", "/opt/hackingtool/hackingtool.py",
         }
     else:
         names = {entry.name for entry in CATALOG}
 
     lines = [
         "# TOOL-SELECTION CATALOG",
-        "Choose tools by hypothesis and evidence need. Prefer direct, non-interactive commands.",
+        "Choose tools by hypothesis and evidence need. Prefer direct, non-interactive commands. Prefer Caido Local Bridge over Burp MCP for Replay/history/API-testing workflows when it is reachable.",
     ]
     for entry in CATALOG:
         if entry.name not in names:

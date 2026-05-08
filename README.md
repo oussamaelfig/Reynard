@@ -12,7 +12,7 @@
   <img alt="Authorized Use" src="https://img.shields.io/badge/Authorized%20Use-Only-E53935?style=for-the-badge">
 </p>
 
-Reynard is a structured multi-agent hacking assistant that runs against **authorized CTF, lab, and pentest targets**. It combines LLM reasoning with a Kali Docker runtime, live dashboard, persistent memory, payload deduplication, web research, Caido Cloud API support, Burp MCP hooks, and a curated tool-selection catalog.
+Reynard is a structured multi-agent hacking assistant that runs against **authorized CTF, lab, and pentest targets**. It combines LLM reasoning with a Kali Docker runtime, live dashboard, persistent memory, payload deduplication, web research, Caido local/Cloud integrations, optional Burp MCP fallback hooks, and a curated tool-selection catalog.
 
 > **Use only on systems you own, intentionally vulnerable labs, CTF infrastructure, or targets where you have explicit written authorization.**
 
@@ -28,8 +28,8 @@ Reynard is a structured multi-agent hacking assistant that runs against **author
 - 🧾 **Memory and deduplication**: remembers payloads, failed attempts, facts, knowledge graph entities, and lessons.
 - 🔁 **PoC validation**: validator replays successful payloads and demotes weak findings.
 - 🧪 **CTF/lab fast paths**: optimized handling for known lab patterns such as PortSwigger SQLi labs.
-- ☁️ **Caido Cloud API**: user/team/workspace/subscription/PAT operations.
-- 🧩 **Burp MCP support**: traffic/repeater/intruder/collaborator tools when the Burp MCP extension is online.
+- ☁️ **Caido support**: local Replay/history bridge for testing plus Cloud API for user/team/workspace/subscription/PAT operations.
+- 🧩 **Burp MCP fallback**: traffic/repeater/intruder/collaborator tools when the Burp MCP extension is online.
 
 ---
 
@@ -325,14 +325,28 @@ Risk-controlled categories such as phishing, DDoS, RATs, social brute force, and
 
 ## ☁️ Caido
 
-Configure:
+Reynard separates **Caido Cloud** from **Caido Local Bridge**:
+
+- `caido_local_api` is the preferred path for API testing, Replay, HTTP
+  history, request collections, and manual-review artifacts when the local
+  bridge plugin is running.
+- `caido_cloud_api` is only for Caido account/team/workspace/PAT operations.
+
+Configure Cloud API:
 
 ```env
 CAIDO_PAT=caido_YOUR_PERSONAL_ACCESS_TOKEN
 CAIDO_API_BASE_URL=https://api.caido.io
 ```
 
-Current support:
+Configure the local bridge:
+
+```env
+CAIDO_LOCAL_BRIDGE_URL=http://127.0.0.1:17650
+CAIDO_LOCAL_BRIDGE_TOKEN=optional-shared-secret
+```
+
+Cloud API support:
 
 - Caido Cloud status
 - user/team information
@@ -343,15 +357,23 @@ Current support:
 - PAT lifecycle helpers
 - raw Cloud API fallback paths
 
-Current limitation:
+Local bridge support:
 
-> This is Caido **Cloud API** support. It is not local Caido proxy history/replay automation yet. For HTTP proof payloads, the agent should use `http_request`, `curl`, or Burp MCP if configured.
+- bridge status
+- send raw requests through Caido Replay
+- create/send Replay sessions
+- search HTTP history
+- fetch history items
+- create Caido findings from agent evidence
+
+See `docs/caido-local-bridge.md` for the expected bridge contract.
 
 ---
 
 ## 🧩 Burp MCP
 
-If your Burp MCP extension is running, Reynard can use:
+Burp MCP is now a fallback for Burp-specific workflows. If your Burp MCP
+extension is running, Reynard can use:
 
 - send raw HTTP/1.1 requests
 - read scanner issues
@@ -360,7 +382,8 @@ If your Burp MCP extension is running, Reynard can use:
 - create Repeater tabs
 - send requests to Intruder
 
-If Burp MCP is offline, the agent falls back to `http_request`, `curl`, OOB callbacks, and differential analysis.
+If Burp MCP is offline, the agent falls back to Caido Local Bridge,
+`http_request`, `curl`, OOB callbacks, and differential analysis.
 
 ---
 

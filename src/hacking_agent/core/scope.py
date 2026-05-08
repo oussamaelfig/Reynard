@@ -126,10 +126,27 @@ class ScopeGuard:
             return self._dedupe([args.get("url", "")])
         if tool_name == "discover_apis":
             return self._dedupe([args.get("base_url", "")])
+        if tool_name == "caido_local_api":
+            return self._extract_caido_local_targets(args)
         if tool_name.startswith("burp_"):
             return self._dedupe([args.get("hostname", "")])
         if tool_name == "run_shell":
             return self._extract_shell_targets(args.get("command", ""))
+        return []
+
+    def _extract_caido_local_targets(self, args: dict) -> list[str]:
+        op_args = args.get("args", {}) if isinstance(args.get("args", {}), dict) else {}
+        operation = args.get("operation", "")
+        if operation in {"send_raw", "create_replay_session"}:
+            return self._dedupe([op_args.get("hostname", "")])
+        if operation == "raw_bridge_request":
+            json_body = op_args.get("json_body", {})
+            if isinstance(json_body, dict):
+                return self._dedupe([
+                    json_body.get("hostname", ""),
+                    json_body.get("host", ""),
+                    json_body.get("url", ""),
+                ])
         return []
 
     def _extract_shell_targets(self, command: str) -> list[str]:

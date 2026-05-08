@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from hacking_agent.integrations import caido_local as caido_local_mod
 from hacking_agent.core.scope import ScopeGuard
 from hacking_agent.core.tools import CONTAINER_NAME, TOOL_FUNCTIONS, TOOL_SCHEMAS
 
@@ -46,6 +47,7 @@ def run_preflight(target_url: str, scope_guard: ScopeGuard | None = None) -> lis
 
     checks.append(_docker_check())
     checks.append(_container_check())
+    checks.append(_caido_local_bridge_check())
     return checks
 
 
@@ -97,5 +99,27 @@ def _container_check() -> PreflightCheck:
         "container",
         False,
         f"{CONTAINER_NAME} is not running. Start with: docker compose up -d",
+        fatal=False,
+    )
+
+
+def _caido_local_bridge_check() -> PreflightCheck:
+    client = caido_local_mod.CaidoLocalBridgeClient(timeout=2.0)
+    result = client.status()
+    ok = bool(result.get("ok"))
+    if ok:
+        return PreflightCheck(
+            "caido local bridge",
+            True,
+            f"reachable at {client.base_url}",
+            fatal=False,
+        )
+    return PreflightCheck(
+        "caido local bridge",
+        False,
+        (
+            f"not reachable at {client.base_url}; Caido Replay/history tools "
+            "will return bridge errors until the local bridge plugin is running"
+        ),
         fatal=False,
     )

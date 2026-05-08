@@ -60,6 +60,7 @@ class BudgetedToolExecutor:
         "burp_get_scanner_issues",
         "burp_get_collaborator_interactions",
         "caido_cloud_api",
+        "caido_local_api",
     }
 
     def __init__(
@@ -249,6 +250,14 @@ class BudgetedToolExecutor:
             return f"CAIDO {args.get('operation', '')} {json.dumps(args.get('args', {}), sort_keys=True)[:120]}"
         if tool_name == "caido_cloud_request":
             return f"CAIDO_RAW {args.get('method', 'GET')} {args.get('path', '')}"
+        if tool_name == "caido_local_api":
+            op = args.get("operation", "")
+            op_args = args.get("args", {}) or {}
+            if op in {"send_raw", "create_replay_session"}:
+                return f"CAIDO_LOCAL {op} {op_args.get('hostname', '')} {str(op_args.get('raw_request', ''))[:160]}"
+            if op == "send_replay_session":
+                return f"CAIDO_LOCAL send_replay_session {op_args.get('session_id', '')}"
+            return None
         if tool_name.startswith("burp_"):
             return f"BURP {tool_name} {json.dumps(args, sort_keys=True)[:160]}"
         if tool_name == "discover_apis":
@@ -281,6 +290,10 @@ class BudgetedToolExecutor:
             return f"{args.get('operation', '')} {json.dumps(args.get('args', {}))[:80]}"
         if tool_name == "caido_cloud_request":
             return f"{args.get('method', 'GET')} {args.get('path', '')[:100]}"
+        if tool_name == "caido_local_api":
+            op_args = args.get("args", {}) or {}
+            host = op_args.get("hostname") or op_args.get("request_id") or op_args.get("session_id") or ""
+            return f"Caido local {args.get('operation', '')} {str(host)[:80]}"
         if tool_name.startswith("burp_"):
             return f"{tool_name} {json.dumps(args)[:80]}"
         if tool_name == "discover_apis":

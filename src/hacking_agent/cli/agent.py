@@ -202,8 +202,11 @@ You are following a strict 6-phase exploitation pipeline. Check your current pha
 - browser_execute_js: Execute JS on rendered pages (prove XSS, extract DOM)
 - browser_interact: Click/type/select on page elements
 - analyze_response: Parse HTTP response into structured security signals
-- caido_cloud_api / caido_cloud_request: Caido Cloud API access (team, user,
-  invitations, workspace, subscription, PAT lifecycle)
+- caido_local_api: Preferred Caido local Replay/history/request-testing bridge
+  when the Caido bridge plugin is running.
+- caido_cloud_api / caido_cloud_request: Caido Cloud account/workspace API
+  access only (team, user, invitations, workspace, subscription, PAT lifecycle);
+  do not use Cloud API for Replay/proxy history.
 - web_search / web_fetch: Search public writeups, CVEs, advisories, official
   docs, then fetch relevant pages into context for authorized CTF/lab work
 
@@ -351,6 +354,7 @@ class HackingAgent:
         "burp_get_scanner_issues",
         "burp_get_collaborator_interactions",
         "caido_cloud_api",
+        "caido_local_api",
     }
 
     SENSITIVE_ARG_PARTS = ("authorization", "cookie", "token", "api_key", "password", "secret")
@@ -594,6 +598,14 @@ class HackingAgent:
             return f"CAIDO {arguments.get('operation', '')} {json.dumps(arguments.get('args', {}), sort_keys=True)[:120]}"
         elif tool_name == "caido_cloud_request":
             return f"CAIDO_RAW {arguments.get('method', 'GET')} {arguments.get('path', '')}"
+        elif tool_name == "caido_local_api":
+            op = arguments.get("operation", "")
+            op_args = arguments.get("args", {}) or {}
+            if op in {"send_raw", "create_replay_session"}:
+                return f"CAIDO_LOCAL {op} {op_args.get('hostname', '')} {str(op_args.get('raw_request', ''))[:160]}"
+            if op == "send_replay_session":
+                return f"CAIDO_LOCAL send_replay_session {op_args.get('session_id', '')}"
+            return None
         elif tool_name.startswith("burp_"):
             return f"BURP {tool_name} {json.dumps(arguments, sort_keys=True)[:160]}"
         elif tool_name == "discover_apis":
@@ -884,6 +896,8 @@ class HackingAgent:
                 console.print(f"[dim]   Caido {arguments.get('operation', '?')}[/]")
             elif tool_name == "caido_cloud_request":
                 console.print(f"[dim]   Caido {arguments.get('method', 'GET')} {arguments.get('path', '?')[:100]}[/]")
+            elif tool_name == "caido_local_api":
+                console.print(f"[dim]   Caido local {arguments.get('operation', '?')}[/]")
 
             # Execute the tool
             start_time = time.time()

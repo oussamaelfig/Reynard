@@ -85,10 +85,13 @@ You have `run_shell` for executing commands inside the Kali Docker container:
    - discover_apis(base_url)              # swagger/openapi/graphql/well-known
    - extract_js_endpoints(url)            # mine JS for hidden endpoints
    - nuclei_scan(url, severity, ...)      # known CVE/misconfig pass
+   - caido_local_api(operation="status")   # preferred Caido Replay/history bridge
    - tool_inventory(role, check_container) # tool catalog and availability
    - web_search(query, focus)             # CTF writeups / CVEs / docs
    - web_fetch(url)                       # fetch promising research pages
    - list_sessions()                      # see configured auth identities
+   Prefer Caido Local Bridge over Burp MCP for Replay/history/manual-review
+   artifacts when it is reachable. Caido Cloud API is account/workspace only.
    If a command is missing, a CLI flag is unknown, or installation syntax is
    uncertain, use tool_inventory plus focused web_search/web_fetch before
    trying installs. Do not loop on the same failed command.

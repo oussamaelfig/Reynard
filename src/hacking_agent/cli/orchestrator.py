@@ -67,6 +67,7 @@ from hacking_agent.core.scope import ScopeGuard
 from hacking_agent.core import sessions as session_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
+from hacking_agent.integrations import caido_local as caido_local_mod
 from hacking_agent.core.state_machine import Event, State, StateMachine, StateMachineConfig
 from hacking_agent.ui.live import start_dashboard
 
@@ -656,6 +657,7 @@ class Orchestrator:
 
     def _print_banner(self) -> None:
         burp_status = "[green]Reachable[/]" if burp_mod.get_client().is_available() else "[red]Offline (MCP extension not running)[/]"
+        caido_local_status = "[green]Reachable[/]" if caido_local_mod.CaidoLocalBridgeClient(timeout=1.0).status().get("ok") else "[yellow]Offline (local bridge not running)[/]"
         caido_status = "[green]Configured[/]" if caido_mod.get_client().is_configured() else "[yellow]Not configured (set CAIDO_PAT)[/]"
         objective_line = (
             f"[bold white]Objective:[/] {self.objective[:160]}\n"
@@ -671,8 +673,9 @@ class Orchestrator:
             f"{profile_line}"
             f"[bold white]Scope:[/] {self.scope_guard.describe()}\n"
             f"[bold white]⚙  Max iterations:[/] {self.sm.config.max_iterations}\n"
-            f"[bold white]🔍 Burp Suite MCP:[/] {burp_status}\n"
+            f"[bold white]Caido Local Bridge:[/] {caido_local_status}\n"
             f"[bold white]Caido Cloud API:[/] {caido_status}\n"
+            f"[bold white]🔍 Burp Suite MCP:[/] {burp_status} (fallback)\n"
             f"[bold white]🤖 Providers:[/]\n{self.registry.describe()}\n"
             f"[bold white]📂 Log:[/] {self.logger.path}",
             title="[bold cyan]Multi-Agent Orchestrator[/]",

@@ -13,6 +13,7 @@ Provides all tools the agent can call:
   - browser_interact:   Click elements or type into forms
   - caido_cloud_api:    Call Caido Cloud API operations
   - caido_cloud_request: Raw Caido Cloud REST fallback
+  - caido_local_api:    Call local Caido Replay/history bridge operations
 
 Each tool is defined as an OpenAI-compatible function schema and has a
 corresponding execution function. The Docker container name is configurable.
@@ -34,6 +35,7 @@ from hacking_agent.core.tool_catalog import known_command_names, render_tool_cat
 from hacking_agent.core import web_research as web_research_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
+from hacking_agent.integrations import caido_local as caido_local_mod
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -657,7 +659,10 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "caido_cloud_api",
             "description": (
-                "Call a supported Caido Cloud API operation. Uses CAIDO_PAT "
+                "Call a supported Caido Cloud API operation for Caido account, "
+                "team, workspace, subscription, and PAT management. This is NOT "
+                "for Replay, proxy history, or request testing; use caido_local_api "
+                "for those. Uses CAIDO_PAT "
                 "or CAIDO_CLOUD_PAT as a Bearer token for public API calls. "
                 "Use status first to confirm configuration. PAT create/revoke "
                 "use the dashboard GraphQL helper documented by Caido and require "
@@ -694,6 +699,56 @@ TOOL_SCHEMAS = [
                             "get_workspace: {workspace_id}; claim_voucher: {code}; "
                             "create_pat: {name, team_id, expires_at?, session_cookie?}; "
                             "revoke_pat: {pat_id, session_cookie?}."
+                        ),
+                    },
+                },
+                "required": ["operation"],
+            },
+        },
+    },
+    # =========================================================================
+    # Caido Local Replay / History Bridge Tools
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "caido_local_api",
+            "description": (
+                "Preferred Caido testing bridge for API/web labs when the local "
+                "Caido bridge plugin is running. Use this for Replay sessions, "
+                "raw request send/resend, HTTP history search, and creating "
+                "Caido findings. This talks to CAIDO_LOCAL_BRIDGE_URL "
+                "(default http://127.0.0.1:17650). If unavailable, fall back to "
+                "http_request/browser tools; use Burp MCP only for Burp-specific "
+                "Collaborator/Scanner/Intruder workflows."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": [
+                            "status",
+                            "send_raw",
+                            "create_replay_session",
+                            "send_replay_session",
+                            "search_history",
+                            "get_history_item",
+                            "create_finding",
+                            "raw_bridge_request",
+                        ],
+                        "description": "Caido local bridge operation to execute.",
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": (
+                            "Operation arguments. send_raw/create_replay_session: "
+                            "{raw_request, hostname, port?, https?, collection?, name?, send?}. "
+                            "send_replay_session: {session_id}. search_history: "
+                            "{query, limit?, include_response?}; query is HTTPQL or bridge-supported text. "
+                            "get_history_item: {request_id, include_response?}. "
+                            "create_finding: {title, severity, description, request_id?, evidence?}. "
+                            "raw_bridge_request: {method, path, params?, json_body?, headers?, require_token?}."
                         ),
                     },
                 },
@@ -1011,6 +1066,8 @@ def tool_inventory(role: str = "general", check_container: bool = False) -> str:
             "but direct tools are usually better for automation.",
             "Caido support here is Cloud API only; use it for Caido account, "
             "workspace, team, subscription, and PAT operations, not local proxy history.",
+            "For Caido Replay/history/API testing, use caido_local_api and a "
+            "local Caido bridge plugin at CAIDO_LOCAL_BRIDGE_URL.",
         ],
     }
 
@@ -1759,6 +1816,10 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         json_body=args.get("json_body"),
         headers=args.get("headers"),
         require_pat=args.get("require_pat", True),
+    )),
+    "caido_local_api": lambda args: caido_local_mod.dumps(caido_local_mod.call_operation(
+        operation=args["operation"],
+        args=args.get("args", {}),
     )),
     # ---- Web research ----
     "web_search": lambda args: web_research_mod.web_search(

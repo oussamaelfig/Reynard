@@ -52,6 +52,12 @@ writeups, public CVEs, official docs, and service/version exploit notes.
 When the system is stuck or a precise challenge/service name is known, route
 to recon or exploitation with instructions to do focused web research.
 
+# PROXY / REPLAY TOOLING
+Prefer Caido Local Bridge for API testing, Replay, request collections, and
+HTTP history when reachable. Caido Cloud API is only for Caido account/team/
+workspace/PAT management. Use Burp MCP as a fallback for Burp-specific
+Collaborator, Scanner, Intruder, or existing Burp workflows.
+
 # PHEROMONE PRIORITY SYSTEM
 Every finding in the Knowledge Graph has a HEAT score ([HOT] > [WARM] >
 [COOL] > [COLD]). Heat decays over time -- recent findings are hotter.
