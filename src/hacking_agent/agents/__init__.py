@@ -1,4 +1,4 @@
-"""Multi-agent specialists for the Hacking Agent orchestrator."""
+"""Multi-agent specialists for the Reynard orchestrator."""
 from hacking_agent.agents.base import BaseAgent, BudgetedToolExecutor
 from hacking_agent.agents.coordinator import CoordinatorAgent
 from hacking_agent.agents.recon import ReconAgent

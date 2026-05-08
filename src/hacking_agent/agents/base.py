@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — BaseAgent + BudgetedToolExecutor
+Reynard — BaseAgent + BudgetedToolExecutor
 =============================================================================
 Shared infrastructure for all specialists.
 

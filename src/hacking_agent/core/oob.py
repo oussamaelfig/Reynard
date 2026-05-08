@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent - Out-of-Band (OOB) Interaction Channel
+Reynard - Out-of-Band (OOB) Interaction Channel
 =============================================================================
 Wraps `interactsh-client` (https://github.com/projectdiscovery/interactsh)
 running inside the Kali container. Provides session-scoped subdomains the

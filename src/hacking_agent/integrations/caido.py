@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent - Caido Cloud API Client
+Reynard - Caido Cloud API Client
 =============================================================================
 Synchronous helper for Caido's public Cloud API.
 

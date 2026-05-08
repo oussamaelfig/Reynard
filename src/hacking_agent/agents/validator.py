@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent - PoC Validator (False-Positive Triage)
+Reynard - PoC Validator (False-Positive Triage)
 =============================================================================
 Re-tests every PoC the exploitation agent flagged success/partial before
 the orchestrator includes it in the final report.

@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Response Analyzer
+Reynard — Response Analyzer
 =============================================================================
 Transforms raw HTTP responses (headers + body) into structured JSON signals.
 

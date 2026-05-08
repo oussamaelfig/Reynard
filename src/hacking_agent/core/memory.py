@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Shared Memory + Knowledge Graph
+Reynard — Shared Memory + Knowledge Graph
 =============================================================================
 Two layers, one store, all agents read/write through it.
 

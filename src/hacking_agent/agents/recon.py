@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Reconnaissance Specialist
+Reynard — Reconnaissance Specialist
 =============================================================================
 Black-box recon. Maps the target's surface area:
   - Tech stack fingerprinting (whatweb, response headers, JS patterns)

@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Reporter Specialist
+Reynard — Reporter Specialist
 =============================================================================
 Synthesises a professional penetration-test report from the knowledge graph
 and evidence store.

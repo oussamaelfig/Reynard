@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Multi-Provider LLM Abstraction
+Reynard — Multi-Provider LLM Abstraction
 =============================================================================
 Unified `LLMProvider` interface for any model behind any vendor:
 

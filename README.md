@@ -1,4 +1,4 @@
-# Autonomous Hacking Agent
+# Reynard
 
 Autonomous CTF and authorized web security testing agent with a Kali/Lightpanda tool runtime, structured memory, multi-agent orchestration, and multi-provider LLM support.
 
@@ -7,7 +7,7 @@ Use this only on systems you own, CTF labs, or targets where you have explicit a
 ## Project Structure
 
 ```text
-hacking-agent/
+reynard/
 |-- agent.py                 # Compatibility launcher for single-agent CLI
 |-- orchestrator.py          # Compatibility launcher for multi-agent CLI
 |-- pyproject.toml           # Package metadata and console scripts

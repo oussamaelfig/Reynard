@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Vulnerability Analyst
+Reynard — Vulnerability Analyst
 =============================================================================
 Reads what recon collected (KG entities, response excerpts, CSP/headers)
 and proposes THEORETICAL Vulnerability claims. Does NOT exploit — that's

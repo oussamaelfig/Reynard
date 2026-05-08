@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Evidentiary Store
+Reynard — Evidentiary Store
 =============================================================================
 Append-only ledger of Proof-of-Concept artifacts.
 

@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Scope Enforcement (Defense in Depth)
+Reynard — Scope Enforcement (Defense in Depth)
 =============================================================================
 Validates that every tool call targets only approved domains / CIDR ranges.
 

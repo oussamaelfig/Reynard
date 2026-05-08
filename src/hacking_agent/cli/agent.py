@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Structured Exploitation Engine
+Reynard — Structured Exploitation Engine
 =============================================================================
 A disciplined, phase-based autonomous agent that uses DeepSeek V4 Pro
 to solve security labs and penetration testing challenges.
@@ -327,7 +327,7 @@ class StreamedMessage:
 
 class HackingAgent:
     """
-    Autonomous hacking agent using an OpenAI-compatible LLM with a structured
+    Autonomous Reynard using an OpenAI-compatible LLM with a structured
     exploitation pipeline: PLAN → ACT → OBSERVE → UPDATE → NEXT.
 
     Integrates:
@@ -377,7 +377,7 @@ class HackingAgent:
             f"API: {base_url}\n"
             f"Container: {os.getenv('CONTAINER_NAME', 'hacking-agent-kali')}\n"
             f"Architecture: Structured Exploitation Engine v2.0",
-            title="🤖 Hacking Agent",
+            title="🤖 Reynard",
             border_style="green",
         ))
 
@@ -1050,9 +1050,9 @@ class HackingAgent:
 # =============================================================================
 
 def main():
-    """CLI entrypoint for the hacking agent."""
+    """CLI entrypoint for the Reynard."""
     parser = argparse.ArgumentParser(
-        description="Autonomous Hacking Agent - multi-provider LLM + Kali Linux",
+        description="Autonomous Reynard - multi-provider LLM + Kali Linux",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

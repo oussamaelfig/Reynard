@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent - Multi-Session Auth Registry
+Reynard - Multi-Session Auth Registry
 =============================================================================
 Lets the agent operate as multiple authenticated identities in the same run.
 

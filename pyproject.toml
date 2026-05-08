@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hacking-agent"
+name = "reynard"
 version = "2.1.0"
 description = "Autonomous CTF and authorized web security testing agent"
 requires-python = ">=3.10"
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.scripts]
-hacking-agent = "hacking_agent.cli.agent:main"
-hacking-orchestrator = "hacking_agent.cli.orchestrator:main"
+reynard = "hacking_agent.cli.agent:main"
+reynard-orchestrator = "hacking_agent.cli.orchestrator:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

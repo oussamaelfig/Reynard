@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Playbook Engine (YAML-Driven Methodology)
+Reynard — Playbook Engine (YAML-Driven Methodology)
 =============================================================================
 Loads methodology pipelines from YAML files, replacing the hardcoded
 strategy.py phase definitions with pluggable, operator-customizable

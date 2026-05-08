@@ -1,17 +1,16 @@
 # =============================================================================
-# Hacking Agent — Kali Linux Docker Environment
+# Reynard — Kali Linux Docker Environment
 # =============================================================================
 # Headless Kali container with full pentesting toolkit.
-# Inspired by @Tur24Tur's DeepSeek V4 Pro autonomous hacking agent.
 #
 # Build:  docker compose build
 # Run:    docker compose up -d
-# Exec:   docker exec -it hacking-agent-kali bash
+# Exec:   docker exec -it reynard-kali bash
 # =============================================================================
 
 FROM kalilinux/kali-rolling
 
-LABEL maintainer="hacking-agent"
+LABEL maintainer="reynard"
 LABEL description="Headless Kali Linux with Z4nzu hackingtool + full pentesting suite"
 
 # ---------------------------------------------------------------------------

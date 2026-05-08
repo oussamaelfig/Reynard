@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Strategy Engine
+Reynard — Strategy Engine
 =============================================================================
 Phase-based attack methodology with progress tracking.
 

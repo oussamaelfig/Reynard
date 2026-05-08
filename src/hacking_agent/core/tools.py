@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Tool Definitions & Execution Engine
+Reynard — Tool Definitions & Execution Engine
 =============================================================================
 Provides all tools the agent can call:
   - run_shell:          Execute commands inside the Kali Docker container

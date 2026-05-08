@@ -1,8 +1,8 @@
 # =============================================================================
-# Hacking Agent — Docker Compose Configuration
+# Reynard — Docker Compose Configuration
 # =============================================================================
 # Launches the headless Kali container with all necessary capabilities
-# and persistent storage for the autonomous hacking agent.
+# and persistent storage for the Reynard agent.
 #
 # Usage:
 #   docker compose up -d          # Start container
@@ -15,7 +15,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: hacking-agent-kali
+    container_name: reynard-kali
     hostname: kali-agent
     
     # -------------------------------------------------------------------------

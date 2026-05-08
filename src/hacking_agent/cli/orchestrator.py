@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-Hacking Agent — Multi-Agent Orchestrator (Entry Point)
+Reynard — Multi-Agent Orchestrator (Entry Point)
 =============================================================================
 The main control loop that wires together:
 

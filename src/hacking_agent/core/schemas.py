@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Pydantic Schemas (Strict Typed LLM I/O)
+Reynard — Pydantic Schemas (Strict Typed LLM I/O)
 =============================================================================
 Every cross-agent communication is a Pydantic model. The orchestrator
 forces specialist LLMs to emit JSON that validates against these schemas;

@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Coordinator (Routing Brain)
+Reynard — Coordinator (Routing Brain)
 =============================================================================
 Top-level routing agent. Reads memory + evidence + state machine, returns
 a strictly-typed `CoordinatorDecision` indicating which specialist to run

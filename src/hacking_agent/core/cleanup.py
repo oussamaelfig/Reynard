@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Cleanup Registry
+Reynard — Cleanup Registry
 =============================================================================
 Tracks exploit side-effects (files created, sessions opened, test users
 registered) and runs cleanup functions on normal exit, SIGINT, or crash.

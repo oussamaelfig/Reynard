@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Orchestrator State Machine
+Reynard — Orchestrator State Machine
 =============================================================================
 Deterministic state machine that drives the multi-agent orchestrator.
 

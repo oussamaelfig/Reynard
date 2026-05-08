@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent - Baseline Capture + Differential Analysis
+Reynard - Baseline Capture + Differential Analysis
 =============================================================================
 Solves the "single-response" blind-spot in analyzer.py.
 

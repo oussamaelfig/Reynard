@@ -1,6 +1,6 @@
 """
 =============================================================================
-Hacking Agent — Burp Suite MCP Client
+Reynard — Burp Suite MCP Client
 =============================================================================
 Provides a Python client that talks to the PortSwigger Burp Suite MCP
 server (https://github.com/PortSwigger/mcp-server) over SSE / HTTP.
