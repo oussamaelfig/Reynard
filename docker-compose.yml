@@ -1,0 +1,70 @@
+# =============================================================================
+# Hacking Agent — Docker Compose Configuration
+# =============================================================================
+# Launches the headless Kali container with all necessary capabilities
+# and persistent storage for the autonomous hacking agent.
+#
+# Usage:
+#   docker compose up -d          # Start container
+#   docker compose down           # Stop container
+#   docker compose logs -f kali   # View logs
+# =============================================================================
+
+services:
+  kali:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hacking-agent-kali
+    hostname: kali-agent
+    
+    # -------------------------------------------------------------------------
+    # Networking: host mode for full network access (required for pentesting)
+    # -------------------------------------------------------------------------
+    network_mode: host
+    
+    # -------------------------------------------------------------------------
+    # Capabilities: required for raw sockets, network manipulation, etc.
+    # -------------------------------------------------------------------------
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - NET_RAW
+    
+    # -------------------------------------------------------------------------
+    # Security: allow ptrace for debugging (needed by some tools)
+    # -------------------------------------------------------------------------
+    security_opt:
+      - seccomp=unconfined
+    
+    # -------------------------------------------------------------------------
+    # Persistent volumes: state survives container restarts
+    # -------------------------------------------------------------------------
+    volumes:
+      - agent-data:/data
+      - ./methodologies:/data/methodologies:ro
+    
+    # -------------------------------------------------------------------------
+    # Environment
+    # -------------------------------------------------------------------------
+    environment:
+      - TERM=xterm-256color
+    
+    # -------------------------------------------------------------------------
+    # Resource limits (adjust as needed)
+    # -------------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    
+    # -------------------------------------------------------------------------
+    # Always restart unless explicitly stopped
+    # -------------------------------------------------------------------------
+    restart: unless-stopped
+
+volumes:
+  agent-data:
+    driver: local

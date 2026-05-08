@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hacking-agent"
+version = "2.1.0"
+description = "Autonomous CTF and authorized web security testing agent"
+requires-python = ">=3.10"
+dependencies = [
+  "openai>=1.40.0",
+  "httpx>=0.27.0",
+  "rich>=13.7.0",
+  "pyyaml>=6.0",
+  "python-dotenv>=1.0.0",
+  "pydantic>=2.5.0",
+  "anthropic>=0.40.0",
+]
+
+[project.scripts]
+hacking-agent = "hacking_agent.cli.agent:main"
+hacking-orchestrator = "hacking_agent.cli.orchestrator:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

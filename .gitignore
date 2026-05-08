@@ -1,0 +1,12 @@
+# Git ignore for Hacking Agent
+.env
+venv/
+__pycache__/
+*.pyc
+logs/
+*.log
+.DS_Store
+build/
+dist/
+*.egg-info/
+.pytest_cache/

@@ -1,0 +1,26 @@
+# =============================================================================
+# Hacking Agent — Python Dependencies
+# =============================================================================
+# Install: pip install -r requirements.txt
+# =============================================================================
+
+# OpenAI-compatible client (works with DeepSeek, NVIDIA, etc.)
+openai>=1.40.0
+
+# HTTP client with advanced features
+httpx>=0.27.0
+
+# Rich terminal output (colored logs, tables, progress bars)
+rich>=13.7.0
+
+# YAML support for config files (optional)
+pyyaml>=6.0
+
+# Python-dotenv for environment variable management
+python-dotenv>=1.0.0
+
+# Pydantic for strict schema enforcement on LLM I/O
+pydantic>=2.5.0
+
+# Anthropic SDK (optional — only needed if using Claude as a provider)
+anthropic>=0.40.0
