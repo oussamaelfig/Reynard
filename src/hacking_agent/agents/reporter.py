@@ -25,6 +25,7 @@ from datetime import datetime
 from rich.console import Console
 
 from hacking_agent.agents.base import BaseAgent
+from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
 from hacking_agent.core.schemas import AgentResult, AgentTask, PoC, Vulnerability
 
 console = Console()
@@ -181,10 +182,9 @@ class ReporterAgent(BaseAgent):
         )
 
     def _save_report(self, content: str) -> str:
-        log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
-        os.makedirs(log_dir, exist_ok=True)
+        ensure_runtime_dirs()
         ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(log_dir, f"report_{ts}.md")
+        path = os.path.join(str(LOG_DIR), f"report_{ts}.md")
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         return path

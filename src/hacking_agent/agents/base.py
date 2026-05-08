@@ -33,6 +33,7 @@ from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.providers import LLMProvider
 from hacking_agent.core.schemas import AgentResult, AgentTask, ToolDecision
+from hacking_agent.core.scope import ScopeGuard, ScopeViolation
 from hacking_agent.core.state_machine import StateMachine
 from hacking_agent.core.tools import execute_tool
 
@@ -61,9 +62,15 @@ class BudgetedToolExecutor:
         "caido_cloud_api",
     }
 
-    def __init__(self, memory: AgentMemory, state_machine: StateMachine):
+    def __init__(
+        self,
+        memory: AgentMemory,
+        state_machine: StateMachine,
+        scope_guard: ScopeGuard | None = None,
+    ):
         self.memory = memory
         self.sm = state_machine
+        self.scope_guard = scope_guard
         self.analyzer = ResponseAnalyzer()
 
     def call(self, decision: ToolDecision, agent_name: str,
@@ -77,6 +84,30 @@ class BudgetedToolExecutor:
             "signals": dict | None,            # auto-analyzer output (HTTP only)
         }
         """
+        # ----- scope gate -----
+        if self.scope_guard is not None:
+            try:
+                self.scope_guard.validate(decision.tool, decision.args)
+            except ScopeViolation as exc:
+                reason = str(exc)
+                console.print(f"[red]BLOCKED: {reason}[/]")
+                emit("tool_blocked", {
+                    "agent": agent_name,
+                    "tool": decision.tool,
+                    "reason": reason,
+                    "phase": phase,
+                })
+                self.memory.add_failed_attempt(
+                    tool=decision.tool,
+                    args=decision.args,
+                    phase=phase,
+                    reason=reason,
+                    lesson="Stay within the declared engagement scope or ask the user to expand scope explicitly.",
+                    iteration=iteration,
+                )
+                return {"blocked": True, "blocked_reason": reason,
+                        "result": "", "signals": None}
+
         # ----- budget gate -----
         if not self.sm.can_call_tool(decision.tool):
             reason = (f"Tool budget exhausted for {decision.tool} "

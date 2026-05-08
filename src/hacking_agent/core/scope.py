@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import shlex
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -72,7 +73,7 @@ class ScopeGuard:
                         extra_cidrs: list[str] | None = None) -> "ScopeGuard":
         """Build a ScopeGuard from a target URL, automatically extracting
         the domain and optionally adding extra allowed domains/CIDRs."""
-        parsed = urlparse(target_url)
+        parsed = urlparse(target_url if "://" in target_url else f"http://{target_url}")
         domain = parsed.hostname or ""
         domains = [domain] if domain else []
         if extra_domains:
@@ -86,22 +87,19 @@ class ScopeGuard:
 
     def validate(self, tool_name: str, args: dict) -> None:
         """Validate a tool call against the scope. Raises ScopeViolation."""
-        # Extract target from tool args
-        target = self._extract_target(tool_name, args)
-        if not target:
-            return  # tools with no target (list_dir, analyze_response) pass
-
-        # Check domain / IP
-        if not self._is_in_scope(target):
-            raise ScopeViolation(
-                f"SCOPE VIOLATION: tool={tool_name}, "
-                f"target={target!r} is outside allowed scope "
-                f"(allowed: {self.allowed_domains + self.allowed_cidrs})"
-            )
-
-        # Check shell safety
+        targets = self._extract_targets(tool_name, args)
         if tool_name == "run_shell":
             self._validate_shell_safety(args.get("command", ""))
+        if not targets:
+            return  # tools with no target (list_dir, analyze_response) pass
+
+        for target in targets:
+            if not self._is_in_scope(target):
+                raise ScopeViolation(
+                    f"SCOPE VIOLATION: tool={tool_name}, "
+                    f"target={target!r} is outside allowed scope "
+                    f"(allowed: {self.allowed_domains + self.allowed_cidrs})"
+                )
 
     def is_in_scope(self, url_or_host: str) -> bool:
         """Non-throwing scope check (useful for filtering, not gating)."""
@@ -115,16 +113,115 @@ class ScopeGuard:
 
     def _extract_target(self, tool_name: str, args: dict) -> str | None:
         """Pull the network target from a tool call's args."""
+        targets = self._extract_targets(tool_name, args)
+        return targets[0] if targets else None
+
+    def _extract_targets(self, tool_name: str, args: dict) -> list[str]:
+        """Pull network targets from a tool call's args."""
         if tool_name in ("http_request", "browser_navigate",
                          "browser_execute_js", "browser_interact"):
-            return args.get("url", "")
+            return self._dedupe([args.get("url", "")])
+        if tool_name in ("capture_baseline", "diff_against_baseline",
+                         "nuclei_scan", "extract_js_endpoints"):
+            return self._dedupe([args.get("url", "")])
+        if tool_name == "discover_apis":
+            return self._dedupe([args.get("base_url", "")])
+        if tool_name.startswith("burp_"):
+            return self._dedupe([args.get("hostname", "")])
         if tool_name == "run_shell":
-            # Extract URLs from curl/wget commands
-            cmd = args.get("command", "")
-            urls = re.findall(r'https?://[^\s\'"]+', cmd)
-            return urls[0] if urls else None
-        # read_file, write_file, list_dir, analyze_response → no network target
-        return None
+            return self._extract_shell_targets(args.get("command", ""))
+        return []
+
+    def _extract_shell_targets(self, command: str) -> list[str]:
+        """Extract direct network targets from common non-interactive tools.
+
+        Payload arguments such as curl -d 'url=http://169.254.169.254/...' are
+        skipped: for SSRF labs the internal URL is data sent to the in-scope
+        app, not the tool's direct destination.
+        """
+        command = command or ""
+        try:
+            tokens = shlex.split(command, posix=True)
+        except ValueError:
+            tokens = command.split()
+
+        if len(tokens) >= 3 and tokens[0] in {"bash", "sh"} and tokens[1] == "-c":
+            return self._extract_shell_targets(tokens[2])
+        if not tokens:
+            return []
+
+        targets: list[str] = []
+        data_flags = {
+            "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+            "-H", "--header", "-b", "--cookie", "-c", "--cookie-jar",
+            "-A", "--user-agent", "-o", "--output", "-w", "--write-out",
+            "-X", "--request", "--proxy", "-x",
+        }
+        target_flags = {"-u", "--url", "-h", "--host"}
+        network_tools = {
+            "curl", "wget", "sqlmap", "ffuf", "gobuster", "dirb", "wfuzz",
+            "nuclei", "nikto", "nmap", "whatweb", "sslscan", "testssl",
+            "hydra", "subfinder", "httpx", "httprobe",
+        }
+        command_names = {self._basename(t) for t in tokens}
+        if not command_names.intersection(network_tools):
+            return []
+
+        skip_next = False
+        expect_target = False
+        for token in tokens:
+            base = self._basename(token)
+            if skip_next:
+                skip_next = False
+                continue
+            if token in data_flags:
+                skip_next = True
+                continue
+            if token.startswith("--data=") or token.startswith("--header="):
+                continue
+            if token in target_flags:
+                expect_target = True
+                continue
+            if any(token.startswith(f"{flag}=") for flag in target_flags):
+                targets.append(token.split("=", 1)[1])
+                continue
+            if base in network_tools or token.startswith("-"):
+                continue
+            if expect_target:
+                targets.append(token)
+                expect_target = False
+                continue
+            if self._looks_like_direct_target(token):
+                targets.append(token)
+
+        return self._dedupe(targets)
+
+    def _looks_like_direct_target(self, token: str) -> bool:
+        token = token.strip(" '\"")
+        if not token:
+            return False
+        if token.startswith(("http://", "https://")):
+            return True
+        if "/" in token or "\\" in token:
+            return False
+        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$", token):
+            return True
+        return bool(re.match(r"^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?::\d+)?$", token))
+
+    def _basename(self, token: str) -> str:
+        return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+
+    def _dedupe(self, targets: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for target in targets:
+            if not target:
+                continue
+            cleaned = str(target).strip().strip("'\"")
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                out.append(cleaned)
+        return out
 
     def _is_in_scope(self, target: str) -> bool:
         """Check if a target URL/host is within the allowed scope."""

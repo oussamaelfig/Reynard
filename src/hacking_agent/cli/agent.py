@@ -45,6 +45,7 @@ from dotenv import load_dotenv
 
 from hacking_agent.core.analyzer import ResponseAnalyzer
 from hacking_agent.core.events import emit
+from hacking_agent.core.lab_intel import normalize_target_input
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import (
     ENV_FILE,
@@ -52,6 +53,7 @@ from hacking_agent.core.paths import (
     METHODOLOGIES_DIR,
     ensure_runtime_dirs,
 )
+from hacking_agent.core.scope import ScopeGuard, ScopeViolation
 from hacking_agent.core.strategy import StrategyEngine
 from hacking_agent.core.tool_catalog import render_tool_catalog
 from hacking_agent.core.tools import TOOL_SCHEMAS, execute_tool
@@ -353,7 +355,14 @@ class HackingAgent:
 
     SENSITIVE_ARG_PARTS = ("authorization", "cookie", "token", "api_key", "password", "secret")
 
-    def __init__(self, api_key: str, base_url: str, model: str):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        scope_domains: list[str] | None = None,
+        scope_cidrs: list[str] | None = None,
+    ):
         """Initialize the agent with API credentials and model config."""
 
         if not api_key:
@@ -375,6 +384,9 @@ class HackingAgent:
         self.memory = AgentMemory()
         self.analyzer = ResponseAnalyzer()
         self.strategy = StrategyEngine()
+        self.scope_domains = scope_domains or []
+        self.scope_cidrs = scope_cidrs or []
+        self.scope_guard: ScopeGuard | None = None
 
         # Session statistics
         self.iteration = 0
@@ -768,6 +780,38 @@ class HackingAgent:
             except json.JSONDecodeError:
                 arguments = {"error": f"Invalid JSON arguments: {tool_call.function.arguments}"}
 
+            if self.scope_guard is not None:
+                try:
+                    self.scope_guard.validate(tool_name, arguments)
+                except ScopeViolation as exc:
+                    reason = str(exc)
+                    emit("tool_blocked", {
+                        "agent": "single",
+                        "tool": tool_name,
+                        "reason": reason,
+                        "phase": self.memory.get_current_phase(),
+                    })
+                    self.memory.add_failed_attempt(
+                        tool=tool_name,
+                        args=arguments,
+                        phase=self.memory.get_current_phase(),
+                        reason=reason,
+                        lesson=(
+                            "Stay within the declared engagement scope or ask "
+                            "the user to expand scope explicitly."
+                        ),
+                        iteration=self.iteration,
+                    )
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps({
+                            "error": reason,
+                            "guidance": "This target is outside the declared scope.",
+                        }),
+                    })
+                    continue
+
             # --- Payload dedup check ---
             payload_str = self._extract_payload_from_args(tool_name, arguments)
             if payload_str and self.memory.is_duplicate(payload_str):
@@ -970,17 +1014,26 @@ class HackingAgent:
         """
         logger = SessionLogger(task)
         logger.log("task_start", {"task": task})
+        target_url, objective = normalize_target_input(task)
         emit("session_start", {
-            "target": task,
+            "target": target_url,
+            "objective": objective,
             "mode": "single_agent",
             "model": self.model,
             "max_iterations": max_iterations,
         })
 
         # Reset subsystems for new task
-        self.memory = AgentMemory()
+        self.memory = AgentMemory(target_url=target_url)
         self.strategy = StrategyEngine()
-        self.memory.target_url = task  # Store the task as target context
+        if objective:
+            self.memory.add_fact("task_objective", objective, source="cli")
+        guard = ScopeGuard.from_target_url(
+            target_url,
+            extra_domains=self.scope_domains,
+            extra_cidrs=self.scope_cidrs,
+        )
+        self.scope_guard = guard if guard.allowed_domains else None
         self.memory.update_progress("recon", "in_progress")
 
         # Initialize conversation with system prompt and user task
@@ -1248,6 +1301,18 @@ Environment Variables:
         help=f"Maximum tool call iterations (default: {MAX_ITERATIONS}).",
     )
     parser.add_argument(
+        "--scope-domain",
+        action="append",
+        default=[],
+        help="Additional in-scope domain. Can be repeated.",
+    )
+    parser.add_argument(
+        "--scope-cidr",
+        action="append",
+        default=[],
+        help="Additional in-scope CIDR range. Can be repeated.",
+    )
+    parser.add_argument(
         "--ui",
         action="store_true",
         default=os.getenv("LIVE_UI", "false").lower() == "true",
@@ -1292,6 +1357,8 @@ Environment Variables:
         api_key=API_KEY,
         base_url=args.base_url,
         model=args.model,
+        scope_domains=args.scope_domain,
+        scope_cidrs=args.scope_cidr,
     )
 
     if args.interactive:

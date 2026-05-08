@@ -1279,7 +1279,7 @@ def analyze_response(response_body: str, payload: str = "") -> str:
     Analyze an HTTP response using the ResponseAnalyzer.
     Returns structured security signals as JSON.
     """
-    from analyzer import ResponseAnalyzer
+    from hacking_agent.core.analyzer import ResponseAnalyzer
     analyzer = ResponseAnalyzer()
     signals = analyzer.analyze(
         response_text=response_body,

@@ -60,8 +60,10 @@ from hacking_agent.core.events import emit
 from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
+from hacking_agent.core.preflight import has_fatal_failure, run_preflight
 from hacking_agent.core.providers import ProviderRegistry
 from hacking_agent.core.schemas import AgentName, AgentResult, AgentTask, CoordinatorDecision
+from hacking_agent.core.scope import ScopeGuard
 from hacking_agent.core import sessions as session_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
@@ -189,12 +191,19 @@ class Orchestrator:
         interactive: bool = False,
         objective: str = "",
         lab_profile: dict | None = None,
+        scope_domains: list[str] | None = None,
+        scope_cidrs: list[str] | None = None,
     ):
         self.target_url = target_url
         self.objective = objective
         self.lab_profile = lab_profile or {}
         self.interactive = interactive
         self.logger = SessionLogger()
+        self.scope_guard = ScopeGuard.from_target_url(
+            target_url,
+            extra_domains=scope_domains,
+            extra_cidrs=scope_cidrs,
+        )
 
         # ---- shared subsystems ----
         self.memory = AgentMemory(target_url=target_url)
@@ -211,7 +220,9 @@ class Orchestrator:
         )
         self.evidence = EvidenceStore()
         self.registry = ProviderRegistry.from_env()
-        self.tool_executor = BudgetedToolExecutor(self.memory, self.sm)
+        self.tool_executor = BudgetedToolExecutor(
+            self.memory, self.sm, scope_guard=self.scope_guard
+        )
 
         # ---- agents ----
         self.coordinator = CoordinatorAgent(
@@ -278,6 +289,7 @@ class Orchestrator:
         if self.lab_profile:
             self.logger.log(f"Lab profile: {json.dumps(self.lab_profile, default=str)}")
         self.logger.log(f"Config: max_iter={self.sm.config.max_iterations}")
+        self.logger.log(f"Scope: {self.scope_guard.describe()}")
         self.logger.log(f"Providers:\n{self.registry.describe()}")
 
         # PLANNING → ROUTING
@@ -657,6 +669,7 @@ class Orchestrator:
             f"[bold white]🎯 Target:[/] {self.target_url}\n"
             f"{objective_line}"
             f"{profile_line}"
+            f"[bold white]Scope:[/] {self.scope_guard.describe()}\n"
             f"[bold white]⚙  Max iterations:[/] {self.sm.config.max_iterations}\n"
             f"[bold white]🔍 Burp Suite MCP:[/] {burp_status}\n"
             f"[bold white]Caido Cloud API:[/] {caido_status}\n"
@@ -739,6 +752,21 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--scope-domain",
+        action="append",
+        default=[],
+        help=(
+            "Additional in-scope domain. Can be repeated. The target host is "
+            "always included automatically."
+        ),
+    )
+    parser.add_argument(
+        "--scope-cidr",
+        action="append",
+        default=[],
+        help="Additional in-scope CIDR range, e.g. 10.10.10.0/24. Can be repeated.",
+    )
+    parser.add_argument(
         "--no-oob",
         action="store_true",
         help="Disable interactsh OOB session (skip the startup probe).",
@@ -767,6 +795,11 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("LIVE_UI_PORT", "8765")),
         help="Live dashboard port (default 8765).",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Run preflight checks and exit without starting the orchestrator.",
+    )
     return parser.parse_args()
 
 
@@ -791,6 +824,22 @@ def main() -> None:
         console.print(f"[dim]Parsed target URL: {target_url}[/]")
     if lab_profile:
         console.print(f"[dim]Detected lab profile: {lab_profile.get('id')}[/]")
+
+    scope_guard = ScopeGuard.from_target_url(
+        target_url,
+        extra_domains=args.scope_domain,
+        extra_cidrs=args.scope_cidr,
+    )
+    preflight_checks = run_preflight(target_url, scope_guard)
+    for check in preflight_checks:
+        style = "green" if check.ok else ("red" if check.fatal else "yellow")
+        status = "OK" if check.ok else ("FAIL" if check.fatal else "WARN")
+        console.print(f"[{style}]preflight {status}[/] {check.name}: {check.message}")
+    if args.preflight:
+        sys.exit(1 if has_fatal_failure(preflight_checks) else 0)
+    if has_fatal_failure(preflight_checks):
+        console.print("[red]Fatal preflight failure; refusing to start run.[/]")
+        sys.exit(1)
 
     dashboard = None
     if args.ui:
@@ -827,6 +876,8 @@ def main() -> None:
         interactive=args.interactive,
         objective=objective,
         lab_profile=lab_profile,
+        scope_domains=args.scope_domain,
+        scope_cidrs=args.scope_cidr,
     )
 
     result = orchestrator.run()

@@ -45,9 +45,31 @@ class EvidenceStore:
         with self._lock:
             return [p for p in self._pocs if p.vuln_id == vuln_id]
 
+    def verification_state(self, vuln_id: str) -> str:
+        """Return the current evidence state for a vulnerability.
+
+        The ledger is append-only, so the latest validator adjudication must
+        be allowed to override an earlier exploitation claim. This prevents a
+        rejected PoC from remaining reportable just because a prior entry had
+        verdict=success.
+        """
+        state = "unverified"
+        for poc in self.get_by_vuln(vuln_id):
+            is_validator = poc.agent_name == "validator"
+            request = poc.request_summary or ""
+            if is_validator and poc.verdict == "failure":
+                state = "refuted"
+            elif is_validator and poc.verdict == "success":
+                state = "verified"
+            elif poc.verdict == "success":
+                state = "verified"
+            elif request.startswith("REFUTED:"):
+                state = "refuted"
+        return state
+
     def is_verified(self, vuln_id: str) -> bool:
-        """A vuln is verified iff at least one of its PoCs has verdict=success."""
-        return any(p.verdict == "success" for p in self.get_by_vuln(vuln_id))
+        """A vuln is verified iff its latest evidence state is verified."""
+        return self.verification_state(vuln_id) == "verified"
 
     def all_pocs(self) -> list[PoC]:
         with self._lock:
@@ -63,8 +85,8 @@ class EvidenceStore:
             for p in self._pocs:
                 by_vuln.setdefault(p.vuln_id, []).append(p)
             for vuln_id, pocs in by_vuln.items():
-                verified = any(p.verdict == "success" for p in pocs)
-                tag = "VERIFIED" if verified else "UNVERIFIED"
+                state = self.verification_state(vuln_id)
+                tag = state.upper()
                 lines.append(f"\n### {vuln_id}  [{tag}]  ({len(pocs)} attempt(s))")
                 for p in pocs:
                     lines.append(f"  - [{p.verdict.upper()}] {p.payload[:90]}")
