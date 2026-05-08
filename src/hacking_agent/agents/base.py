@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from rich.console import Console
 
 from hacking_agent.core.analyzer import ResponseAnalyzer
+from hacking_agent.core.events import emit
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.providers import LLMProvider
@@ -81,6 +82,12 @@ class BudgetedToolExecutor:
             reason = (f"Tool budget exhausted for {decision.tool} "
                        f"(remaining={self.sm.remaining_tool_budget(decision.tool)})")
             console.print(f"[yellow]⛔ {reason}[/]")
+            emit("tool_blocked", {
+                "agent": agent_name,
+                "tool": decision.tool,
+                "reason": reason,
+                "phase": phase,
+            })
             return {"blocked": True, "blocked_reason": reason,
                     "result": "", "signals": None}
 
@@ -89,6 +96,12 @@ class BudgetedToolExecutor:
         if payload_str and self.memory.is_duplicate(payload_str):
             reason = f"Duplicate payload (already sent): {payload_str[:80]}"
             console.print(f"[yellow]⚠ {reason}[/]")
+            emit("tool_blocked", {
+                "agent": agent_name,
+                "tool": decision.tool,
+                "reason": reason,
+                "phase": phase,
+            })
             return {"blocked": True, "blocked_reason": reason,
                     "result": "", "signals": None}
 
@@ -101,11 +114,25 @@ class BudgetedToolExecutor:
                 f"{self._brief_args(decision.tool, decision.args)}"
             )
             console.print(f"[yellow]âš  {reason}[/]")
+            emit("tool_blocked", {
+                "agent": agent_name,
+                "tool": decision.tool,
+                "reason": reason,
+                "phase": phase,
+            })
             return {"blocked": True, "blocked_reason": reason,
                     "result": "", "signals": None}
 
         # ----- execute -----
         self.sm.record_tool_call(decision.tool)
+        emit("tool_start", {
+            "agent": agent_name,
+            "tool": decision.tool,
+            "args": self._redact_args(decision.args),
+            "reasoning": decision.reasoning,
+            "expected_signal": decision.expected_signal,
+            "phase": phase,
+        })
         console.print(
             f"[cyan]🔧 [{agent_name}/{decision.tool}][/] "
             f"{self._brief_args(decision.tool, decision.args)}"
@@ -119,6 +146,12 @@ class BudgetedToolExecutor:
             findings = self._format_findings(signals)
             if findings:
                 console.print(f"[green]   📊 {findings}[/]")
+                emit("finding", {
+                    "agent": agent_name,
+                    "tool": decision.tool,
+                    "summary": findings,
+                    "phase": phase,
+                })
 
         # ----- record payload (with dedup hash) -----
         if payload_str:
@@ -142,6 +175,16 @@ class BudgetedToolExecutor:
                 lesson="Do not repeat this exact tool call; vary payload, endpoint, session, or detection primitive.",
                 iteration=iteration,
             )
+
+        emit("tool_result", {
+            "agent": agent_name,
+            "tool": decision.tool,
+            "phase": phase,
+            "result_length": len(raw_result),
+            "signals": signals,
+            "failure_reason": failure_reason,
+            "summary": self._brief_result(raw_result),
+        })
 
         return {"blocked": False, "blocked_reason": "",
                 "result": raw_result, "signals": signals}
@@ -186,6 +229,22 @@ class BudgetedToolExecutor:
         if tool_name == "caido_cloud_request":
             return f"{args.get('method', 'GET')} {args.get('path', '')[:100]}"
         return json.dumps(args)[:100]
+
+    def _redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        redacted: dict[str, Any] = {}
+        sensitive = ("authorization", "cookie", "token", "api_key", "password", "secret")
+        for key, value in (args or {}).items():
+            lower = str(key).lower()
+            if any(part in lower for part in sensitive):
+                redacted[key] = "[redacted]"
+            elif isinstance(value, dict):
+                redacted[key] = self._redact_args(value)
+            else:
+                redacted[key] = value
+        return redacted
+
+    def _brief_result(self, raw_result: str) -> str:
+        return raw_result.replace("\n", " ")[:300]
 
     def _auto_analyze(self, tool_name: str, args: dict, result: str) -> dict | None:
         if tool_name not in {"http_request", "browser_navigate",

@@ -29,6 +29,7 @@ from typing import Any
 from hacking_agent.core import differ as differ_mod
 from hacking_agent.core import oob
 from hacking_agent.core import sessions as session_mod
+from hacking_agent.core import web_research as web_research_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 
@@ -708,6 +709,64 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["method", "path"],
+            },
+        },
+    },
+    # =========================================================================
+    # Web Research Tools
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the public web for authorized CTF/lab writeups, walkthroughs, "
+                "vulnerability advisories, CVEs, exploit notes, and official docs. "
+                "Use this when stuck, when a service/version banner is known, or when "
+                "researching a specific challenge name/error string. Prefer focused "
+                "queries and follow promising URLs with web_fetch."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Focused search query, e.g. 'HTB box name foothold writeup' or 'Apache 2.4.49 path traversal CVE'.",
+                    },
+                    "focus": {
+                        "type": "string",
+                        "enum": ["ctf", "vuln", "docs", "general"],
+                        "description": "Search intent. ctf adds writeup/walkthrough terms; vuln adds CVE/advisory terms.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Number of results to return, 1-20 (default 8).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Fetch a web page returned by web_search and extract readable text. "
+                "Use it to pull relevant writeup steps, exploit details, CVE notes, "
+                "or official documentation into context. Summarize and cite the URL "
+                "in your findings rather than blindly copying."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to fetch."},
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum extracted characters to return (default 12000).",
+                    },
+                },
+                "required": ["url"],
             },
         },
     },
@@ -1615,6 +1674,16 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         headers=args.get("headers"),
         require_pat=args.get("require_pat", True),
     )),
+    # ---- Web research ----
+    "web_search": lambda args: web_research_mod.web_search(
+        query=args["query"],
+        focus=args.get("focus", "ctf"),
+        max_results=args.get("max_results", 8),
+    ),
+    "web_fetch": lambda args: web_research_mod.web_fetch(
+        url=args["url"],
+        max_chars=args.get("max_chars", 12000),
+    ),
     # ---- Burp Suite MCP ----
     "burp_send_http1_request": lambda args: json.dumps(burp_mod.get_client().send_http1(
         raw_request=args["raw_request"],

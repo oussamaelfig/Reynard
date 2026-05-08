@@ -65,6 +65,8 @@ call to make.
    - discover_apis(base_url)              # swagger/openapi/graphql/well-known
    - extract_js_endpoints(url)            # mine JS for hidden endpoints
    - nuclei_scan(url, severity, ...)      # known CVE/misconfig pass
+   - web_search(query, focus)             # CTF writeups / CVEs / docs
+   - web_fetch(url)                       # fetch promising research pages
    - list_sessions()                      # see configured auth identities
    - caido_cloud_api(status/get_user/...) # Caido Cloud account/team context
    - caido_cloud_request(method,path,...) # raw Cloud API fallback

@@ -56,6 +56,7 @@ from hacking_agent.agents import (
     ValidatorAgent,
 )
 from hacking_agent.core.evidence import EvidenceStore
+from hacking_agent.core.events import emit
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.providers import ProviderRegistry
@@ -64,6 +65,7 @@ from hacking_agent.core import sessions as session_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.core.state_machine import Event, State, StateMachine, StateMachineConfig
+from hacking_agent.ui.live import start_dashboard
 
 console = Console()
 
@@ -250,12 +252,18 @@ class Orchestrator:
         """Execute the full multi-agent pipeline. Returns the final report
         result, or None if budget was exhausted without producing one."""
         self._print_banner()
+        emit("session_start", {
+            "target": self.target_url,
+            "max_iterations": self.sm.config.max_iterations,
+            "providers": self.registry.describe(),
+        })
         self.logger.log(f"Target: {self.target_url}")
         self.logger.log(f"Config: max_iter={self.sm.config.max_iterations}")
         self.logger.log(f"Providers:\n{self.registry.describe()}")
 
         # PLANNING → ROUTING
         self.sm.transition(Event.START, "Session initialized")
+        emit("state", {"state": self.sm.state.value, "message": "Session initialized"})
 
         final_result: AgentResult | None = None
 
@@ -289,6 +297,12 @@ class Orchestrator:
                 break
 
         self._print_summary()
+        emit("session_end", {
+            "target": self.target_url,
+            "success": bool(final_result and final_result.success),
+            "iterations": self.sm.iteration,
+            "tool_calls": sum(self.sm.tool_calls.values()),
+        })
         self.logger.log(f"Session ended. Duration: {time.time() - self.session_start:.1f}s")
         self.logger.close()
 
@@ -336,6 +350,12 @@ class Orchestrator:
             f"agent={decision.next_agent}, "
             f"reasoning={decision.reasoning[:120]}"
         )
+        emit("reasoning_note", {
+            "agent": "coordinator",
+            "text": decision.reasoning,
+            "next_agent": decision.next_agent,
+            "done": decision.done,
+        })
 
         # ---- REPORTING gate ----
         if decision.done:
@@ -371,6 +391,13 @@ class Orchestrator:
 
         self.sm.transition(Event.DECISION_DONE, f"dispatching {agent_name}")
         self.sm.record_dispatch(agent_name)
+        emit("agent_start", {
+            "agent": agent_name,
+            "task": task.task_description,
+            "iteration": self.sm.iteration,
+            "max_iterations": self.sm.config.max_iterations,
+            "state": self.sm.state.value,
+        })
 
         console.print(
             f"\n[bold magenta]🚀 Dispatching [{agent_name}] "
@@ -398,6 +425,14 @@ class Orchestrator:
             )
 
         self.last_result = result
+        emit("agent_result", {
+            "agent": agent_name,
+            "success": result.success,
+            "summary": result.summary,
+            "facts_added": len(result.facts_added),
+            "vulnerabilities_found": len(result.vulnerabilities_found),
+            "pocs_recorded": len(result.pocs_recorded),
+        })
 
         # ---- OBSERVING ----
         success_icon = "✅" if result.success else "❌"
@@ -644,6 +679,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override interactsh server (default oast.pro or $INTERACTSH_SERVER).",
     )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        default=os.getenv("LIVE_UI", "false").lower() == "true",
+        help="Start the live browser dashboard while the agent runs.",
+    )
+    parser.add_argument(
+        "--ui-host",
+        type=str,
+        default=os.getenv("LIVE_UI_HOST", "127.0.0.1"),
+        help="Live dashboard host (default 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=int(os.getenv("LIVE_UI_PORT", "8765")),
+        help="Live dashboard port (default 8765).",
+    )
     return parser.parse_args()
 
 
@@ -660,6 +713,11 @@ def main() -> None:
         console.print("[red]Error: target URL is required.[/]")
         console.print("Usage: python orchestrator.py \"https://TARGET_URL\"")
         sys.exit(1)
+
+    dashboard = None
+    if args.ui:
+        dashboard = start_dashboard(args.ui_host, args.ui_port)
+        console.print(f"[bold green]Live dashboard:[/] {dashboard.url}")
 
     # Load auth sessions BEFORE orchestrator startup so http_request etc.
     # see them on first call.
@@ -679,7 +737,7 @@ def main() -> None:
         if args.interactsh_server:
             os.environ["INTERACTSH_SERVER"] = args.interactsh_server
         try:
-            import oob
+            from hacking_agent.core import oob
             oob_sess = oob.get_session()
             console.print(f"[dim]{oob_sess.describe()}[/]")
         except Exception as e:

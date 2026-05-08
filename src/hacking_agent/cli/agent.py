@@ -44,6 +44,7 @@ from rich.table import Table
 from dotenv import load_dotenv
 
 from hacking_agent.core.analyzer import ResponseAnalyzer
+from hacking_agent.core.events import emit
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import (
     ENV_FILE,
@@ -53,6 +54,7 @@ from hacking_agent.core.paths import (
 )
 from hacking_agent.core.strategy import StrategyEngine
 from hacking_agent.core.tools import TOOL_SCHEMAS, execute_tool
+from hacking_agent.ui.live import start_dashboard
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env file if present
@@ -198,6 +200,8 @@ You are following a strict 6-phase exploitation pipeline. Check your current pha
 - analyze_response: Parse HTTP response into structured security signals
 - caido_cloud_api / caido_cloud_request: Caido Cloud API access (team, user,
   invitations, workspace, subscription, PAT lifecycle)
+- web_search / web_fetch: Search public writeups, CVEs, advisories, official
+  docs, then fetch relevant pages into context for authorized CTF/lab work
 
 # KEY TECHNIQUES
 
@@ -345,6 +349,8 @@ class HackingAgent:
         "caido_cloud_api",
     }
 
+    SENSITIVE_ARG_PARTS = ("authorization", "cookie", "token", "api_key", "password", "secret")
+
     def __init__(self, api_key: str, base_url: str, model: str):
         """Initialize the agent with API credentials and model config."""
 
@@ -414,6 +420,12 @@ class HackingAgent:
         """
         # UPDATE system prompt with fresh memory state before every call
         self.messages[0] = {"role": "system", "content": self._build_system_prompt()}
+        emit("llm_start", {
+            "agent": "single",
+            "model": self.model,
+            "mode": "tool_stream",
+            "phase": self.memory.get_current_phase(),
+        })
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -455,6 +467,13 @@ class HackingAgent:
                         sys.stdout.write(delta.content)
                         sys.stdout.flush()
                         content_parts.append(delta.content)
+                        emit("reasoning_delta", {
+                            "agent": "single",
+                            "model": self.model,
+                            "phase": self.memory.get_current_phase(),
+                            "text": delta.content,
+                            "raw": False,
+                        })
 
                     # --- Accumulate tool-call deltas (arrive in pieces) ---
                     if delta.tool_calls:
@@ -489,6 +508,13 @@ class HackingAgent:
                         )
 
                 full_content = "".join(content_parts)
+                emit("llm_end", {
+                    "agent": "single",
+                    "model": self.model,
+                    "mode": "tool_stream",
+                    "phase": self.memory.get_current_phase(),
+                    "tool_calls": len(assembled_tool_calls or []),
+                })
                 return StreamedMessage(
                     content=full_content,
                     tool_calls=assembled_tool_calls,
@@ -505,12 +531,22 @@ class HackingAgent:
                         f"(attempt {attempt + 1}/{MAX_RETRIES})...[/]"
                     )
                     logger.log("rate_limit", {"wait_seconds": wait_time, "attempt": attempt + 1})
+                    emit("error", {
+                        "agent": "single",
+                        "component": "llm",
+                        "message": f"rate limited; retrying in {wait_time}s",
+                    })
                     time.sleep(wait_time)
                     continue
 
                 # Non-rate-limit error or final retry
                 console.print(f"[bold red]API Error: {error_msg}[/]")
                 logger.log("api_error", {"error": error_msg, "attempt": attempt + 1})
+                emit("error", {
+                    "agent": "single",
+                    "component": "llm",
+                    "message": error_msg[:1000],
+                })
 
                 if attempt == MAX_RETRIES - 1:
                     raise
@@ -539,6 +575,26 @@ class HackingAgent:
         elif tool_name == "caido_cloud_request":
             return f"CAIDO_RAW {arguments.get('method', 'GET')} {arguments.get('path', '')}"
         return None
+
+    def _redact_args(self, args: dict) -> dict:
+        """Remove secrets before tool calls are streamed to the live UI."""
+        redacted = {}
+        for key, value in (args or {}).items():
+            if any(part in str(key).lower() for part in self.SENSITIVE_ARG_PARTS):
+                redacted[key] = "[redacted]"
+            elif isinstance(value, dict):
+                redacted[key] = self._redact_args(value)
+            elif isinstance(value, list):
+                redacted[key] = [
+                    self._redact_args(item) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                redacted[key] = value
+        return redacted
+
+    def _brief_result(self, raw_result: str) -> str:
+        return raw_result.replace("\n", " ")[:300]
 
     def _auto_analyze_response(self, tool_name: str, arguments: dict,
                                 result: str) -> dict | None:
@@ -695,6 +751,13 @@ class HackingAgent:
             # --- Payload dedup check ---
             payload_str = self._extract_payload_from_args(tool_name, arguments)
             if payload_str and self.memory.is_duplicate(payload_str):
+                emit("tool_blocked", {
+                    "agent": "single",
+                    "tool": tool_name,
+                    "reason": "duplicate payload",
+                    "phase": self.memory.get_current_phase(),
+                    "payload": payload_str[:160],
+                })
                 console.print(f"\n[bold yellow]⚠️ DUPLICATE PAYLOAD — skipping: {payload_str[:80]}[/]")
                 tool_results.append({
                     "role": "tool",
@@ -712,6 +775,12 @@ class HackingAgent:
                 and self.memory.is_known_failed_attempt(tool_name, arguments)
             ):
                 reason = f"Known failed attempt blocked: {tool_name}"
+                emit("tool_blocked", {
+                    "agent": "single",
+                    "tool": tool_name,
+                    "reason": reason,
+                    "phase": self.memory.get_current_phase(),
+                })
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -749,6 +818,12 @@ class HackingAgent:
 
             # Execute the tool
             start_time = time.time()
+            emit("tool_start", {
+                "agent": "single",
+                "tool": tool_name,
+                "args": self._redact_args(arguments),
+                "phase": self.memory.get_current_phase(),
+            })
             result = execute_tool(tool_name, arguments)
             elapsed = round(time.time() - start_time, 2)
 
@@ -781,6 +856,12 @@ class HackingAgent:
                     findings.append("🎉 LAB SOLVED!")
 
                 if findings:
+                    emit("finding", {
+                        "agent": "single",
+                        "tool": tool_name,
+                        "summary": " | ".join(findings),
+                        "phase": self.memory.get_current_phase(),
+                    })
                     console.print(f"[bold green]   📊 Signals: {' | '.join(findings)}[/]")
 
             # --- Track payload ---
@@ -825,6 +906,16 @@ class HackingAgent:
                 "signals": signals if signals else None,
                 "phase": self.memory.get_current_phase(),
             })
+            emit("tool_result", {
+                "agent": "single",
+                "tool": tool_name,
+                "phase": self.memory.get_current_phase(),
+                "elapsed_seconds": elapsed,
+                "result_length": len(result),
+                "signals": signals,
+                "failure_reason": failure_reason,
+                "summary": self._brief_result(result),
+            })
 
             # Show brief result summary
             console.print(f"[dim]   ✓ Completed in {elapsed}s ({len(result)} chars)[/]")
@@ -854,6 +945,12 @@ class HackingAgent:
         """
         logger = SessionLogger(task)
         logger.log("task_start", {"task": task})
+        emit("session_start", {
+            "target": task,
+            "mode": "single_agent",
+            "model": self.model,
+            "max_iterations": max_iterations,
+        })
 
         # Reset subsystems for new task
         self.memory = AgentMemory()
@@ -891,6 +988,15 @@ class HackingAgent:
             phase = self.memory.get_current_phase().upper()
             payloads_sent = self.memory.get_payload_count()
             facts_known = len(self.memory.facts)
+            emit("state", {
+                "state": "running",
+                "agent": "single",
+                "iteration": self.iteration,
+                "max_iterations": max_iterations,
+                "phase": phase,
+                "facts": facts_known,
+                "payloads": payloads_sent,
+            })
 
             console.print(f"\n{'='*60}")
             console.print(
@@ -914,6 +1020,11 @@ class HackingAgent:
                 error_msg = f"Fatal API error: {exc}"
                 console.print(f"[bold red]{error_msg}[/]")
                 logger.log("fatal_error", {"error": str(exc)})
+                emit("error", {
+                    "agent": "single",
+                    "component": "agent_loop",
+                    "message": error_msg[:1000],
+                })
                 break
 
             # ----- Extract hypothesis from reasoning -----
@@ -939,6 +1050,13 @@ class HackingAgent:
                     "content": content,
                     "phase": self.memory.get_current_phase(),
                     "hypothesis": self.memory.current_hypothesis,
+                })
+                emit("reasoning_note", {
+                    "agent": "single",
+                    "text": content[:2000],
+                    "phase": self.memory.get_current_phase(),
+                    "hypothesis": self.memory.current_hypothesis,
+                    "append_to_stream": False,
                 })
                 final_response = content
 
@@ -992,6 +1110,15 @@ class HackingAgent:
         # Session Summary
         # =================================================================
         log_file = logger.save(memory=self.memory)
+        emit("session_end", {
+            "target": task,
+            "mode": "single_agent",
+            "success": bool(self.memory.get_fact("lab_solved")),
+            "iterations": self.iteration,
+            "tool_calls": logger.tool_call_count,
+            "facts": len(self.memory.facts),
+            "log_file": log_file,
+        })
 
         # Display final progress
         console.print(Panel(
@@ -1095,11 +1222,34 @@ Environment Variables:
         default=MAX_ITERATIONS,
         help=f"Maximum tool call iterations (default: {MAX_ITERATIONS}).",
     )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        default=os.getenv("LIVE_UI", "false").lower() == "true",
+        help="Start the live browser dashboard while the agent runs.",
+    )
+    parser.add_argument(
+        "--ui-host",
+        type=str,
+        default=os.getenv("LIVE_UI_HOST", "127.0.0.1"),
+        help="Live dashboard host (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=int(os.getenv("LIVE_UI_PORT", "8765")),
+        help="Live dashboard port (default: 8765).",
+    )
 
     args = parser.parse_args()
 
     # Override max iterations if specified via CLI
     max_iter = args.max_iterations
+
+    dashboard = None
+    if args.ui:
+        dashboard = start_dashboard(args.ui_host, args.ui_port)
+        console.print(f"[bold green]Live dashboard:[/] {dashboard.url}")
 
     # Banner
     console.print(Panel(

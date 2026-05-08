@@ -15,7 +15,8 @@ reynard/
 |   |-- cli/                 # CLI entry points
 |   |-- core/                # memory, providers, schemas, tools, strategy
 |   |-- agents/              # coordinator, recon, analyst, exploitation, validator, reporter
-|   `-- integrations/        # Burp and Caido clients
+|   |-- integrations/        # Burp and Caido clients
+|   `-- ui/                  # Live browser dashboard over SSE
 |-- methodologies/           # Bug-class playbooks mounted to /data/methodologies
 |-- tests/fixtures/          # Test fixtures and sample HTML
 |-- logs/                    # Session logs, ignored by git
@@ -39,10 +40,28 @@ pip install -r requirements.txt
 docker compose build
 docker compose up -d
 
-python orchestrator.py "Solve this authorized CTF/lab target: https://TARGET"
+python orchestrator.py --ui "https://TARGET"
 ```
 
 The root `agent.py` and `orchestrator.py` files are launchers. The implementation lives under `src/hacking_agent`.
+
+## Live Dashboard
+
+Run with `--ui` to watch the agent while it is running:
+
+```bash
+python orchestrator.py --ui "https://TARGET"
+python agent.py --ui "Solve this authorized CTF/lab: https://TARGET"
+```
+
+The dashboard starts on `http://127.0.0.1:8765` by default and falls forward to the next free port if needed. It shows:
+
+- live reasoning/decision trace as the model streams content
+- coordinator and specialist dispatches
+- tool calls, blocked repeats, findings, memory facts, and web searches
+- provider events and validation errors
+
+Provider-native hidden reasoning is only shown when a provider explicitly exposes a reasoning stream. Otherwise the UI shows the agent's visible plan/decision trace.
 
 ## LLM Providers
 
@@ -96,6 +115,8 @@ Unsupported reasoning parameters are downgraded automatically at runtime.
 - Tool budgets and state-machine transitions to prevent freeform loops.
 - Automatic HTTP/browser response analysis for reflection, encoding, WAF, AngularJS, CSP, forms, and lab-solved signals.
 - OOB, differential, multi-session, Burp MCP, and Caido Cloud API tools.
+- Live dashboard for observing reasoning, tools, findings, and memory while the run is active.
+- Web research tools for CTF writeups, CVEs, advisories, and official docs.
 - Validator agent replays PoCs and demotes weak findings.
 
 ## Available Tools
@@ -112,7 +133,20 @@ Unsupported reasoning parameters are downgraded automatically at runtime.
 | `swap_session`, `list_sessions` | Multi-identity auth testing |
 | `nuclei_scan`, `extract_js_endpoints`, `discover_apis` | Recon expansion |
 | `caido_cloud_api`, `caido_cloud_request` | Caido Cloud API integration |
+| `web_search`, `web_fetch` | Public research for CTF writeups, CVEs, advisories, and docs |
 | Burp MCP tools | Burp traffic, scanner, collaborator, repeater, intruder |
+
+## Web Research
+
+`web_search` prefers configured search APIs and falls back to DuckDuckGo HTML search:
+
+```env
+BRAVE_SEARCH_API_KEY=YOUR_BRAVE_KEY
+# or
+SERPAPI_API_KEY=YOUR_SERPAPI_KEY
+```
+
+The agent uses `web_search` when it has a challenge name, service/version banner, unusual error, or is stuck on a phase. It follows useful URLs with `web_fetch` and brings extracted page text into context.
 
 ## Caido
 

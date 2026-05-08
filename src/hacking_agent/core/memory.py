@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from hacking_agent.core.events import emit
+
 
 # =============================================================================
 # Pheromone defaults — per entity type
@@ -322,6 +324,14 @@ class AgentMemory:
                 key=key, value=value, confidence=confidence,
                 source=source, iteration=iteration,
             )
+            emit("memory_fact", {
+                "key": key,
+                "value": value,
+                "confidence": confidence,
+                "source": source,
+                "iteration": iteration,
+                "entity_id": entity_id,
+            })
             return msg
 
     def get_fact(self, key: str, default: Any = None,

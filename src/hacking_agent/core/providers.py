@@ -30,6 +30,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from hacking_agent.core.events import emit
 from hacking_agent.core.schemas import ProviderConfig
 
 T = TypeVar("T", bound=BaseModel)
@@ -127,6 +128,13 @@ class OpenAICompatibleProvider(LLMProvider):
             {"role": "user", "content": user},
         ]
         last_error: Exception | None = None
+        emit("llm_start", {
+            "agent": self.config.role,
+            "model": self.config.model,
+            "provider": self.config.kind,
+            "mode": "typed",
+            "schema": schema.__name__,
+        })
 
         for attempt in range(max_retries + 1):
             try:
@@ -164,20 +172,43 @@ class OpenAICompatibleProvider(LLMProvider):
                             console.print("\n[dim italic]🤔 Thinking...[/]", style="dim")
                             is_first_reasoning = False
                         console.print(reasoning_chunk, end="", style="dim")
+                        emit("reasoning_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": reasoning_chunk,
+                            "raw": True,
+                        })
                         
                     content_chunk = getattr(delta, "content", None)
                     if content_chunk:
                         # If the model sends <think> blocks inside content, we print them out live as well
                         raw += content_chunk
+                        emit("assistant_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": content_chunk,
+                        })
                         
                 if not is_first_reasoning:
                     console.print() # Newline after reasoning completes
 
                 data = json.loads(_strip_fence(raw))
-                return schema.model_validate(data)
+                validated = schema.model_validate(data)
+                emit("llm_end", {
+                    "agent": self.config.role,
+                    "model": self.config.model,
+                    "mode": "typed",
+                    "schema": schema.__name__,
+                })
+                return validated
 
             except (ValidationError, json.JSONDecodeError) as e:
                 last_error = e
+                emit("llm_validation_error", {
+                    "agent": self.config.role,
+                    "model": self.config.model,
+                    "error": str(e)[:1000],
+                })
                 # Re-prompt the model with the validator's error so it can self-correct.
                 messages.append({
                     "role": "user",
@@ -203,14 +234,30 @@ class OpenAICompatibleProvider(LLMProvider):
                 if "response_format" in msg or "not supported" in msg:
                     self.config.supports_json_mode = False
                     continue
+                emit("error", {
+                    "agent": self.config.role,
+                    "component": "llm",
+                    "message": str(e)[:1000],
+                })
                 raise ProviderError(f"OpenAI-compatible API error: {e}") from e
 
+        emit("error", {
+            "agent": self.config.role,
+            "component": "llm",
+            "message": f"Schema validation failed: {last_error}"[:1000],
+        })
         raise ProviderError(
             f"Schema validation failed after {max_retries + 1} attempts. "
             f"Last error: {last_error}"
         )
 
     def call_text(self, system, user, max_retries=DEFAULT_MAX_RETRIES):
+        emit("llm_start", {
+            "agent": self.config.role,
+            "model": self.config.model,
+            "provider": self.config.kind,
+            "mode": "text",
+        })
         for attempt in range(max_retries + 1):
             try:
                 kwargs: dict[str, Any] = dict(
@@ -247,14 +294,30 @@ class OpenAICompatibleProvider(LLMProvider):
                             console.print("\n[dim italic]🤔 Thinking...[/]", style="dim")
                             is_first_reasoning = False
                         console.print(reasoning_chunk, end="", style="dim")
-                        
+                        emit("reasoning_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": reasoning_chunk,
+                            "raw": True,
+                        })
+
                     content_chunk = getattr(delta, "content", None)
                     if content_chunk:
                         raw += content_chunk
+                        emit("assistant_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": content_chunk,
+                        })
                 
                 if not is_first_reasoning:
                     console.print()
                     
+                emit("llm_end", {
+                    "agent": self.config.role,
+                    "model": self.config.model,
+                    "mode": "text",
+                })
                 return raw
             except Exception as e:
                 msg = str(e).lower()
@@ -269,7 +332,17 @@ class OpenAICompatibleProvider(LLMProvider):
                     continue
                 if attempt < max_retries:
                     continue
+                emit("error", {
+                    "agent": self.config.role,
+                    "component": "llm",
+                    "message": str(e)[:1000],
+                })
                 raise ProviderError(f"OpenAI-compatible API error: {e}") from e
+        emit("error", {
+            "agent": self.config.role,
+            "component": "llm",
+            "message": "OpenAI-compatible text call reached unreachable state.",
+        })
         raise ProviderError("unreachable")
 
 
@@ -302,6 +375,13 @@ class AnthropicProvider(LLMProvider):
             "input_schema": schema_json,
         }
         last_error: Exception | None = None
+        emit("llm_start", {
+            "agent": self.config.role,
+            "model": self.config.model,
+            "provider": self.config.kind,
+            "mode": "typed",
+            "schema": schema.__name__,
+        })
 
         for attempt in range(max_retries + 1):
             try:
@@ -326,12 +406,31 @@ class AnthropicProvider(LLMProvider):
                     msg_kwargs.pop("tool_choice", None)
                 resp = self._client.messages.create(**msg_kwargs)
                 for block in resp.content:
+                    if getattr(block, "type", None) == "thinking":
+                        emit("reasoning_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": getattr(block, "thinking", "") or getattr(block, "text", ""),
+                            "raw": True,
+                        })
                     if getattr(block, "type", None) == "tool_use":
-                        return schema.model_validate(block.input)
+                        validated = schema.model_validate(block.input)
+                        emit("llm_end", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "mode": "typed",
+                            "schema": schema.__name__,
+                        })
+                        return validated
                 raise ProviderError("Anthropic response had no tool_use block.")
 
             except ValidationError as e:
                 last_error = e
+                emit("llm_validation_error", {
+                    "agent": self.config.role,
+                    "model": self.config.model,
+                    "error": str(e)[:1000],
+                })
                 if attempt >= max_retries:
                     break
                 # Retry with a corrective hint.
@@ -345,11 +444,27 @@ class AnthropicProvider(LLMProvider):
                 if any(s in msg for s in ("rate", "429", "overloaded", "timeout")):
                     time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
                     continue
+                emit("error", {
+                    "agent": self.config.role,
+                    "component": "llm",
+                    "message": str(e)[:1000],
+                })
                 raise ProviderError(f"Anthropic API error: {e}") from e
 
+        emit("error", {
+            "agent": self.config.role,
+            "component": "llm",
+            "message": f"Anthropic schema validation failed: {last_error}"[:1000],
+        })
         raise ProviderError(f"Anthropic schema validation failed: {last_error}")
 
     def call_text(self, system, user, max_retries=DEFAULT_MAX_RETRIES):
+        emit("llm_start", {
+            "agent": self.config.role,
+            "model": self.config.model,
+            "provider": self.config.kind,
+            "mode": "text",
+        })
         for attempt in range(max_retries + 1):
             try:
                 msg_kwargs: dict[str, Any] = dict(
@@ -368,8 +483,25 @@ class AnthropicProvider(LLMProvider):
                 resp = self._client.messages.create(**msg_kwargs)
                 parts: list[str] = []
                 for block in resp.content:
+                    if getattr(block, "type", None) == "thinking":
+                        emit("reasoning_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": getattr(block, "thinking", "") or getattr(block, "text", ""),
+                            "raw": True,
+                        })
                     if getattr(block, "type", None) == "text":
                         parts.append(block.text)
+                        emit("assistant_delta", {
+                            "agent": self.config.role,
+                            "model": self.config.model,
+                            "text": block.text,
+                        })
+                emit("llm_end", {
+                    "agent": self.config.role,
+                    "model": self.config.model,
+                    "mode": "text",
+                })
                 return "".join(parts)
             except Exception as e:
                 msg = str(e).lower()
@@ -378,6 +510,11 @@ class AnthropicProvider(LLMProvider):
                     continue
                 if attempt < max_retries:
                     continue
+                emit("error", {
+                    "agent": self.config.role,
+                    "component": "llm",
+                    "message": str(e)[:1000],
+                })
                 raise ProviderError(f"Anthropic API error: {e}") from e
         raise ProviderError("unreachable")
 
@@ -555,6 +692,7 @@ class ProviderRegistry:
         ).lower() == "true"
 
         default_cfg = ProviderConfig(
+            role="default",
             kind=default_kind,
             model=default_model,
             api_key=default_key,
@@ -609,6 +747,7 @@ class ProviderRegistry:
             ).lower() == "true"
 
             configs[role] = ProviderConfig(
+                role=role,
                 kind=kind,
                 model=os.getenv(f"{prefix}_MODEL") or (
                     default_model if requested_provider == default_provider else profile["model"]

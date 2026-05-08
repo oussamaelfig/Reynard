@@ -61,6 +61,8 @@ ToolName = Literal[
     "nuclei_scan", "extract_js_endpoints", "discover_apis",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
+    # Web research
+    "web_search", "web_fetch",
 ]
 
 
@@ -260,6 +262,7 @@ class ReporterOutput(BaseModel):
 
 class ProviderConfig(BaseModel):
     """Configuration for one LLM provider/model binding (per agent role)."""
+    role: str = "default"
     kind: Literal["openai-compatible", "anthropic"] = "openai-compatible"
     model: str
     api_key: str

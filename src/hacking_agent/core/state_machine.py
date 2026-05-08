@@ -124,6 +124,9 @@ class StateMachineConfig:
         # Caido Cloud API
         "caido_cloud_api":        60,
         "caido_cloud_request":    60,
+        # Web research
+        "web_search":             30,
+        "web_fetch":              40,
     })
 
 
