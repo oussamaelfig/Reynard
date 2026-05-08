@@ -378,8 +378,17 @@ The agent uses `web_search` and `web_fetch` when:
 - a challenge/box name is known
 - a service/version banner is discovered
 - a CVE or public exploit may apply
+- a command is missing or install syntax is unclear
+- a tool returns an unknown flag/usage error
 - it gets stuck after targeted attempts
 - official docs or writeups can reduce guessing
+
+For best search quality, configure Brave or SerpAPI. If neither key is set,
+Reynard falls back to DuckDuckGo HTML search.
+
+For blind XXE/SSRF/CMDi labs, do **not** use `--no-oob`; the agent needs OOB
+callbacks through `interactsh-client`, Burp Collaborator, or another approved
+callback service.
 
 ---
 

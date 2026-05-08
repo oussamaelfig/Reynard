@@ -54,6 +54,10 @@ OOB_HOST_PATH = "/data/oob/base_host.txt"
 # and no shared-tenant noise).
 DEFAULT_SERVER = os.getenv("INTERACTSH_SERVER", "oast.pro")
 DEFAULT_TOKEN_AUTH = os.getenv("INTERACTSH_TOKEN", "")
+AUTO_INSTALL_INTERACTSH = (
+    os.getenv("AUTO_INSTALL_INTERACTSH", "true").lower()
+    not in {"0", "false", "no", "off"}
+)
 
 
 def _docker_exec(cmd: str, timeout: int = 30) -> tuple[int, str, str]:
@@ -122,15 +126,30 @@ class InteractshSession:
         # 0. Make sure container is reachable.
         rc, _, err = _docker_exec("which interactsh-client")
         if rc != 0:
-            self.enabled = False
-            self.error = (
-                "interactsh-client not installed in the container. "
-                "Install via: go install -v "
-                "github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest"
-            )
-            return
+            if AUTO_INSTALL_INTERACTSH:
+                self._try_install_client()
+                rc, _, err = _docker_exec("which interactsh-client")
+            if rc == 0:
+                pass
+            else:
+                _, log_tail, _ = _docker_exec(
+                    "tail -n 40 /tmp/interactsh-install.log 2>/dev/null || true",
+                    timeout=5,
+                )
+                detail = f" Last install log:\n{log_tail}" if log_tail.strip() else ""
+                install_hint = (
+                    "Install via: go install -v "
+                    "github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest "
+                    "&& ln -sf /root/go/bin/interactsh-client /usr/local/bin/interactsh-client"
+                )
+                self.enabled = False
+                self.error = (
+                    "interactsh-client not installed in the container. "
+                    f"{install_hint}.{detail}"
+                )
+                return
 
-        _docker_exec(f"mkdir -p {os.path.dirname(OOB_LOG_PATH)}")
+        _docker_exec("mkdir -p /data/oob")
 
         # 1. If a previous process is alive AND its base_host is still cached,
         #    reuse it (resilient across orchestrator restarts within a session).
@@ -177,6 +196,20 @@ class InteractshSession:
         self.base_host = host
         _docker_exec(f"echo -n {self.base_host!r} > {OOB_HOST_PATH}")
         self.enabled = True
+
+    def _try_install_client(self) -> None:
+        """One controlled runtime repair for older images missing interactsh."""
+        install_cmd = (
+            "export PATH=$PATH:/root/go/bin; "
+            "if ! command -v go >/dev/null 2>&1; then "
+            "  echo 'go is not installed' > /tmp/interactsh-install.log; exit 1; "
+            "fi; "
+            "go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest "
+            "> /tmp/interactsh-install.log 2>&1 && "
+            "ln -sf /root/go/bin/interactsh-client /usr/local/bin/interactsh-client && "
+            "command -v interactsh-client"
+        )
+        _docker_exec(install_cmd, timeout=240)
 
     def _extract_base_host(self, deadline: float) -> str | None:
         """Parse the assigned base subdomain from interactsh-client's stderr."""

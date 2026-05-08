@@ -138,7 +138,7 @@ CATALOG: tuple[ToolEntry, ...] = (
         "blind vulns",
         "SSRF, blind command injection, XXE, log4shell, or blind SQLi needs callbacks.",
         "The target gives a clear in-band response.",
-        "oob_get_domain(label='ssrf'); embed returned domain; oob_poll(token)",
+        "oob_get_domain(label='xxe'); embed returned domain; oob_poll(token)",
     ),
     ToolEntry(
         "Caido Cloud API",
@@ -206,7 +206,7 @@ def known_command_names() -> list[str]:
         "curl", "sqlmap", "ffuf", "gobuster", "dirb", "wfuzz", "nuclei",
         "nmap", "whatweb", "nikto", "subfinder", "httpx", "httprobe",
         "waybackurls", "hydra", "john", "hashcat", "msfconsole",
-        "searchsploit", "sslscan", "testssl", "binwalk", "radare2",
+        "searchsploit", "sslscan", "testssl", "interactsh-client", "binwalk", "radare2",
         "r2", "steghide", "foremost", "adb", "apktool", "jadx", "frida",
         "objection", "python3", "go", "ruby", "proxychains4", "tor",
         "bettercap", "ettercap", "aircrack-ng", "lightpanda",

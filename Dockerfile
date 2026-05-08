@@ -79,13 +79,15 @@ RUN go install github.com/tomnomnom/httprobe@latest 2>/dev/null || true \
     && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest 2>/dev/null || true \
     && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest 2>/dev/null || true \
     && go install github.com/projectdiscovery/httpx/cmd/httpx@latest 2>/dev/null || true \
-    && go install github.com/ffuf/ffuf/v2@latest 2>/dev/null || true
+    && go install github.com/ffuf/ffuf/v2@latest 2>/dev/null || true \
+    && go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest 2>/dev/null || true \
+    && ln -sf /root/go/bin/interactsh-client /usr/local/bin/interactsh-client 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 5. Create persistent data directories
 # ---------------------------------------------------------------------------
 RUN mkdir -p /data/cookies /data/loot /data/scripts /data/logs \
-    /data/methodologies /data/sessions /data/reports
+    /data/methodologies /data/sessions /data/reports /data/oob
 
 # ---------------------------------------------------------------------------
 # 6. Install Lightpanda headless browser (AI-optimized, JS via v8)
