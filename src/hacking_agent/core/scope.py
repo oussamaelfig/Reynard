@@ -124,6 +124,8 @@ class ScopeGuard:
         if tool_name in ("capture_baseline", "diff_against_baseline",
                          "nuclei_scan", "extract_js_endpoints"):
             return self._dedupe([args.get("url", "")])
+        if tool_name == "request_smuggling_probe":
+            return self._dedupe([args.get("url", "")])
         if tool_name == "discover_apis":
             return self._dedupe([args.get("base_url", "")])
         if tool_name == "caido_local_api":

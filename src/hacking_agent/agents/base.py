@@ -110,7 +110,7 @@ class BudgetedToolExecutor:
                         "result": "", "signals": None}
 
         # ----- budget gate -----
-        if not self.sm.can_call_tool(decision.tool):
+        if not self.sm.try_record_tool_call(decision.tool):
             reason = (f"Tool budget exhausted for {decision.tool} "
                        f"(remaining={self.sm.remaining_tool_budget(decision.tool)})")
             console.print(f"[yellow]⛔ {reason}[/]")
@@ -134,6 +134,7 @@ class BudgetedToolExecutor:
                 "reason": reason,
                 "phase": phase,
             })
+            self.sm.release_tool_call(decision.tool)
             return {"blocked": True, "blocked_reason": reason,
                     "result": "", "signals": None}
 
@@ -152,11 +153,11 @@ class BudgetedToolExecutor:
                 "reason": reason,
                 "phase": phase,
             })
+            self.sm.release_tool_call(decision.tool)
             return {"blocked": True, "blocked_reason": reason,
                     "result": "", "signals": None}
 
         # ----- execute -----
-        self.sm.record_tool_call(decision.tool)
         emit("tool_start", {
             "agent": agent_name,
             "tool": decision.tool,
@@ -241,6 +242,11 @@ class BudgetedToolExecutor:
             cmd = args.get("command", "")
             if "curl" in cmd:
                 return f"SHELL_CURL {cmd.strip()}"
+        if tool_name == "request_smuggling_probe":
+            return (
+                f"SMUGGLE {args.get('vector', 'auto')} "
+                f"{args.get('url', '')} {args.get('smuggled_path', '')}"
+            )
         if tool_name == "tool_inventory":
             return (
                 f"TOOL_INVENTORY {args.get('role', 'general')} "
@@ -275,6 +281,11 @@ class BudgetedToolExecutor:
     def _brief_args(self, tool_name: str, args: dict) -> str:
         if tool_name == "run_shell":
             return f"$ {args.get('command', '')[:100]}"
+        if tool_name == "request_smuggling_probe":
+            return (
+                f"{args.get('vector', 'auto')} "
+                f"{args.get('url', '')[:100]}"
+            )
         if tool_name == "tool_inventory":
             return (
                 f"tool inventory role={args.get('role', 'general')} "

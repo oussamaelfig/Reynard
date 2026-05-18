@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from rich.console import Console
 
+from hacking_agent.core.expert_playbooks import render_playbook_context
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import METHODOLOGIES_DIR
@@ -68,6 +69,9 @@ Always prefer working on the HOTTEST findings first.
    Route only enough recon to confirm the named endpoint/parameter, then
    analyst/exploitation. Do not ask recon to repeat discover_apis on simple
    single-purpose PortSwigger labs.
+0b. If GLOBAL FACTS include last_failure_class/last_failure_guidance, use that
+    guidance to change primitive, tool, endpoint, or specialist. Do not route
+    back into the same failed pattern unless new evidence justifies it.
 1. KG has no Target with technology fact     → recon
 2. KG has endpoints/JS but zero Vulnerability entities → analyst
 3. KG has Vulnerability with status=theoretical AND no PoC yet
@@ -138,11 +142,17 @@ class CoordinatorAgent:
         if objective:
             sections.insert(1, f"\n# USER OBJECTIVE\n{objective}")
         if lab_profile:
+            playbook_context = render_playbook_context(lab_profile)
+            playbook_section = (
+                f"\n\n{playbook_context}"
+                if playbook_context else ""
+            )
             sections.insert(
                 2,
                 f"\n# LAB PROFILE\n{lab_profile}\n"
                 "Use this as a high-confidence prior. Confirm with the target, "
                 "but do not waste iterations rediscovering generic surface area."
+                f"{playbook_section}"
             )
 
         # ---- Pheromone-ranked priority queue ----

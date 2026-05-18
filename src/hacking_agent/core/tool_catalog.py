@@ -36,6 +36,13 @@ CATALOG: tuple[ToolEntry, ...] = (
         "curl -sk -D- 'https://target/path?x=test'",
     ),
     ToolEntry(
+        "request_smuggling_probe",
+        "raw HTTP/1.1 desync proof",
+        "You need CL.TE/TE.CL evidence, differential 404 behavior, or request-queue poisoning without HTTP client normalization.",
+        "The bug class is not request smuggling or a normal HTTP client is sufficient.",
+        "request_smuggling_probe(url='https://target/', vector='cl_te_404')",
+    ),
+    ToolEntry(
         "sqlmap",
         "SQL injection",
         "Injection is non-trivial, blind/time-based, many params, or data extraction is required.",
@@ -183,7 +190,7 @@ def render_tool_catalog(role: str = "general") -> str:
         }
     elif role == "exploitation":
         names = {
-            "http_request", "curl", "sqlmap", "hydra", "john/hashcat",
+            "http_request", "curl", "request_smuggling_probe", "sqlmap", "hydra", "john/hashcat",
             "metasploit/searchsploit", "Lightpanda browser_*", "OOB interactsh",
             "adb/apktool/jadx/frida/objection", "binwalk/radare2/steghide/foremost",
             "Caido Local Bridge", "Caido Cloud API", "Burp MCP", "/opt/hackingtool/hackingtool.py",

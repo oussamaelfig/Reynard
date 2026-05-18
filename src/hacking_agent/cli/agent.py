@@ -45,7 +45,8 @@ from dotenv import load_dotenv
 
 from hacking_agent.core.analyzer import ResponseAnalyzer
 from hacking_agent.core.events import emit
-from hacking_agent.core.lab_intel import normalize_target_input
+from hacking_agent.core.expert_playbooks import render_playbook_context
+from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import (
     ENV_FILE,
@@ -391,6 +392,8 @@ class HackingAgent:
         self.scope_domains = scope_domains or []
         self.scope_cidrs = scope_cidrs or []
         self.scope_guard: ScopeGuard | None = None
+        self.lab_profile: dict = {}
+        self.expert_playbook_context = ""
 
         # Session statistics
         self.iteration = 0
@@ -417,6 +420,13 @@ class HackingAgent:
         prompt_parts = [SYSTEM_PROMPT]
         prompt_parts.append(render_tool_catalog("general"))
         prompt_parts.append(load_methodologies())
+        if self.expert_playbook_context:
+            prompt_parts.append(
+                "\n\n# DETECTED EXPERT LAB PLAYBOOK\n\n"
+                f"{self.expert_playbook_context}\n\n"
+                "Treat this as a high-confidence prior for authorized labs. "
+                "Confirm with target evidence before claiming success."
+            )
 
         # Inject current memory state
         memory_context = self.memory.get_context_injection()
@@ -1029,9 +1039,12 @@ class HackingAgent:
         logger = SessionLogger(task)
         logger.log("task_start", {"task": task})
         target_url, objective = normalize_target_input(task)
+        self.lab_profile = detect_lab_profile(task, target_url)
+        self.expert_playbook_context = render_playbook_context(self.lab_profile)
         emit("session_start", {
             "target": target_url,
             "objective": objective,
+            "lab_profile": self.lab_profile,
             "mode": "single_agent",
             "model": self.model,
             "max_iterations": max_iterations,
@@ -1042,6 +1055,23 @@ class HackingAgent:
         self.strategy = StrategyEngine()
         if objective:
             self.memory.add_fact("task_objective", objective, source="cli")
+        if self.lab_profile:
+            self.memory.add_fact(
+                "lab_profile", self.lab_profile.get("id", "unknown"), source="cli"
+            )
+            if self.lab_profile.get("playbook_id"):
+                self.memory.add_fact(
+                    "expert_playbook", self.lab_profile["playbook_id"], source="cli"
+                )
+            for credential in self.lab_profile.get("credentials", []):
+                username = credential.get("username")
+                password = credential.get("password")
+                if username and password:
+                    self.memory.add_fact(
+                        f"credential_{username}",
+                        password,
+                        source="lab_profile",
+                    )
         guard = ScopeGuard.from_target_url(
             target_url,
             extra_domains=self.scope_domains,

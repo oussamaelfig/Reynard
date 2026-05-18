@@ -11,6 +11,33 @@ CAIDO_LOCAL_BRIDGE_URL=http://127.0.0.1:17650
 CAIDO_LOCAL_BRIDGE_TOKEN=optional-shared-secret
 ```
 
+## Install the Caido plugin
+
+Build the local Caido plugin package:
+
+```powershell
+Set-Location "C:\Users\oussa\Desktop\OUSSAMA\SaaS\Hacking Agent\integrations\caido-reynard-bridge"
+pnpm install
+pnpm build
+```
+
+Install this generated zip in Caido:
+
+```text
+C:\Users\oussa\Desktop\OUSSAMA\SaaS\Hacking Agent\integrations\caido-reynard-bridge\dist\plugin_package.zip
+```
+
+In Caido, connect to your local instance, open the Plugins page, choose to
+install a local package, and select `plugin_package.zip`. Once enabled, verify:
+
+```powershell
+Set-Location "C:\Users\oussa\Desktop\OUSSAMA\SaaS\Hacking Agent"
+$env:PYTHONPATH = "src"
+python -c "from hacking_agent.integrations.caido_local import CaidoLocalBridgeClient; import json; print(json.dumps(CaidoLocalBridgeClient(timeout=2).status(), indent=2))"
+```
+
+The bridge is online when the result contains top-level `"ok": true`.
+
 Minimum HTTP contract:
 
 ```text

@@ -57,13 +57,16 @@ from hacking_agent.agents import (
 )
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
+from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
+from hacking_agent.core.failure import classify_failure
 from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.preflight import has_fatal_failure, run_preflight
 from hacking_agent.core.providers import ProviderRegistry
-from hacking_agent.core.schemas import AgentName, AgentResult, AgentTask, CoordinatorDecision
+from hacking_agent.core.schemas import AgentName, AgentResult, AgentTask, CoordinatorDecision, ToolDecision
 from hacking_agent.core.scope import ScopeGuard
+from hacking_agent.core.subagents import BoundedSubagentScheduler, SubagentPolicy, SubagentSpec
 from hacking_agent.core import sessions as session_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
@@ -72,6 +75,20 @@ from hacking_agent.core.state_machine import Event, State, StateMachine, StateMa
 from hacking_agent.ui.live import start_dashboard
 
 console = Console()
+
+AUTH_HEAVY_PLAYBOOKS = {
+    "authentication",
+    "oauth",
+    "jwt",
+    "access_control_idor",
+    "csrf",
+    "cors",
+    "graphql_api",
+    "race_condition",
+    "business_logic",
+    "api_testing",
+    "web_llm_attacks",
+}
 
 # =============================================================================
 # Session logger (reuses the same format as agent.py for consistency)
@@ -130,6 +147,9 @@ def load_methodology(vuln_type: str | None) -> str:
         ("server-side request",   "ssrf.md"),
         ("ssti",                  "ssti.md"),
         ("template injection",    "ssti.md"),
+        ("api testing",           "idor_authz.md"),
+        ("api",                   "idor_authz.md"),
+        ("authentication",        "idor_authz.md"),
         ("idor",                  "idor_authz.md"),
         ("authz",                 "idor_authz.md"),
         ("authorization",         "idor_authz.md"),
@@ -141,9 +161,10 @@ def load_methodology(vuln_type: str | None) -> str:
         ("pickle",                "deserialization.md"),
         ("smuggl",                "request_smuggling.md"),
         ("desync",                "request_smuggling.md"),
-        ("cache poison",          "cache_poisoning.md"),
         ("cache deception",       "web_cache_deception.md"),
+        ("cache poison",          "cache_poisoning.md"),
         ("cache",                 "cache_poisoning.md"),
+        ("host header",           "cache_poisoning.md"),
         ("xxe",                   "blind.md"),
         ("xml external",          "blind.md"),
         ("command injection",     "blind.md"),
@@ -194,11 +215,16 @@ class Orchestrator:
         lab_profile: dict | None = None,
         scope_domains: list[str] | None = None,
         scope_cidrs: list[str] | None = None,
+        subagents_enabled: bool = True,
+        max_subagents: int = 4,
     ):
         self.target_url = target_url
         self.objective = objective
-        self.lab_profile = lab_profile or {}
+        self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
+        self.playbook_context = render_playbook_context(self.lab_profile)
         self.interactive = interactive
+        self.subagents_enabled = subagents_enabled
+        self.max_subagents = max(1, max_subagents)
         self.logger = SessionLogger()
         self.scope_guard = ScopeGuard.from_target_url(
             target_url,
@@ -216,6 +242,30 @@ class Orchestrator:
             )
             if self.lab_profile.get("platform"):
                 self.memory.add_fact("platform", self.lab_profile["platform"], source="cli")
+            if self.lab_profile.get("playbook_id"):
+                self.memory.add_fact(
+                    "expert_playbook", self.lab_profile["playbook_id"], source="cli"
+                )
+            for tool in self.lab_profile.get("primary_tools", [])[:6]:
+                self.memory.add_fact(
+                    f"preferred_tool_{tool}", tool, source="expert_playbook"
+                )
+            for credential in self.lab_profile.get("credentials", []):
+                username = credential.get("username")
+                password = credential.get("password")
+                if not username or not password:
+                    continue
+                cred_entity = self.memory.add_entity("Credential", {
+                    "username": username,
+                    "password": password,
+                    "source": "lab_profile",
+                })
+                self.memory.add_fact(
+                    "credential_hint",
+                    f"{username}:{password}",
+                    source="lab_profile",
+                    entity_id=cred_entity.id,
+                )
         self.sm = StateMachine(
             StateMachineConfig(max_iterations=max_iterations)
         )
@@ -223,6 +273,19 @@ class Orchestrator:
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
             self.memory, self.sm, scope_guard=self.scope_guard
+        )
+        self.subagent_scheduler = BoundedSubagentScheduler(
+            SubagentPolicy(
+                enabled=self.subagents_enabled,
+                max_parallel=self.max_subagents,
+                allow_stateful_parallel=False,
+                allow_stateful_serial=True,
+            )
+        )
+        self.memory.add_fact(
+            "subagents_enabled",
+            self.subagents_enabled,
+            source="orchestrator",
         )
 
         # ---- agents ----
@@ -282,6 +345,8 @@ class Orchestrator:
             "objective": self.objective,
             "lab_profile": self.lab_profile,
             "max_iterations": self.sm.config.max_iterations,
+            "subagents_enabled": self.subagents_enabled,
+            "max_subagents": self.max_subagents,
             "providers": self.registry.describe(),
         })
         self.logger.log(f"Target: {self.target_url}")
@@ -290,12 +355,16 @@ class Orchestrator:
         if self.lab_profile:
             self.logger.log(f"Lab profile: {json.dumps(self.lab_profile, default=str)}")
         self.logger.log(f"Config: max_iter={self.sm.config.max_iterations}")
+        self.logger.log(
+            f"Subagents: enabled={self.subagents_enabled}, max={self.max_subagents}"
+        )
         self.logger.log(f"Scope: {self.scope_guard.describe()}")
         self.logger.log(f"Providers:\n{self.registry.describe()}")
 
         # PLANNING → ROUTING
         self.sm.transition(Event.START, "Session initialized")
         emit("state", {"state": self.sm.state.value, "message": "Session initialized"})
+        self._run_bootstrap_subagents()
 
         final_result: AgentResult | None = None
 
@@ -413,6 +482,8 @@ class Orchestrator:
             context["objective"] = self.objective
         if self.lab_profile:
             context["lab_profile"] = self.lab_profile
+        if self.playbook_context:
+            context["expert_playbook"] = self.playbook_context
         task = task.model_copy(update={"context": context})
 
         # Inject methodology for exploitation tasks
@@ -496,6 +567,34 @@ class Orchestrator:
             "vulnerabilities_found": len(result.vulnerabilities_found),
             "pocs_recorded": len(result.pocs_recorded),
         })
+        if not result.success:
+            failure = classify_failure(
+                result.summary,
+                self.memory.get_recent_failures(8),
+                result,
+            )
+            self.memory.add_fact(
+                "last_failure_class",
+                failure["category"],
+                confidence="suspected",
+                source=f"{agent_name}/failure_classifier",
+                iteration=self.sm.iteration,
+            )
+            self.memory.add_fact(
+                "last_failure_guidance",
+                failure["guidance"],
+                confidence="suspected",
+                source=f"{agent_name}/failure_classifier",
+                iteration=self.sm.iteration,
+            )
+            emit("failure_classification", {
+                "agent": agent_name,
+                **failure,
+            })
+            self.logger.log(
+                f"[FAILURE_CLASSIFICATION] {failure['category']} "
+                f"confidence={failure['confidence']}: {failure['guidance'][:160]}"
+            )
 
         # ---- OBSERVING ----
         success_icon = "✅" if result.success else "❌"
@@ -580,6 +679,206 @@ class Orchestrator:
         self.sm.transition(Event.DECISION_DONE, "cycle back to routing")
         return None
 
+    # ---- bounded subagent bootstrap -------------------------------------
+
+    def _run_bootstrap_subagents(self) -> None:
+        """Run safe parallel sidecars before the first coordinator decision."""
+        specs = self._build_bootstrap_subagents()
+        if not specs:
+            return
+
+        console.print(
+            f"[bold cyan]Launching {len(specs)} bounded bootstrap subagent(s)...[/]"
+        )
+        self.logger.log(
+            "Bootstrap subagents: "
+            + ", ".join(f"{spec.name}/{spec.lane}" for spec in specs)
+        )
+        runs = self.subagent_scheduler.run(specs, lab_profile=self.lab_profile)
+        successes = sum(1 for run in runs if run.success)
+        self.memory.add_fact(
+            "bootstrap_subagents",
+            {
+                "total": len(runs),
+                "successes": successes,
+                "runs": [run.__dict__ for run in runs],
+            },
+            source="orchestrator/subagents",
+        )
+        self.logger.log(
+            f"Bootstrap subagents completed: successes={successes}/{len(runs)}"
+        )
+        for run in runs:
+            style = "green" if run.success else ("yellow" if run.status == "skipped" else "red")
+            console.print(
+                f"[{style}]subagent {run.name}[/] "
+                f"{run.status} in {run.elapsed_sec:.2f}s: {run.summary[:140]}"
+            )
+
+    def _build_bootstrap_subagents(self) -> list[SubagentSpec]:
+        specs: list[SubagentSpec] = []
+        playbook_id = self.lab_profile.get("playbook_id", "")
+        primary_tools = set(self.lab_profile.get("primary_tools", []))
+
+        if playbook_id:
+            specs.append(SubagentSpec(
+                name="profile-analyst",
+                lane="analysis",
+                reason="Create one focused theoretical finding from the detected expert lab profile.",
+                run=self._profile_analyst_subagent,
+                mutates_target=False,
+            ))
+
+        if "caido_local_api" in primary_tools:
+            specs.append(SubagentSpec(
+                name="caido-readiness",
+                lane="readiness",
+                reason="Check whether the Caido local Replay/history bridge is available.",
+                run=self._caido_readiness_subagent,
+                mutates_target=False,
+            ))
+
+        if self._profile_requires_auth():
+            specs.append(SubagentSpec(
+                name="session-readiness",
+                lane="readiness",
+                reason="Inventory configured auth sessions before auth-heavy lab execution.",
+                run=self._session_readiness_subagent,
+                mutates_target=False,
+            ))
+
+        if any(tool.startswith("oob_") for tool in primary_tools):
+            specs.append(SubagentSpec(
+                name="oob-readiness",
+                lane="readiness",
+                reason="Record that this playbook depends on OOB callback readiness.",
+                run=self._oob_readiness_subagent,
+                mutates_target=False,
+            ))
+
+        return specs
+
+    def _profile_analyst_subagent(self) -> AgentResult:
+        analyst = self.specialists["analyst"]
+        task = AgentTask(
+            task_description=(
+                "Bootstrap a single focused theoretical finding from the "
+                "detected expert lab profile. Do not speculate beyond the playbook."
+            ),
+            context={
+                "target_url": self.target_url,
+                "objective": self.objective,
+                "lab_profile": self.lab_profile,
+                "expert_playbook": self.playbook_context,
+                "subagent_lane": "profile-analyst",
+            },
+        )
+        return analyst.execute(task)
+
+    def _caido_readiness_subagent(self) -> AgentResult:
+        outcome = self.tool_executor.call(
+            ToolDecision(
+                tool="caido_local_api",
+                args={"operation": "status", "args": {}},
+                reasoning="Read-only readiness check for Caido local bridge.",
+                expected_signal="Bridge returns ok=true if Replay/history API is reachable.",
+            ),
+            agent_name="subagent:caido-readiness",
+            phase="readiness",
+            iteration=self.sm.iteration,
+        )
+        ready = False
+        message = outcome["blocked_reason"] if outcome["blocked"] else outcome["result"]
+        if not outcome["blocked"]:
+            try:
+                parsed = json.loads(outcome["result"])
+                ready = bool(parsed.get("ok"))
+                message = parsed.get("message") or parsed.get("status") or outcome["result"]
+            except (json.JSONDecodeError, TypeError):
+                ready = '"ok": true' in outcome["result"].lower()
+        self.memory.add_fact(
+            "caido_local_ready",
+            ready,
+            confidence="confirmed",
+            source="subagent/caido-readiness",
+            iteration=self.sm.iteration,
+        )
+        return AgentResult(
+            success=True,
+            summary=(
+                "Caido local bridge reachable."
+                if ready else
+                f"Caido local bridge not confirmed: {str(message)[:180]}"
+            ),
+        )
+
+    def _session_readiness_subagent(self) -> AgentResult:
+        outcome = self.tool_executor.call(
+            ToolDecision(
+                tool="list_sessions",
+                args={},
+                reasoning="Read-only inventory of configured sessions for auth-heavy labs.",
+                expected_signal="List of available named sessions and active identity.",
+            ),
+            agent_name="subagent:session-readiness",
+            phase="readiness",
+            iteration=self.sm.iteration,
+        )
+        session_count = 0
+        active = ""
+        if not outcome["blocked"]:
+            try:
+                parsed = json.loads(outcome["result"])
+                sessions = parsed.get("sessions") or []
+                session_count = len(sessions)
+                active = str(parsed.get("active") or "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        self.memory.add_fact(
+            "configured_session_count",
+            session_count,
+            source="subagent/session-readiness",
+            iteration=self.sm.iteration,
+        )
+        if active:
+            self.memory.add_fact(
+                "active_session",
+                active,
+                source="subagent/session-readiness",
+                iteration=self.sm.iteration,
+            )
+        return AgentResult(
+            success=True,
+            summary=(
+                f"Session readiness: {session_count} configured session(s)"
+                + (f", active={active}." if active else ".")
+            ),
+        )
+
+    def _oob_readiness_subagent(self) -> AgentResult:
+        self.memory.add_fact(
+            "oob_required",
+            True,
+            source="subagent/oob-readiness",
+            iteration=self.sm.iteration,
+        )
+        self.memory.add_fact(
+            "oob_guidance",
+            "Verify interactsh/OOB availability before blind exploitation.",
+            source="subagent/oob-readiness",
+            iteration=self.sm.iteration,
+        )
+        return AgentResult(
+            success=True,
+            summary="OOB callbacks are required by this playbook; readiness guidance recorded.",
+        )
+
+    def _profile_requires_auth(self) -> bool:
+        return bool(
+            self.lab_profile.get("credentials")
+            or self.lab_profile.get("playbook_id") in AUTH_HEAVY_PLAYBOOKS
+        )
+
     # ---- reporter dispatch ------------------------------------------------
 
     def _execute_reporter(self, decision: CoordinatorDecision | None) -> AgentResult:
@@ -590,6 +889,7 @@ class Orchestrator:
                 "target_url": self.target_url,
                 "objective": self.objective,
                 "lab_profile": self.lab_profile,
+                "expert_playbook": self.playbook_context,
                 "session_duration": f"{time.time() - self.session_start:.1f}s",
                 "total_iterations": self.sm.iteration,
             },
@@ -629,6 +929,7 @@ class Orchestrator:
                 "target_url": self.target_url,
                 "objective": self.objective,
                 "lab_profile": self.lab_profile,
+                "expert_playbook": self.playbook_context,
             },
         )
         try:
@@ -673,6 +974,9 @@ class Orchestrator:
             f"{profile_line}"
             f"[bold white]Scope:[/] {self.scope_guard.describe()}\n"
             f"[bold white]⚙  Max iterations:[/] {self.sm.config.max_iterations}\n"
+            f"[bold white]Bounded subagents:[/] "
+            f"{'enabled' if self.subagents_enabled else 'disabled'} "
+            f"(max {self.max_subagents})\n"
             f"[bold white]Caido Local Bridge:[/] {caido_local_status}\n"
             f"[bold white]Caido Cloud API:[/] {caido_status}\n"
             f"[bold white]🔍 Burp Suite MCP:[/] {burp_status} (fallback)\n"
@@ -743,6 +1047,17 @@ def parse_args() -> argparse.Namespace:
         "--interactive", "-i",
         action="store_true",
         help="Pause before each specialist dispatch for manual review",
+    )
+    parser.add_argument(
+        "--no-subagents",
+        action="store_true",
+        help="Disable bounded bootstrap subagents and run the legacy serial orchestrator.",
+    )
+    parser.add_argument(
+        "--max-subagents",
+        type=int,
+        default=int(os.getenv("MAX_SUBAGENTS", "4")),
+        help="Maximum safe bootstrap subagents to run in parallel (default 4).",
     )
     parser.add_argument(
         "--auth-file",
@@ -881,6 +1196,8 @@ def main() -> None:
         lab_profile=lab_profile,
         scope_domains=args.scope_domain,
         scope_cidrs=args.scope_cidr,
+        subagents_enabled=not args.no_subagents,
+        max_subagents=args.max_subagents,
     )
 
     result = orchestrator.run()

@@ -20,14 +20,16 @@ Reynard is a structured multi-agent hacking assistant that runs against **author
 
 ## ✨ Highlights
 
-- 🧠 **Multi-agent workflow**: coordinator, recon, analyst, exploitation, validator, reporter.
+- 🧠 **Multi-agent workflow**: coordinator, bounded bootstrap subagents, recon, analyst, exploitation, validator, reporter.
 - 🛠️ **Kali tool runtime**: `sqlmap`, `nmap`, `ffuf`, `nuclei`, `gobuster`, `nikto`, `john`, `hashcat`, `radare2`, `binwalk`, `frida`, `objection`, and more.
 - 🧰 **Z4nzu HackingTool awareness**: `/opt/hackingtool/hackingtool.py` is available inside the container, with direct tools preferred for automation.
 - 👀 **Live dashboard**: watch decisions, tool calls, findings, memory, and validation while the agent runs.
 - 🔎 **Web research**: CTF writeups, public CVEs, advisories, and official docs via `web_search` / `web_fetch`.
 - 🧾 **Memory and deduplication**: remembers payloads, failed attempts, facts, knowledge graph entities, and lessons.
 - 🔁 **PoC validation**: validator replays successful payloads and demotes weak findings.
-- 🧪 **CTF/lab fast paths**: optimized handling for known lab patterns such as PortSwigger SQLi labs.
+- 🧪 **Expert lab playbooks**: deterministic priors for PortSwigger practitioner/expert classes including JWT, request smuggling, cache poisoning, SSTI, prototype pollution, GraphQL, race conditions, and business logic labs.
+- 📏 **Offline lab readiness eval**: `reynard-lab-eval` checks target parsing, profile detection, prerequisites, and evidence plan before a live run.
+- 🧵 **Bounded subagents**: safe profile/readiness/analysis lanes run in parallel; exploitation remains serialized unless a race-condition playbook explicitly opts in.
 - ☁️ **Caido support**: local Replay/history bridge for testing plus Cloud API for user/team/workspace/subscription/PAT operations.
 - 🧩 **Burp MCP fallback**: traffic/repeater/intruder/collaborator tools when the Burp MCP extension is online.
 
@@ -146,6 +148,13 @@ The image can be large and the first build can take a long time because it insta
 python orchestrator.py --ui --no-oob --max-iterations 25 "Solve this authorized CTF/lab target: https://TARGET"
 ```
 
+Bounded bootstrap subagents are enabled by default:
+
+```powershell
+python orchestrator.py --max-subagents 4 "Authorized lab: https://TARGET"
+python orchestrator.py --no-subagents "Authorized lab: https://TARGET"
+```
+
 The dashboard opens at:
 
 ```text
@@ -157,6 +166,16 @@ http://127.0.0.1:8765
 ## 🏁 Running Against A CTF Or Lab
 
 ### PortSwigger lab example
+
+Run a quick offline readiness check first:
+
+```powershell
+reynard-lab-eval --case "JWT authentication bypass lab. Target: https://YOUR-LAB.web-security-academy.net/" --pretty
+reynard-lab-eval --pretty
+```
+
+The default evaluator suite covers every PortSwigger topic mapped in
+`docs/portswigger-coverage-matrix.md`.
 
 ```powershell
 python orchestrator.py --ui --no-oob --max-iterations 25 "Solve this authorized PortSwigger Web Security Academy lab: SQL injection vulnerability in WHERE clause allowing retrieval of hidden data. Target: https://YOUR-LAB.web-security-academy.net/"

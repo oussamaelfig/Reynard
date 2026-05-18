@@ -102,6 +102,79 @@ def _strip_fence(text: str) -> str:
     return s.strip()
 
 
+def _is_openai_reasoning_chat_model(model: str) -> bool:
+    """Return True for OpenAI Chat Completions models with newer param names."""
+    normalized = (model or "").lower().strip()
+    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _provider_display_name(config: ProviderConfig) -> str:
+    """Human-friendly provider label for logs and terminal output."""
+    base_url = (config.base_url or "").lower().rstrip("/")
+    model = (config.model or "").lower()
+    if config.kind == "anthropic":
+        return "anthropic"
+    if "api.openai.com" in base_url or model.startswith(("gpt-", "o1", "o3", "o4")):
+        return "openai"
+    if "deepseek" in base_url or model.startswith("deepseek"):
+        return "deepseek"
+    if "dashscope" in base_url or model.startswith("qwen"):
+        return "qwen"
+    if "moonshot" in base_url or model.startswith("kimi"):
+        return "kimi"
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        return "local-openai-compatible"
+    return config.kind
+
+
+def _apply_openai_compatible_params(kwargs: dict[str, Any], config: ProviderConfig) -> None:
+    """Apply model-specific Chat Completions parameters.
+
+    GPT-5/o-series Chat Completions models reject legacy `max_tokens` and
+    expect `max_completion_tokens`. Many third-party OpenAI-compatible
+    providers still expect `max_tokens`, so keep the legacy name unless the
+    selected model is one of the known OpenAI reasoning families.
+    """
+    if _is_openai_reasoning_chat_model(config.model):
+        kwargs["max_completion_tokens"] = config.max_tokens
+    else:
+        kwargs["max_tokens"] = config.max_tokens
+        kwargs["temperature"] = config.temperature
+
+
+def _token_param_name(config: ProviderConfig) -> str:
+    return "max_completion_tokens" if _is_openai_reasoning_chat_model(config.model) else "max_tokens"
+
+
+def _emit_llm_request_trace(config: ProviderConfig, *, mode: str, schema: str | None, attempt: int) -> None:
+    """Print and publish a concise, secret-free LLM call trace."""
+    provider = _provider_display_name(config)
+    effort = config.reasoning_effort or "provider-default"
+    token_param = _token_param_name(config)
+    endpoint = "chat.completions" if config.kind == "openai-compatible" else config.kind
+    summary = (
+        f"LLM call role={config.role} provider={provider} model={config.model} "
+        f"endpoint={endpoint} mode={mode}"
+    )
+    if schema:
+        summary += f" schema={schema}"
+    summary += f" {token_param}={config.max_tokens} reasoning_effort={effort}"
+    if attempt:
+        summary += f" retry={attempt}"
+    if provider == "openai" and _is_openai_reasoning_chat_model(config.model):
+        summary += " (OpenAI raw reasoning is hidden; configured effort is shown)"
+
+    from rich.console import Console
+
+    Console().print(f"[dim]{summary}[/]")
+    emit("reasoning_note", {
+        "agent": config.role,
+        "model": config.model,
+        "provider": provider,
+        "text": summary,
+    })
+
+
 # =============================================================================
 # OpenAI-compatible provider (OpenAI, DeepSeek, Qwen, Kimi, vLLM, Ollama, ...)
 # =============================================================================
@@ -141,9 +214,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 kwargs: dict[str, Any] = dict(
                     model=self.config.model,
                     messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
                 )
+                _apply_openai_compatible_params(kwargs, self.config)
                 if self.config.supports_json_mode:
                     kwargs["response_format"] = {"type": "json_object"}
                 if self.config.reasoning_effort and self.config.reasoning_effort != "none":
@@ -152,6 +224,12 @@ class OpenAICompatibleProvider(LLMProvider):
                     kwargs["extra_body"] = {"enable_thinking": True}
 
                 kwargs["stream"] = True
+                _emit_llm_request_trace(
+                    self.config,
+                    mode="typed",
+                    schema=schema.__name__,
+                    attempt=attempt,
+                )
                 resp = self._client.chat.completions.create(**kwargs)
                 
                 from rich.console import Console
@@ -266,15 +344,20 @@ class OpenAICompatibleProvider(LLMProvider):
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
                     ],
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
                 )
+                _apply_openai_compatible_params(kwargs, self.config)
                 if self.config.reasoning_effort and self.config.reasoning_effort != "none":
                     kwargs["reasoning_effort"] = self.config.reasoning_effort
                 if self.config.enable_thinking_param:
                     kwargs["extra_body"] = {"enable_thinking": True}
                     
                 kwargs["stream"] = True
+                _emit_llm_request_trace(
+                    self.config,
+                    mode="text",
+                    schema=None,
+                    attempt=attempt,
+                )
                 resp = self._client.chat.completions.create(**kwargs)
                 
                 from rich.console import Console
@@ -733,7 +816,10 @@ class ProviderRegistry:
                 str(profile.get("json_mode", default_json)),
             ).lower() != "false"
 
-            effort = os.getenv(f"{prefix}_REASONING_EFFORT", role_default_effort)
+            explicit_effort = os.getenv(f"{prefix}_REASONING_EFFORT")
+            effort = explicit_effort if explicit_effort is not None else (
+                default_reasoning if default_reasoning is not None else role_default_effort
+            )
             if effort == "":
                 effort = None
             thinking_enabled = os.getenv(
@@ -782,6 +868,7 @@ class ProviderRegistry:
             override = self._configs.get(role)
             cfg = override or self._configs["default"]
             tag = "" if override else "(default)"
+            provider = _provider_display_name(cfg)
             think_bits = []
             if cfg.reasoning_effort:
                 think_bits.append(f"effort={cfg.reasoning_effort}")
@@ -790,5 +877,5 @@ class ProviderRegistry:
             if cfg.enable_thinking_param:
                 think_bits.append("enable_thinking")
             think_str = f" [{', '.join(think_bits)}]" if think_bits else ""
-            lines.append(f"  {role:14} -> {cfg.kind:18} {cfg.model:30} {tag}{think_str}")
+            lines.append(f"  {role:14} -> {provider:24} {cfg.model:30} {tag}{think_str}")
         return "\n".join(lines)

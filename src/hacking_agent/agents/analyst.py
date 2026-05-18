@@ -84,6 +84,8 @@ class AnalystAgent(BaseAgent):
         lab_profile = task.context.get("lab_profile")
         if isinstance(lab_profile, dict) and lab_profile.get("id") == "portswigger_sqli_hidden_data":
             return self._fast_portswigger_sqli_hidden_data(task, lab_profile)
+        if isinstance(lab_profile, dict) and lab_profile.get("playbook_id"):
+            return self._profile_driven_finding(task, lab_profile)
 
         prompt = self._build_prompt(task)
         try:
@@ -132,8 +134,12 @@ class AnalystAgent(BaseAgent):
         )
 
     def _build_prompt(self, task: AgentTask) -> str:
+        playbook_section = ""
+        if task.context.get("expert_playbook"):
+            playbook_section = f"{task.context['expert_playbook']}\n\n"
         return (
             f"# TASK\n{task.task_description}\n\n"
+            f"{playbook_section}"
             f"{render_tool_catalog('exploitation')}\n\n"
             f"{self.kg_summary()}\n\n"
             "# OUTPUT\n"
@@ -199,3 +205,170 @@ class AnalystAgent(BaseAgent):
             vulnerabilities_found=[vuln],
             next_recommendation="Hand off to exploitation for baseline-vs-payload verification.",
         )
+
+    def _profile_driven_finding(
+        self, task: AgentTask, lab_profile: dict
+    ) -> AgentResult:
+        """Create one focused theoretical finding from a recognized lab profile.
+
+        This is intentionally still theoretical. It prevents known PortSwigger
+        practitioner/expert lab classes from stalling in the analyst LLM when
+        the user objective already names the bug class.
+        """
+        target = self._best_profile_target(task, lab_profile)
+        playbook = lab_profile.get("expert_playbook") or {}
+        playbook_id = lab_profile.get("playbook_id", "")
+        vulnerability_name = (
+            playbook.get("vulnerability")
+            or lab_profile.get("vulnerability")
+            or playbook_id.replace("_", " ").title()
+        )
+        severity = self._profile_severity(playbook_id)
+        parameter = lab_profile.get("parameter") or self._profile_parameter_hint(playbook_id)
+        artifacts = "; ".join(str(item) for item in lab_profile.get("required_artifacts", [])[:4])
+        validation = "; ".join(str(item) for item in lab_profile.get("success_indicators", [])[:4])
+
+        vuln = Vulnerability(
+            vuln_type=vulnerability_name,
+            severity=severity,
+            target_entity_id=target.id,
+            parameter=parameter,
+            hypothesis=(
+                f"The lab profile {lab_profile.get('id')} indicates {vulnerability_name}. "
+                f"Use the expert playbook {playbook_id} to confirm the named behavior "
+                "against observed target responses."
+            ),
+            status="theoretical",
+            notes=(
+                f"PROFILE_DRIVEN: {lab_profile.get('purpose', '')} "
+                f"Required artifacts: {artifacts}. Validation: {validation}."
+            )[:1000],
+        )
+        vuln_entity = self.memory.add_entity("Vulnerability", {
+            "vuln_type": vuln.vuln_type,
+            "severity": vuln.severity,
+            "parameter": vuln.parameter,
+            "hypothesis": vuln.hypothesis,
+            "status": "theoretical",
+            "notes": vuln.notes or "",
+            "target_entity_id": vuln.target_entity_id,
+            "profile_driven": lab_profile.get("id"),
+            "playbook_id": playbook_id,
+        })
+        self.memory.add_relationship(
+            vuln.target_entity_id, "POTENTIALLY_VULNERABLE_TO", vuln_entity.id
+        )
+        vuln.id = vuln_entity.id
+        return AgentResult(
+            success=True,
+            summary=(
+                "Profile-driven analyst created one focused theoretical finding: "
+                f"{vulnerability_name} on {target.id}."
+            ),
+            vulnerabilities_found=[vuln],
+            next_recommendation=(
+                "Hand off to exploitation with the expert playbook and require "
+                "concrete validation artifacts."
+            ),
+        )
+
+    def _best_profile_target(self, task: AgentTask, lab_profile: dict):
+        endpoint_hint = str(lab_profile.get("endpoint_hint", ""))
+        if endpoint_hint:
+            for candidate in self.memory.ranked_query("Endpoint", min_pheromone=0.0):
+                url = str(candidate.attrs.get("url", ""))
+                if endpoint_hint in url:
+                    return candidate
+        endpoints = self.memory.ranked_query("Endpoint", min_pheromone=0.0)
+        if endpoints:
+            return endpoints[0]
+        targets = self.memory.ranked_query("Target", min_pheromone=0.0)
+        if targets:
+            return targets[0]
+        return self.memory.add_entity(
+            "Target", {"url": task.context.get("target_url", self.memory.target_url)}
+        )
+
+    def _profile_severity(self, playbook_id: str) -> str:
+        high = {
+            "oauth_ssrf_dynamic_registration",
+            "oauth",
+            "ssrf",
+            "blind_xxe_oob",
+            "xxe",
+            "os_command_injection",
+            "sqli",
+            "nosql_injection",
+            "ssti",
+            "deserialization",
+            "request_smuggling",
+            "web_cache_poisoning",
+            "web_cache_deception",
+            "jwt",
+            "authentication",
+            "access_control_idor",
+            "graphql_api",
+            "api_testing",
+            "race_condition",
+            "file_upload",
+            "path_traversal",
+            "business_logic",
+            "host_header",
+            "web_llm_attacks",
+        }
+        medium = {
+            "xss",
+            "dom_xss",
+            "dom_based",
+            "csrf",
+            "cors",
+            "websocket",
+            "prototype_pollution",
+            "clickjacking",
+            "information_disclosure",
+            "essential_skills",
+        }
+        if playbook_id in high:
+            return "high"
+        if playbook_id in medium:
+            return "medium"
+        return "medium"
+
+    def _profile_parameter_hint(self, playbook_id: str) -> str | None:
+        hints = {
+            "ssrf": "url",
+            "oauth_ssrf_dynamic_registration": "client metadata URL",
+            "oauth": "OAuth flow parameter",
+            "blind_xxe_oob": "XML body",
+            "xxe": "XML body",
+            "os_command_injection": "command-adjacent parameter",
+            "sqli": "input parameter",
+            "nosql_injection": "JSON body",
+            "jwt": "JWT",
+            "access_control_idor": "object identifier",
+            "request_smuggling": "raw HTTP framing",
+            "web_cache_poisoning": "unkeyed input",
+            "web_cache_deception": "URL path/cache key",
+            "ssti": "template parameter",
+            "deserialization": "serialized value",
+            "prototype_pollution": "__proto__/constructor input",
+            "graphql_api": "GraphQL query/mutation",
+            "api_testing": "API endpoint/object identifier",
+            "race_condition": "state-changing request",
+            "xss": "reflected/stored input",
+            "dom_based": "DOM source/sink",
+            "dom_xss": "DOM source",
+            "clickjacking": "framed UI action",
+            "file_upload": "uploaded file",
+            "path_traversal": "filename/path parameter",
+            "csrf": "state-changing form",
+            "cors": "Origin header",
+            "websocket": "WebSocket message",
+            "business_logic": "workflow parameter",
+            "authentication": "authentication flow",
+            "information_disclosure": "disclosure endpoint",
+            "host_header": "Host/header input",
+            "essential_skills": "lab workflow",
+            "web_llm_attacks": "LLM prompt/tool input",
+        }
+        return hints.get(playbook_id)

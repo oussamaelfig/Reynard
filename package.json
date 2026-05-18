@@ -1,0 +1,12 @@
+{
+  "name": "hacking-agent-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "pnpm --dir integrations/caido-reynard-bridge typecheck",
+    "build": "pnpm --dir integrations/caido-reynard-bridge build",
+    "caido:bridge:status": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:PYTHONPATH='src'; python -c \\\"from dotenv import load_dotenv; load_dotenv(); from hacking_agent.integrations.caido_local import CaidoLocalBridgeClient; import json; print(json.dumps(CaidoLocalBridgeClient(timeout=5).status(), indent=2))\\\"\"",
+    "runtime:check": "python scripts/check_runtime.py",
+    "venv:check": "venv\\Scripts\\python.exe scripts\\check_runtime.py"
+  }
+}

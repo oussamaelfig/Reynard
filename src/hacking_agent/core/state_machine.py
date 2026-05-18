@@ -23,6 +23,7 @@ move along the allowed edges.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -100,6 +101,7 @@ class StateMachineConfig:
     max_consecutive_failures: int = 3         # Force pivot after this many
     per_tool_budgets: dict[str, int] = field(default_factory=lambda: {
         "run_shell":              80,
+        "request_smuggling_probe": 30,
         "tool_inventory":         30,
         "http_request":           150,   # bumped — used by diff/baseline tools too
         "browser_navigate":       40,
@@ -151,6 +153,7 @@ class StateMachine:
     """Tracks orchestrator state, dispatches, tool calls, and failures."""
 
     def __init__(self, config: StateMachineConfig | None = None):
+        self._lock = threading.RLock()
         self.config = config or StateMachineConfig()
         self.state: State = State.PLANNING
         self.iteration: int = 0                          # specialist dispatches
@@ -164,65 +167,95 @@ class StateMachine:
 
     def transition(self, event: Event, note: str = "") -> State:
         """Move to the next state. Raises if (state, event) is invalid."""
-        key = (self.state, event)
-        if key not in _TRANSITIONS:
-            raise StateMachineError(
-                f"Invalid transition: {self.state.value} + {event.value}"
-            )
-        new = _TRANSITIONS[key]
-        self.history.append(StateTransition(self.state, event, new, note))
-        self.state = new
-        return new
+        with self._lock:
+            key = (self.state, event)
+            if key not in _TRANSITIONS:
+                raise StateMachineError(
+                    f"Invalid transition: {self.state.value} + {event.value}"
+                )
+            new = _TRANSITIONS[key]
+            self.history.append(StateTransition(self.state, event, new, note))
+            self.state = new
+            return new
 
     def can_transition(self, event: Event) -> bool:
-        return (self.state, event) in _TRANSITIONS
+        with self._lock:
+            return (self.state, event) in _TRANSITIONS
 
     # ---- bookkeeping ----------------------------------------------------
 
     def record_dispatch(self, agent_name: str) -> None:
-        self.iteration += 1
-        self.agent_dispatches[agent_name] = self.agent_dispatches.get(agent_name, 0) + 1
+        with self._lock:
+            self.iteration += 1
+            self.agent_dispatches[agent_name] = self.agent_dispatches.get(agent_name, 0) + 1
 
     def record_agent_outcome(self, agent_name: str, success: bool) -> None:
-        if success:
-            self.consecutive_failures = 0
-        else:
-            self.consecutive_failures += 1
-            self.last_failed_agent = agent_name
+        with self._lock:
+            if success:
+                self.consecutive_failures = 0
+            else:
+                self.consecutive_failures += 1
+                self.last_failed_agent = agent_name
 
     def record_tool_call(self, tool_name: str) -> None:
-        self.tool_calls[tool_name] = self.tool_calls.get(tool_name, 0) + 1
+        with self._lock:
+            self.tool_calls[tool_name] = self.tool_calls.get(tool_name, 0) + 1
+
+    def try_record_tool_call(self, tool_name: str) -> bool:
+        """Atomically reserve one tool-call budget slot."""
+        with self._lock:
+            budget = self.config.per_tool_budgets.get(tool_name, 999)
+            current = self.tool_calls.get(tool_name, 0)
+            if current >= budget:
+                return False
+            self.tool_calls[tool_name] = current + 1
+            return True
+
+    def release_tool_call(self, tool_name: str) -> None:
+        """Return a reserved tool-call slot when execution is skipped."""
+        with self._lock:
+            current = self.tool_calls.get(tool_name, 0)
+            if current <= 1:
+                self.tool_calls.pop(tool_name, None)
+            else:
+                self.tool_calls[tool_name] = current - 1
 
     # ---- budgets --------------------------------------------------------
 
     def can_call_tool(self, tool_name: str) -> bool:
-        budget = self.config.per_tool_budgets.get(tool_name, 999)
-        return self.tool_calls.get(tool_name, 0) < budget
+        with self._lock:
+            budget = self.config.per_tool_budgets.get(tool_name, 999)
+            return self.tool_calls.get(tool_name, 0) < budget
 
     def remaining_tool_budget(self, tool_name: str) -> int:
-        budget = self.config.per_tool_budgets.get(tool_name, 999)
-        return max(0, budget - self.tool_calls.get(tool_name, 0))
+        with self._lock:
+            budget = self.config.per_tool_budgets.get(tool_name, 999)
+            return max(0, budget - self.tool_calls.get(tool_name, 0))
 
     def should_pivot(self) -> bool:
-        return self.consecutive_failures >= self.config.max_consecutive_failures
+        with self._lock:
+            return self.consecutive_failures >= self.config.max_consecutive_failures
 
     def is_iteration_exhausted(self) -> bool:
-        return self.iteration >= self.config.max_iterations
+        with self._lock:
+            return self.iteration >= self.config.max_iterations
 
     def is_terminated(self) -> bool:
-        return self.state == State.TERMINATED
+        with self._lock:
+            return self.state == State.TERMINATED
 
     # ---- snapshot -------------------------------------------------------
 
     def snapshot(self) -> str:
         """Compact human-readable state summary for prompt injection."""
-        tool_str = ", ".join(f"{n}={c}" for n, c in self.tool_calls.items()) or "(none)"
-        agent_str = ", ".join(f"{n}={c}" for n, c in self.agent_dispatches.items()) or "(none)"
-        return (
-            f"State: {self.state.value}\n"
-            f"Iteration: {self.iteration}/{self.config.max_iterations}\n"
-            f"Consecutive failures: {self.consecutive_failures}/{self.config.max_consecutive_failures}\n"
-            f"Last failed agent: {self.last_failed_agent or 'none'}\n"
-            f"Tool calls: {tool_str}\n"
-            f"Agent dispatches: {agent_str}"
-        )
+        with self._lock:
+            tool_str = ", ".join(f"{n}={c}" for n, c in self.tool_calls.items()) or "(none)"
+            agent_str = ", ".join(f"{n}={c}" for n, c in self.agent_dispatches.items()) or "(none)"
+            return (
+                f"State: {self.state.value}\n"
+                f"Iteration: {self.iteration}/{self.config.max_iterations}\n"
+                f"Consecutive failures: {self.consecutive_failures}/{self.config.max_consecutive_failures}\n"
+                f"Last failed agent: {self.last_failed_agent or 'none'}\n"
+                f"Tool calls: {tool_str}\n"
+                f"Agent dispatches: {agent_str}"
+            )

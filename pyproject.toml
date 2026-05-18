@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 reynard = "hacking_agent.cli.agent:main"
 reynard-orchestrator = "hacking_agent.cli.orchestrator:main"
+reynard-lab-eval = "hacking_agent.cli.lab_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

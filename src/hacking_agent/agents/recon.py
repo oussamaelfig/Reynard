@@ -374,6 +374,9 @@ class ReconAgent(BaseAgent):
             f"\n{self.kg_summary()}",
             f"\n# RECON ITERATION: {inner+1}/{self.MAX_INNER_ITER}",
         ]
+        expert_playbook = task.context.get("expert_playbook")
+        if expert_playbook:
+            lines.insert(2, f"\n{expert_playbook}")
         if last_observation:
             lines.append(f"\n# LAST OBSERVATION (truncated)\n{last_observation[:6000]}")
         lines.append(

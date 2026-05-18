@@ -1,0 +1,15 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@caido/quickjs-types": "^0.26.0",
+    "@caido/sdk-backend": "^0.56.2",
+    "vite": "6.0.11"
+  }
+}

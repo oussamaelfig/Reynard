@@ -48,7 +48,8 @@ EntityType = Literal[
 ]
 
 ToolName = Literal[
-    "run_shell", "tool_inventory", "read_file", "write_file", "list_dir",
+    "run_shell", "request_smuggling_probe",
+    "tool_inventory", "read_file", "write_file", "list_dir",
     "http_request", "browser_navigate", "browser_execute_js",
     "browser_interact", "analyze_response",
     # Out-of-band interaction (interactsh)
