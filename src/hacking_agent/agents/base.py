@@ -125,8 +125,13 @@ class BudgetedToolExecutor:
                     "result": "", "signals": None}
 
         # ----- dedup gate -----
+        # Idempotent / session-establishing navigation (e.g. GET /login,
+        # GET /my-account) must NOT be permanently blocked: agents re-fetch
+        # these to obtain a FRESH CSRF token + session cookie. The tool budget
+        # and the known-failed-attempt gate still bound genuine loops.
         payload_str = self._extract_payload(decision.tool, decision.args)
-        if payload_str and self.memory.is_duplicate(payload_str):
+        idempotent_nav = self._is_idempotent_nav(decision.tool, decision.args)
+        if payload_str and not idempotent_nav and self.memory.is_duplicate(payload_str):
             reason = f"Duplicate payload (already sent): {payload_str[:80]}"
             console.print(f"[yellow]⚠ {reason}[/]")
             emit("tool_blocked", {
@@ -141,6 +146,7 @@ class BudgetedToolExecutor:
 
         if (
             decision.tool not in self.REPEATABLE_TOOLS
+            and not idempotent_nav
             and self.memory.is_known_failed_attempt(decision.tool, decision.args)
         ):
             reason = (
@@ -194,6 +200,12 @@ class BudgetedToolExecutor:
                     "phase": phase,
                 })
 
+        # ----- persist authenticated session state -----
+        # When a login flow succeeds, flag the active session so downstream
+        # agents (exploitation, validator) reuse the REAL cookie jar instead of
+        # fabricating placeholder cookies (e.g. session=abc123).
+        self._maybe_mark_authenticated(decision.tool, decision.args, raw_result)
+
         # ----- record payload (with dedup hash) -----
         if payload_str:
             result_summary = self._classify_result(raw_result, signals)
@@ -232,17 +244,65 @@ class BudgetedToolExecutor:
 
     # ----- helpers --------------------------------------------------------
 
+    # Path fragments whose GETs establish/refresh auth state (session cookie or
+    # a freshly-minted CSRF token). Re-fetching these is REQUIRED, never a dup.
+    SESSION_REFRESH_PATHS = (
+        "/login", "/my-account", "/account", "/logout", "/csrf",
+        "/session", "/oauth", "/authorize", "/register", "/email",
+    )
+
+    def _is_idempotent_nav(self, tool_name: str, args: dict) -> bool:
+        """True for safe, idempotent navigation/session-refresh requests that
+        must never be permanently blocked by payload dedup.
+
+        A request qualifies when it is a body-less safe GET (http_request or
+        browser_navigate) that either targets a known session/token-bearing
+        path or carries no query string (plain page navigation). Requests that
+        carry a body or a query-string payload (e.g. GET-based SQLi) are NOT
+        exempt, so anti-loop protection for real attack payloads is preserved.
+        """
+        if tool_name not in ("http_request", "browser_navigate"):
+            return False
+        if tool_name == "http_request":
+            method = str(args.get("method", "GET")).upper()
+            if method not in ("GET", "HEAD", "OPTIONS"):
+                return False
+            if args.get("data"):
+                return False
+        url = str(args.get("url", ""))
+        path_and_query = url.split("://", 1)[-1]
+        path_and_query = path_and_query[path_and_query.find("/"):] if "/" in path_and_query else ""
+        has_query = "?" in path_and_query
+        path = path_and_query.split("?", 1)[0].lower()
+        if any(frag in path for frag in self.SESSION_REFRESH_PATHS):
+            return True
+        return not has_query
+
+    def _active_session_tag(self) -> str:
+        """Short identifier of the active auth session, folded into the dedup
+        fingerprint so the SAME URL under a DIFFERENT session (e.g. after a
+        login that swaps/refreshes the identity) is not treated as a dup."""
+        try:
+            from hacking_agent.core import sessions as session_mod
+            return session_mod.get_registry().active().name
+        except Exception:
+            return ""
+
     def _extract_payload(self, tool_name: str, args: dict) -> str | None:
         """Build a stable string representing this tool call for dedup."""
         if tool_name == "http_request":
             url = args.get("url", "")
             data = args.get("data", "")
             method = args.get("method", "GET")
-            return f"{method} {url}" + (f" body={data}" if data else "")
+            sess = self._active_session_tag()
+            base = f"{method} {url}" + (f" body={data}" if data else "")
+            return f"{base} @{sess}" if sess else base
         if tool_name == "browser_navigate":
-            return f"BROWSE {args.get('url', '')}"
+            sess = self._active_session_tag()
+            base = f"BROWSE {args.get('url', '')}"
+            return f"{base} @{sess}" if sess else base
         if tool_name == "browser_execute_js":
-            return f"JS@{args.get('url', '')} :: {args.get('script', '')[:80]}"
+            return f"JS@{args.get('url', '')} :: {str(args.get('script', ''))[:80]}"
         if tool_name == "browser_interact":
             return (f"INTERACT@{args.get('url', '')} :: "
                     f"{json.dumps(args.get('actions', []))[:80]}")
@@ -286,13 +346,62 @@ class BudgetedToolExecutor:
             return f"WEB_FETCH {str(args.get('url', '')).rstrip('/')}"
         return None
 
+    def _maybe_mark_authenticated(self, tool_name: str, args: dict,
+                                  raw_result: str) -> None:
+        """Detect a successful login and persist the authenticated session.
+
+        Heuristic: a state-changing request to a login endpoint whose body
+        carries credentials, that did not error and set/kept a session cookie.
+        Best-effort and silent on any failure.
+        """
+        try:
+            url = str(args.get("url", "")).lower()
+            data = str(args.get("data", "")).lower()
+            method = str(args.get("method", "GET")).upper()
+            is_login = (
+                tool_name in ("http_request", "browser_interact", "browser_navigate")
+                and "login" in url
+                and (method == "POST" or "password" in data or tool_name == "browser_interact")
+            )
+            if not is_login:
+                return
+            lowered = raw_result.lower()
+            failed = (
+                '"exit_code": 1' in lowered
+                or "invalid username or password" in lowered
+                or "incorrect password" in lowered
+            )
+            if failed:
+                return
+            from hacking_agent.core import sessions as session_mod
+            reg = session_mod.get_registry()
+            cookies = reg.read_cookies()
+            has_session_cookie = any(
+                "session" in k.lower() for k in cookies
+            ) or "set-cookie: session" in lowered
+            if not has_session_cookie:
+                return
+            reg.mark_authenticated(detail=f"login via {tool_name} {url}")
+            self.memory.add_fact(
+                "authenticated_session", reg.active().name,
+                source="tool_executor/login_detect",
+            )
+            self.memory.add_fact(
+                "session_authenticated", True,
+                source="tool_executor/login_detect",
+            )
+        except Exception:
+            pass
+
     def _brief_args(self, tool_name: str, args: dict) -> str:
+        if not isinstance(args, dict):
+            return str(args)[:100]
         if tool_name == "run_shell":
-            return f"$ {args.get('command', '')[:100]}"
+            return f"$ {str(args.get('command', ''))[:100]}"
         if tool_name == "request_smuggling_probe":
             return (
                 f"{args.get('vector', 'auto')} "
-                f"{args.get('url', '')[:100]}"
+                f"{str(args.get('url', ''))[:100]}"
             )
         if tool_name == "tool_inventory":
             return (
@@ -300,9 +409,9 @@ class BudgetedToolExecutor:
                 f"check={bool(args.get('check_container', False))}"
             )
         if tool_name == "http_request":
-            return f"{args.get('method', 'GET')} {args.get('url', '')[:100]}"
+            return f"{args.get('method', 'GET')} {str(args.get('url', ''))[:100]}"
         if tool_name in ("browser_navigate", "browser_execute_js", "browser_interact"):
-            return args.get("url", "")[:100]
+            return str(args.get("url", ""))[:100]
         if tool_name in ("read_file", "write_file", "list_dir"):
             return args.get("path", "")
         if tool_name == "caido_cloud_api":

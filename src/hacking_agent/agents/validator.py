@@ -60,6 +60,15 @@ prove it" better than "we said it was real and it wasn't".
              confirm a NEW callback (proves the previous one wasn't
              ambient noise from your domain).
 
+# SESSION / COOKIES (CRITICAL)
+The active authenticated session's cookies are injected AUTOMATICALLY by
+http_request and browser_* from the shared cookie jar. NEVER fabricate or
+hardcode a Cookie header or session token (e.g. session=abc123) — doing so
+replays with a FAKE identity and guarantees a false negative. Simply issue the
+request WITHOUT a Cookie header and your real authenticated cookies are used.
+If you need a fresh CSRF token, GET the page that renders the form first (the
+token and session cookie are refreshed together), then submit.
+
 # RULES (NON-NEGOTIABLE)
 1. NEVER call confirmed=True without a CONCRETE causal observation.
    "It returned 200" is NOT enough. "Payload X reflected unencoded in
@@ -111,6 +120,7 @@ class ValidatorAgent(BaseAgent):
         for inner in range(self.MAX_INNER_ITER):
             prompt = self._build_prompt(
                 target_poc, vuln_entity, attempts, last_observation, inner,
+                task.context,
             )
             try:
                 out: ValidationOutput = self.call_typed(
@@ -232,7 +242,8 @@ class ValidatorAgent(BaseAgent):
     # ---- helpers --------------------------------------------------------
 
     def _build_prompt(self, poc: PoC, vuln_entity, attempts: list[dict],
-                      last_observation: str, inner: int) -> str:
+                      last_observation: str, inner: int,
+                      ctx: dict | None = None) -> str:
         attempts_str = (
             "\n".join(
                 f"  step {a['step']}: [{a['tool']}] {a['args'][:120]}\n"
@@ -241,7 +252,32 @@ class ValidatorAgent(BaseAgent):
             )
             or "  (none yet)"
         )
+        session_section = ""
+        if isinstance(ctx, dict):
+            active_session = ctx.get("active_session")
+            if active_session:
+                auth = "authenticated" if ctx.get("session_authenticated") else "not yet authenticated"
+                cred = ctx.get("credential_hint") or ""
+                session_section = (
+                    f"\n# ACTIVE SESSION\n"
+                    f"  name: {active_session} ({auth})\n"
+                    "  Its cookies are injected automatically — do NOT send a "
+                    "Cookie header or invent a session token.\n"
+                    + (f"  credentials (to re-login if needed): {cred}\n" if cred else "")
+                )
+        exploit_server = ""
+        if isinstance(ctx, dict):
+            exploit_server = ctx.get("exploit_server_url", "") or ""
+        if not exploit_server and self.memory:
+            exploit_server = self.memory.get_fact("exploit_server_url", "") or ""
+        exploit_server_section = (
+            f"\n# EXPLOIT SERVER (use this EXACT url; do not invent one)\n"
+            f"  {exploit_server}\n"
+            if exploit_server else ""
+        )
         return (
+            f"{session_section}"
+            f"{exploit_server_section}"
             f"# POC TO VALIDATE\n"
             f"poc_id: {poc.id}\n"
             f"vuln_id: {poc.vuln_id}\n"

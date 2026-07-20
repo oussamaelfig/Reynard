@@ -54,6 +54,7 @@ class ScopeGuard:
         "127.0.0.1",
         "portswigger.net",
         "web-security-academy.net",
+        "exploit-server.net",
     })
 
     # Shell meta-characters that should never appear in run_shell commands

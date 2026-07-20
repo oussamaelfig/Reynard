@@ -101,6 +101,81 @@ def _augment_for_schema(system: str, schema: type[BaseModel]) -> str:
     )
 
 
+# Common enum synonyms cheap models emit instead of the exact Literal values.
+_VERDICT_SYNONYMS = {
+    "succeeded": "success", "successful": "success", "solved": "success",
+    "confirmed": "success", "ok": "success", "pass": "success", "passed": "success",
+    "fail": "failure", "failed": "failure", "blocked": "failure", "no effect": "failure",
+    "none": "failure", "unknown": "unverifiable", "n/a": "unverifiable",
+    "cannot test": "unverifiable", "inconclusive": "unverifiable",
+    "reflected": "partial", "triggered": "partial",
+}
+_REPRO_SYNONYMS = {
+    "reproduced": "reproducible", "consistent": "reproducible", "stable": "reproducible",
+    "not reproducible": "non_reproducible", "not_reproducible": "non_reproducible",
+    "unreproducible": "non_reproducible", "intermittent": "flaky",
+    "unclear": "ambiguous", "unknown": "ambiguous",
+}
+
+
+def _coerce_to_schema(data: Any, schema: type[BaseModel]) -> Any:
+    """Best-effort repair of common cheap-model malformations before validation.
+
+    Never raises; if anything unexpected is encountered the input is returned
+    unchanged so strict validation still runs and drives the repair-retry loop.
+    Security-relevant required fields are NOT invented here — only obvious
+    structural/enum coercions are applied.
+    """
+    try:
+        # Unwrap a single-object list, or a wrapper dict keyed by the schema name.
+        if isinstance(data, list):
+            objs = [d for d in data if isinstance(d, dict)]
+            data = objs[0] if objs else data
+        if isinstance(data, dict) and len(data) == 1:
+            only_val = next(iter(data.values()))
+            key = next(iter(data.keys())).lower()
+            if isinstance(only_val, dict) and (
+                key in (schema.__name__.lower(), "output", "result", "response")
+            ):
+                data = only_val
+        if not isinstance(data, dict):
+            return data
+
+        fields = getattr(schema, "model_fields", {})
+
+        def _coerce_enum(container: dict, key: str, table: dict[str, str]) -> None:
+            val = container.get(key)
+            if isinstance(val, str):
+                norm = val.strip().lower()
+                if norm in table:
+                    container[key] = table[norm]
+
+        if "final_verdict" in fields:
+            _coerce_enum(data, "final_verdict", _VERDICT_SYNONYMS)
+        if "verdict" in fields:
+            _coerce_enum(data, "verdict", _VERDICT_SYNONYMS)
+        if "reproducibility" in fields:
+            _coerce_enum(data, "reproducibility", _REPRO_SYNONYMS)
+        # Nested PoC verdict (ExploitationOutput.poc).
+        poc = data.get("poc")
+        if isinstance(poc, dict):
+            _coerce_enum(poc, "verdict", _VERDICT_SYNONYMS)
+        # A stringified "null"/"none" for optional objects.
+        for key in ("poc", "next_action", "next_probe"):
+            if isinstance(data.get(key), str) and data[key].strip().lower() in ("null", "none", ""):
+                data[key] = None
+        # confirmed emitted as a string boolean.
+        if isinstance(data.get("confirmed"), str):
+            low = data["confirmed"].strip().lower()
+            if low in ("true", "yes", "1"):
+                data["confirmed"] = True
+            elif low in ("false", "no", "0"):
+                data["confirmed"] = False
+    except Exception:
+        return data
+    return data
+
+
 def _strip_fence(text: str) -> str:
     """Defensive: strip markdown fences and <think> blocks."""
     import re
@@ -115,6 +190,129 @@ def _strip_fence(text: str) -> str:
         elif "```" in s:
             s = s.rsplit("```", 1)[0]
     return s.strip()
+
+
+def _extract_json_object(text: str) -> str:
+    """Best-effort extraction of the outermost JSON object from a raw response.
+
+    Cheap models routinely wrap the JSON in ```json fences, prepend prose
+    ("Here is the JSON:"), or append trailing commentary. This strips fences /
+    <think> blocks, then scans from the first `{` to its brace-balanced close
+    (string-aware so braces inside string literals don't confuse the balance).
+    Returns the extracted object substring, or the fence-stripped text
+    unchanged when no object can be located (json.loads then drives the retry).
+    """
+    s = _strip_fence(text or "")
+    start = s.find("{")
+    if start == -1:
+        return s
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start:i + 1]
+    # Unbalanced (truncated output) — return from the first brace onward.
+    return s[start:]
+
+
+def _example_for_annotation(annotation: Any) -> Any:
+    """Produce a schema-valid placeholder value for a field annotation.
+
+    Handles Literal (first choice), Optional/Union (first non-None arm),
+    primitives, containers, and nested Pydantic models. Best-effort; returns
+    None on anything unexpected so the caller can skip the field.
+    """
+    import typing
+
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Literal:
+        return args[0] if args else ""
+    if origin in (typing.Union,):
+        non_none = [a for a in args if a is not type(None)]  # noqa: E721
+        return _example_for_annotation(non_none[0]) if non_none else None
+    if origin in (list, tuple, set, frozenset):
+        return []
+    if origin in (dict,):
+        return {}
+    if annotation in (str,):
+        return "unknown"
+    if annotation in (bool,):
+        return False
+    if annotation in (int,):
+        return 0
+    if annotation in (float,):
+        return 0.0
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        nested = _minimal_example_dict(annotation)
+        return nested
+    return None
+
+
+def _minimal_example_dict(schema: type[BaseModel]) -> dict:
+    """Build a dict populating only the REQUIRED fields of a schema."""
+    example: dict[str, Any] = {}
+    for name, field in getattr(schema, "model_fields", {}).items():
+        try:
+            if field.is_required():
+                example[name] = _example_for_annotation(field.annotation)
+        except Exception:
+            continue
+    return example
+
+
+def _minimal_valid_example(schema: type[BaseModel]) -> str:
+    """Return a compact JSON string of a minimal schema-valid object, or ""."""
+    try:
+        example = _minimal_example_dict(schema)
+        obj = schema(**example)
+        return json.dumps(obj.model_dump(), default=str)
+    except Exception:
+        return ""
+
+
+def _repair_prompt(schema: type[BaseModel], error: Exception) -> str:
+    """Corrective retry prompt: the exact validation error + a minimal example."""
+    lines = [
+        "Your previous response failed schema validation.",
+        f"Validation error:\n{str(error)[:1200]}",
+        "Re-emit a SINGLE JSON object that matches the schema EXACTLY. "
+        "No prose, no markdown fences, no commentary.",
+    ]
+    example = _minimal_valid_example(schema)
+    if example:
+        lines.append(f"Here is a MINIMAL valid example to match the shape:\n{example}")
+    return "\n\n".join(lines)
+
+
+def _safe_fallback(schema: type[BaseModel]) -> BaseModel | None:
+    """Build a conservative, schema-valid object using only defaults.
+
+    Returned ONLY when every field is optional/defaulted (e.g. PivotDecision,
+    ReconFinding), so no security-critical required field (a verdict, a poc_id,
+    a report target) is ever invented and no bogus success can be manufactured.
+    Schemas with required fields yield None and the caller raises as before.
+    """
+    try:
+        return schema()
+    except (ValidationError, TypeError):
+        return None
 
 
 def _is_openai_reasoning_chat_model(model: str) -> bool:
@@ -321,7 +519,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         getattr(usage_obj, "completion_tokens", 0),
                     )
 
-                data = json.loads(_strip_fence(raw))
+                data = json.loads(_extract_json_object(raw))
+                data = _coerce_to_schema(data, schema)
                 validated = schema.model_validate(data)
                 emit("llm_end", {
                     "agent": self.config.role,
@@ -338,14 +537,11 @@ class OpenAICompatibleProvider(LLMProvider):
                     "model": self.config.model,
                     "error": str(e)[:1000],
                 })
-                # Re-prompt the model with the validator's error so it can self-correct.
+                # Re-prompt the model with the validator's error + a minimal
+                # valid example so it can self-correct.
                 messages.append({
                     "role": "user",
-                    "content": (
-                        f"Your previous response failed validation:\n{e}\n\n"
-                        "Re-emit a SINGLE JSON object that matches the schema exactly. "
-                        "No prose, no markdown fences, no commentary."
-                    ),
+                    "content": _repair_prompt(schema, e),
                 })
             except Exception as e:
                 last_error = e
@@ -374,6 +570,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 })
                 raise ProviderError(f"OpenAI-compatible API error: {e}") from e
 
+        fallback = _safe_fallback(schema)
+        if fallback is not None:
+            emit("llm_schema_fallback", {
+                "agent": self.config.role,
+                "model": self.config.model,
+                "schema": schema.__name__,
+                "error": str(last_error)[:500],
+            })
+            return fallback  # type: ignore[return-value]
         emit("error", {
             "agent": self.config.role,
             "component": "llm",
@@ -599,7 +804,9 @@ class AnthropicProvider(LLMProvider):
                             "raw": True,
                         })
                     if getattr(block, "type", None) == "tool_use":
-                        validated = schema.model_validate(block.input)
+                        validated = schema.model_validate(
+                            _coerce_to_schema(block.input, schema)
+                        )
                         emit("llm_end", {
                             "agent": self.config.role,
                             "model": self.config.model,
@@ -618,11 +825,8 @@ class AnthropicProvider(LLMProvider):
                 })
                 if attempt >= max_retries:
                     break
-                # Retry with a corrective hint.
-                user = (
-                    f"{user}\n\n[validator error from previous attempt: {e} — please re-emit "
-                    "valid JSON matching the tool's input_schema]"
-                )
+                # Retry with a corrective hint (error + minimal valid example).
+                user = f"{user}\n\n{_repair_prompt(schema, e)}"
             except Exception as e:
                 last_error = e
                 msg = str(e).lower()
@@ -640,6 +844,15 @@ class AnthropicProvider(LLMProvider):
                 })
                 raise ProviderError(f"Anthropic API error: {e}") from e
 
+        fallback = _safe_fallback(schema)
+        if fallback is not None:
+            emit("llm_schema_fallback", {
+                "agent": self.config.role,
+                "model": self.config.model,
+                "schema": schema.__name__,
+                "error": str(last_error)[:500],
+            })
+            return fallback  # type: ignore[return-value]
         emit("error", {
             "agent": self.config.role,
             "component": "llm",

@@ -127,7 +127,7 @@ class PivotDecision(BaseModel):
     """Escalation decision produced by the high-reasoning `pivot` role when the
     run is stuck. Consumed by the orchestrator to re-seed / re-rank the agenda
     and return to normal routing."""
-    diagnosis: str = Field(..., min_length=1, description="Why the run is stuck.")
+    diagnosis: str = Field("", description="Why the run is stuck.")
     new_hypothesis: Optional[str] = Field(
         None, description="A concrete, previously-untried attack vector to add."
     )
@@ -168,12 +168,15 @@ class Vulnerability(BaseModel):
 class PoC(BaseModel):
     """A proof-of-concept artifact. Recorded in the EvidenceStore."""
     id: str = Field("", description="Filled by EvidenceStore on record.")
-    vuln_id: str
+    # vuln_id / agent_name are overwritten by the exploitation agent on record,
+    # so they carry safe defaults to keep cheap-model outputs from failing
+    # validation when the model omits book-keeping fields it doesn't own.
+    vuln_id: str = ""
     payload: str
-    request_summary: str = Field(..., description="HTTP request or shell cmd that delivered the PoC.")
+    request_summary: str = Field("", description="HTTP request or shell cmd that delivered the PoC.")
     response_excerpt: str = Field("", description="Up to ~500 chars of the relevant response.")
     verdict: ExploitVerdict
-    agent_name: AgentName
+    agent_name: AgentName = "exploitation"
     timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
@@ -244,12 +247,14 @@ class ExploitAttempt(BaseModel):
 
 class ExploitationOutput(BaseModel):
     """Full output of one exploitation run against a single Vulnerability."""
-    vuln_id: str
+    # vuln_id is resolved by the orchestrator/agent from the task, so a missing
+    # value here is harmless — default it to avoid cheap-model validation churn.
+    vuln_id: str = ""
     final_verdict: ExploitVerdict
     poc: Optional[PoC] = None
     attempts: list[ExploitAttempt] = Field(default_factory=list)
     next_action: Optional[ToolDecision] = None
-    reasoning: str
+    reasoning: str = ""
 
 
 class ValidationProbe(BaseModel):
@@ -284,7 +289,7 @@ class ValidationOutput(BaseModel):
     final: bool = Field(
         False, description="True when the validator is done iterating."
     )
-    reasoning: str
+    reasoning: str = ""
 
 
 class ReporterOutput(BaseModel):

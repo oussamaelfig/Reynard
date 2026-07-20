@@ -481,6 +481,69 @@ def next_phase(phase: str) -> str | None:
 
 
 # =============================================================================
+# StallDetector — no-progress / loop detection across outer steps
+# =============================================================================
+
+class StallDetector:
+    """Detects a stalled run: N consecutive outer steps that produce no new KG
+    entities, no new evidence, and no phase advance.
+
+    Cheap models loop (re-running recon/login, re-probing the same vector)
+    without making progress. Each outer step the orchestrator records a
+    signature (active agent + phase + top hypothesis id + KG entity count +
+    evidence count). `record(...)` returns True once `patience` consecutive
+    steps show no forward progress, at which point the caller should force a
+    backtrack (demote the active vector) or pivot escalation instead of
+    repeating.
+
+    Progress is any of: more KG entities, more evidence PoCs, or a later phase
+    than the best previously seen. This is deliberately monotonic so a step
+    that only churns (same signature, no new artifacts) counts as a stall.
+    """
+
+    def __init__(self, patience: int = 3):
+        self.patience = max(1, int(patience))
+        self._stall = 0
+        self._best_kg = -1
+        self._best_ev = -1
+        self._best_phase_idx = -1
+        self._last_signature: tuple | None = None
+
+    @property
+    def stall_count(self) -> int:
+        return self._stall
+
+    def record(self, *, agent: str, phase: str, hypothesis_id: str,
+               kg_count: int, evidence_count: int) -> bool:
+        """Record one outer step; return True if the run is now stalled."""
+        phase_idx = PHASE_SEQUENCE.index(phase) if phase in PHASE_SEQUENCE else -1
+        signature = (str(agent), str(phase), str(hypothesis_id))
+
+        progressed = (
+            kg_count > self._best_kg
+            or evidence_count > self._best_ev
+            or phase_idx > self._best_phase_idx
+        )
+        # First observation is never a stall (nothing to compare against).
+        if self._last_signature is None:
+            progressed = True
+
+        self._best_kg = max(self._best_kg, kg_count)
+        self._best_ev = max(self._best_ev, evidence_count)
+        self._best_phase_idx = max(self._best_phase_idx, phase_idx)
+        self._last_signature = signature
+
+        if progressed:
+            self._stall = 0
+        else:
+            self._stall += 1
+        return self._stall >= self.patience
+
+    def reset(self) -> None:
+        self._stall = 0
+
+
+# =============================================================================
 # HypothesisAgenda — first-class ranked attack-vector backlog
 # =============================================================================
 
@@ -509,14 +572,20 @@ class HypothesisAgenda:
 
     def add(self, text: str, *, vuln_type: str = "", vector: str = "",
             target_entity_id: str = "", phase: str = "recon",
-            heat: float = 1.0, notes: str = "") -> Hypothesis:
-        """Add a hypothesis, de-duplicating on (vuln_type, vector, text)."""
+            heat: float = 1.0, notes: str = "", resurrect: bool = True) -> Hypothesis:
+        """Add a hypothesis, de-duplicating on (vuln_type, vector, text).
+
+        `resurrect=True` (default) re-opens a matching demoted/closed vector —
+        this is what an explicit pivot/self-critique re-add wants. Routine
+        memory syncing passes `resurrect=False` so merely having a lingering
+        theoretical Vulnerability entity does NOT undo a deliberate backtrack.
+        """
         key = (vuln_type.lower().strip(), vector.lower().strip(), text.lower().strip())
         for h in self._items:
             if (h.vuln_type.lower().strip(), h.vector.lower().strip(),
                     h.text.lower().strip()) == key:
                 # Re-surface a previously demoted/closed duplicate.
-                if h.status in ("demoted", "closed"):
+                if resurrect and h.status in ("demoted", "closed"):
                     h.status = "open"
                     h.fail_count = 0
                 h.heat = max(h.heat, heat)

@@ -61,7 +61,11 @@ from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
-from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
+from hacking_agent.core.lab_intel import (
+    detect_lab_profile,
+    extract_exploit_server_url,
+    normalize_target_input,
+)
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.metering import get_token_meter
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
@@ -73,7 +77,8 @@ from hacking_agent.core.schemas import (
 )
 from hacking_agent.core.scope import ScopeGuard
 from hacking_agent.core.strategy import (
-    HypothesisAgenda, PHASE_SEQUENCE, PHASE_TO_AGENT, StrategyEngine, next_phase,
+    HypothesisAgenda, PHASE_SEQUENCE, PHASE_TO_AGENT, StallDetector,
+    StrategyEngine, next_phase,
 )
 from hacking_agent.core.subagents import BoundedSubagentScheduler, SubagentPolicy, SubagentSpec
 from hacking_agent.core import sessions as session_mod
@@ -84,6 +89,34 @@ from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.integrations import caido_local as caido_local_mod
 from hacking_agent.core.state_machine import Event, State, StateMachine, StateMachineConfig
 from hacking_agent.ui.live import start_dashboard
+
+
+def _force_utf8_console() -> None:
+    """Make stdout/stderr tolerant of non-UTF-8 consoles (e.g. Windows cp1252).
+
+    Rich renders emoji/box-drawing glyphs in the banner and panels; on a fresh
+    Windows PowerShell the console defaults to cp1252 and encoding those glyphs
+    raises UnicodeEncodeError, crashing the run. We reconfigure the streams to
+    UTF-8 with a replacement error handler so output degrades gracefully instead
+    of aborting. Best-effort and safe when streams are redirected or already
+    UTF-8.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        current = (getattr(stream, "encoding", "") or "").lower()
+        try:
+            if current not in ("utf-8", "utf8"):
+                reconfigure(encoding="utf-8", errors="replace")
+            elif getattr(stream, "errors", "") not in ("replace", "backslashreplace"):
+                reconfigure(errors="replace")
+        except Exception:
+            pass
+
+
+_force_utf8_console()
 
 console = Console()
 
@@ -102,7 +135,12 @@ Rules:
 - Prefer a specific, testable vector over generic advice.
 - Set give_up=true ONLY when every plausible vector is genuinely exhausted.
 
-Output a SINGLE PivotDecision JSON object.
+Output a SINGLE PivotDecision JSON object. No prose, no markdown fences.
+EXAMPLE:
+{"diagnosis":"Login GET was deduped so no fresh CSRF token was ever obtained.",
+ "new_hypothesis":"Re-fetch /login for a fresh token+cookie, then host an auto-submit CSRF form on the exploit server and deliver to victim.",
+ "new_vuln_type":"csrf","recommended_agent":"exploitation",
+ "recommended_vector":"email change form","give_up":false}
 """
 
 SELF_CRITIQUE_SYSTEM = """You are the SELF-CRITIQUE reviewer. The run is about to be
@@ -298,9 +336,11 @@ class Orchestrator:
         scope_cidrs: list[str] | None = None,
         subagents_enabled: bool = True,
         max_subagents: int = 4,
+        exploit_server_url: str = "",
     ):
         self.target_url = target_url
         self.objective = objective
+        self.exploit_server_url = (exploit_server_url or "").strip()
         self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
         self.playbook_context = render_playbook_context(self.lab_profile)
         self.interactive = interactive
@@ -312,6 +352,12 @@ class Orchestrator:
         self.max_cost_budget = float(os.getenv("LLM_MAX_COST_BUDGET", "0") or 0)
         self.token_meter = get_token_meter()
         self.logger = SessionLogger()
+        scope_domains = list(scope_domains or [])
+        exploit_host = ""
+        if self.exploit_server_url:
+            exploit_host = (urlparse(self.exploit_server_url).hostname or "").lower()
+            if exploit_host and exploit_host not in scope_domains:
+                scope_domains.append(exploit_host)
         self.scope_guard = ScopeGuard.from_target_url(
             target_url,
             extra_domains=scope_domains,
@@ -322,6 +368,10 @@ class Orchestrator:
         self.memory = AgentMemory(target_url=target_url)
         if self.objective:
             self.memory.add_fact("task_objective", self.objective, source="cli")
+        if self.exploit_server_url:
+            self.memory.add_fact(
+                "exploit_server_url", self.exploit_server_url, source="lab_intel/cli"
+            )
         if self.lab_profile:
             self.memory.add_fact(
                 "lab_profile", self.lab_profile.get("id", "unknown"), source="cli"
@@ -446,6 +496,22 @@ class Orchestrator:
         self._needs_pivot = False
         self._pivot_used = 0
         self._self_critique_done = False
+
+        # ---- imp-loop: anti-loop / no-progress intelligence ----
+        # A stall = N consecutive outer steps with no new KG entities, no new
+        # evidence, and no phase advance. On stall we demote the active vector
+        # and force a pivot instead of letting a cheap model churn forever.
+        self.stall_detector = StallDetector(
+            patience=int(os.getenv("REYNARD_STALL_PATIENCE", "3") or 3)
+        )
+        self._stall_forced_pivots = 0
+        # Redundant-recon guard: hypothesis signatures whose recon surface
+        # (endpoints/params) is already materialized, so we advance the phase
+        # instead of re-dispatching recon for the same vector.
+        self._recon_guard_enabled = os.getenv(
+            "REYNARD_RECON_GUARD", "1"
+        ).lower() not in ("0", "false", "no")
+        self._recon_materialized: set[str] = set()
         self._report_gate_count = 0
         self._max_report_gates = int(os.getenv("REYNARD_MAX_REPORT_GATES", "6") or 6)
         self._report_gating_enabled = os.getenv(
@@ -649,10 +715,24 @@ class Orchestrator:
         agent_name: AgentName = decision.next_agent  # type: ignore[assignment]
         task: AgentTask = decision.task  # type: ignore[assignment]
 
+        # ---- imp-loop: redundant-recon guard ----
+        # If recon already materialized the surface for the active hypothesis,
+        # don't re-run it; advance the phase and hand off to the phase owner.
+        if agent_name == "recon" and self._recon_is_redundant(task):
+            agent_name, task = self._advance_past_recon(task)
+
         # Inject shared context (target/objective/lab/playbook), the active
         # StrategyEngine phase + agenda, deterministic tool recommendations,
         # and RAG methodology keyed on the ACTIVE hypothesis + phase.
         task = self._inject_task_context(task, agent_name)
+
+        # ---- routing guard: exploitation ALWAYS needs a Vulnerability id ----
+        # Coordinators (esp. cheap models) frequently route to exploitation
+        # without target_vulnerability_id. Resolve one from the active
+        # hypothesis / KG, create+link one if needed, or gracefully re-route to
+        # the analyst instead of hard-failing inside the exploitation agent.
+        if agent_name == "exploitation":
+            agent_name, task = self._ensure_exploitation_target(agent_name, task)
 
         self.sm.transition(Event.DECISION_DONE, f"dispatching {agent_name}")
         self.sm.record_dispatch(agent_name)
@@ -746,8 +826,19 @@ class Orchestrator:
         # ---- UPDATING: record outcome ----
         self.sm.record_agent_outcome(agent_name, result.success)
 
+        # ---- imp-loop: mark recon surface as materialized for this vector ----
+        if agent_name == "recon" and result.success and self._has_recon_surface():
+            sig = self._recon_signature(self.active_hypothesis)
+            if sig:
+                self._recon_materialized.add(sig)
+
         # ---- WS2: advance/backtrack the active hypothesis + phase ----
         self._update_agenda_after_outcome(agent_name, result)
+
+        # ---- imp-loop: no-progress / loop detection ----
+        # Record this outer step's progress signature; a stall forces a
+        # backtrack (demote the active vector) + pivot instead of churning.
+        self._check_stall(agent_name)
 
         # ---- Pheromone boosting ----
         # Boost pheromone on verified vulnerabilities so they stay hot
@@ -891,6 +982,7 @@ class Orchestrator:
                     phase="injection",
                     heat=max(0.5, float(v.pheromone_weight())),
                     notes="seed:analyst",
+                    resurrect=False,
                 )
         except Exception:
             pass
@@ -1003,6 +1095,21 @@ class Orchestrator:
         if inner_hint:
             context["inner_budget"] = inner_hint
 
+        # imp-loop: session-aware skip. Surface "already authenticated as
+        # <user>" so agents reuse the live jar instead of re-logging-in.
+        try:
+            active = session_mod.get_registry().active()
+            context["active_session"] = active.name
+            context["session_authenticated"] = bool(active.authenticated)
+            if active.authenticated:
+                who = active.auth_detail or active.role_hint or active.name
+                context["auth_status"] = (
+                    f"already authenticated as {who} (session '{active.name}') — "
+                    "do NOT re-login; reuse the existing session cookie jar."
+                )
+        except Exception:
+            pass
+
         # Active StrategyEngine phase + agenda.
         phase = ""
         if self.active_hypothesis is not None:
@@ -1020,24 +1127,23 @@ class Orchestrator:
         # Resolve a vuln_type for tool-selection + methodology.
         vuln_type = self._resolve_vuln_type(task)
 
-        # WS1: deterministic tool recommendations at phase entry.
+        # WS1: deterministic tool recommendations at phase entry, folding in
+        # durable cross-run signals (boost prior wins, demote known dead-ends).
         try:
             tech = self.memory.get_fact("technology_stack") or ""
+            boost_tools, demote_tools, wins = self._durable_tool_signals()
             recs = render_recommendations(
                 vuln_class=vuln_type or self.target_category or None,
                 phase=phase or self.memory.get_current_phase(),
                 tech=tech,
+                boost_tools=boost_tools or None,
+                demote_tools=demote_tools or None,
             )
             if recs:
-                if self.durable is not None:
-                    try:
-                        wins = self.durable.successful_techniques(self.lab_class)[:4]
-                        if wins:
-                            recs += "\n# PRIOR WINS (durable memory): " + ", ".join(
-                                f"{w['tool']}" for w in wins
-                            )
-                    except Exception:
-                        pass
+                if wins:
+                    recs += "\n# PRIOR WINS (durable memory): " + ", ".join(
+                        sorted({str(w["tool"]) for w in wins})
+                    )
                 context["tool_recommendations"] = recs
         except Exception:
             pass
@@ -1086,6 +1192,103 @@ class Orchestrator:
                 return keyword
         return ""
 
+    # ---- fix-routing: guarantee exploitation gets a Vulnerability id --------
+
+    def _valid_vuln_id(self, vuln_id: str | None) -> bool:
+        if not vuln_id:
+            return False
+        ent = self.memory.get_entity(vuln_id)
+        return bool(ent and ent.type == "Vulnerability")
+
+    def _ensure_exploitation_target(
+        self, agent_name: str, task: AgentTask
+    ) -> tuple[str, AgentTask]:
+        """Return (agent_name, task) with a valid target_vulnerability_id set for
+        exploitation. Falls back to the analyst when no finding can be resolved
+        or created."""
+        vuln_id = self._resolve_or_create_vuln_id(task)
+        if vuln_id:
+            if task.target_vulnerability_id != vuln_id:
+                task = task.model_copy(update={"target_vulnerability_id": vuln_id})
+                self.logger.log(
+                    f"[ROUTING] attached target_vulnerability_id={vuln_id} to exploitation"
+                )
+            return agent_name, task
+        # No finding available → re-route to analyst to produce one first.
+        self.logger.log(
+            "[ROUTING] exploitation had no resolvable vulnerability; re-routing to analyst"
+        )
+        emit("routing_recovery", {
+            "from": "exploitation", "to": "analyst",
+            "reason": "no_target_vulnerability_id",
+        })
+        analyst_task = task.model_copy(update={
+            "task_description": (
+                "Produce ONE precise theoretical Vulnerability finding for the "
+                "active hypothesis so exploitation can be dispatched with a "
+                "target_vulnerability_id. " + task.task_description
+            ),
+            "target_vulnerability_id": None,
+        })
+        return "analyst", analyst_task
+
+    def _resolve_or_create_vuln_id(self, task: AgentTask) -> str | None:
+        if self._valid_vuln_id(task.target_vulnerability_id):
+            return task.target_vulnerability_id
+        h = self.active_hypothesis
+        if h is not None and self._valid_vuln_id(h.target_entity_id):
+            return h.target_entity_id
+        theoretical = self._first_theoretical_vuln_id()
+        if theoretical:
+            return theoretical
+        existing = self.memory.query("Vulnerability")
+        if existing:
+            return existing[0].id
+        if h is not None:
+            return self._create_vuln_from_hypothesis(h)
+        return None
+
+    def _create_vuln_from_hypothesis(self, h: Hypothesis) -> str:
+        """Materialize a theoretical Vulnerability entity from a hypothesis so
+        exploitation always has a concrete target to work against."""
+        target_id = ""
+        if h.target_entity_id:
+            ent = self.memory.get_entity(h.target_entity_id)
+            if ent and ent.type in ("Target", "Endpoint"):
+                target_id = ent.id
+        if not target_id:
+            for etype in ("Endpoint", "Target"):
+                ents = self.memory.ranked_query(etype, min_pheromone=0.0)
+                if ents:
+                    target_id = ents[0].id
+                    break
+        if not target_id:
+            target_id = self.memory.add_entity(
+                "Target", {"url": self.target_url}
+            ).id
+        vuln_type = h.vuln_type or self.target_category or "unknown"
+        vuln_entity = self.memory.add_entity("Vulnerability", {
+            "vuln_type": vuln_type,
+            "severity": "medium",
+            "parameter": h.vector or "",
+            "hypothesis": h.text or f"Confirm {vuln_type} on {self.target_url}.",
+            "status": "theoretical",
+            "notes": f"auto-created for exploitation routing ({h.notes or 'hypothesis'})",
+            "target_entity_id": target_id,
+        })
+        try:
+            self.memory.add_relationship(
+                target_id, "POTENTIALLY_VULNERABLE_TO", vuln_entity.id
+            )
+        except KeyError:
+            pass
+        h.target_entity_id = vuln_entity.id
+        self.logger.log(
+            f"[ROUTING] auto-created {vuln_entity.id} ({vuln_type}) for exploitation "
+            f"from hypothesis '{(h.text or '')[:80]}'"
+        )
+        return vuln_entity.id
+
     def _update_agenda_after_outcome(self, agent_name: str, result: AgentResult) -> None:
         h = self.active_hypothesis
         if h is None:
@@ -1114,6 +1317,111 @@ class Orchestrator:
                     "vuln_type": h.vuln_type, "vector": h.vector,
                     "fail_count": h.fail_count,
                 })
+
+    # ---- imp-loop: redundant-recon guard + stall detection --------------
+
+    @staticmethod
+    def _recon_signature(h: Hypothesis | None) -> str:
+        if h is None:
+            return ""
+        return f"{h.vuln_type.lower()}|{h.vector.lower()}|{(h.text or '')[:60].lower()}"
+
+    def _has_recon_surface(self) -> bool:
+        """True once recon has materialized endpoints/params into the KG."""
+        try:
+            return bool(self.memory.query("Endpoint") or self.memory.query("Parameter"))
+        except Exception:
+            return False
+
+    def _recon_is_redundant(self, task: AgentTask) -> bool:
+        """True if recon already materialized the surface for the active
+        hypothesis and the task isn't explicitly asking for new surface."""
+        if not self._recon_guard_enabled:
+            return False
+        h = self.active_hypothesis
+        if h is None:
+            return False
+        sig = self._recon_signature(h)
+        if not sig or sig not in self._recon_materialized:
+            return False
+        if not self._has_recon_surface():
+            return False
+        desc = (task.task_description or "").lower()
+        # Honor explicit requests for deeper/new enumeration.
+        if any(k in desc for k in (
+            "new endpoint", "deeper", "additional", "expand", "re-enumerate",
+            "different endpoint", "more surface",
+        )):
+            return False
+        return True
+
+    def _advance_past_recon(self, task: AgentTask) -> tuple[str, AgentTask]:
+        """Advance the active hypothesis past the recon phase and hand off to
+        the phase owner instead of re-dispatching recon."""
+        h = self.active_hypothesis
+        if h is not None and h.phase == "recon":
+            self.agenda.advance_phase(h)
+            self._sync_memory_phase(h.phase)
+        routed = PHASE_TO_AGENT.get(h.phase if h else "", "analyst") or "analyst"
+        if routed == "recon":
+            routed = "analyst"
+        self.logger.log(
+            f"[RECON_GUARD] recon redundant for '{self._recon_signature(h)}'; "
+            f"advancing to phase={h.phase if h else '?'} via {routed}"
+        )
+        emit("recon_guard", {
+            "reason": "recon_surface_already_materialized",
+            "routed_to": routed,
+            "phase": h.phase if h else "",
+        })
+        new_task = task.model_copy(update={
+            "task_description": (
+                "[recon-guard] Recon surface is already materialized for the "
+                f"active hypothesis; pursue the {h.phase if h else 'next'} phase "
+                f"instead of re-running recon. {task.task_description}"
+            ),
+        })
+        return routed, new_task
+
+    def _check_stall(self, agent_name: str) -> None:
+        """Record the outer-step progress signature; on stall, force a
+        backtrack (demote the active vector) + pivot instead of repeating."""
+        h = self.active_hypothesis
+        stalled = self.stall_detector.record(
+            agent=agent_name,
+            phase=(h.phase if h else self.memory.get_current_phase() or "recon"),
+            hypothesis_id=self._recon_signature(h) or (h.text[:40] if h else ""),
+            kg_count=len(self.memory.entities),
+            evidence_count=len(self.evidence.all_pocs()),
+        )
+        if not stalled:
+            return
+        self._stall_forced_pivots += 1
+        self.stall_detector.reset()
+        if h is not None:
+            self.agenda.demote(h)
+            self.logger.log(
+                f"[STALL] no progress for {self.stall_detector.patience} steps; "
+                f"demoting {h.vuln_type}@{h.vector} and forcing pivot "
+                f"(stall_pivots={self._stall_forced_pivots})"
+            )
+        else:
+            self.logger.log(
+                f"[STALL] no progress for {self.stall_detector.patience} steps; "
+                f"forcing pivot (stall_pivots={self._stall_forced_pivots})"
+            )
+        emit("stall_detected", {
+            "patience": self.stall_detector.patience,
+            "forced_pivots": self._stall_forced_pivots,
+            "demoted": bool(h),
+            "vuln_type": h.vuln_type if h else "",
+            "vector": h.vector if h else "",
+        })
+        console.print(
+            f"[yellow bold]🌀 Stall detected (no progress x"
+            f"{self.stall_detector.patience}) — backtracking + pivot.[/]"
+        )
+        self._needs_pivot = True
 
     def _hypothesis_has_verified_evidence(self, h: Hypothesis) -> bool:
         try:
@@ -1332,6 +1640,29 @@ class Orchestrator:
             self.logger.log(f"[DURABLE] incremental record failed: {e}")
 
     # ---- durable cross-run memory hooks ---------------------------------
+
+    def _durable_tool_signals(self) -> tuple[list[str], list[str], list[dict]]:
+        """Return (boost_tools, demote_tools, wins) from durable memory for the
+        active lab class. `tool_selector.rank_tools` folds boost/demote into the
+        deterministic ranking so learned experience steers tool selection."""
+        if self.durable is None:
+            return [], [], []
+        wins: list[dict] = []
+        boost: list[str] = []
+        demote: list[str] = []
+        try:
+            wins = self.durable.successful_techniques(self.lab_class)[:8]
+            boost = [str(w["tool"]) for w in wins if w.get("tool")]
+        except Exception:
+            wins = []
+        try:
+            deads = self.durable.known_deadends(self.lab_class)[:8]
+            demote = [str(d["tool"]) for d in deads if d.get("tool")]
+        except Exception:
+            pass
+        # Never demote a tool that is also a known win for this class.
+        demote = [t for t in demote if t not in set(boost)]
+        return boost, demote, wins
 
     def _rehydrate_durable(self) -> None:
         """Prime the run with prior knowledge for this target/lab-class.
@@ -1669,6 +2000,14 @@ class Orchestrator:
         self.logger.log(f"[VALIDATING] poc_id={poc_id} vuln_id={vuln_id}")
 
         validator = self.specialists["validator"]
+        active_session = ""
+        session_authenticated = False
+        try:
+            active = session_mod.get_registry().active()
+            active_session = active.name
+            session_authenticated = bool(active.authenticated)
+        except Exception:
+            pass
         task = AgentTask(
             task_description=(
                 f"Re-test PoC {poc_id} for vulnerability {vuln_id}. "
@@ -1681,6 +2020,9 @@ class Orchestrator:
                 "objective": self.objective,
                 "lab_profile": self.lab_profile,
                 "expert_playbook": self.playbook_context,
+                "active_session": active_session,
+                "session_authenticated": session_authenticated,
+                "credential_hint": self.memory.get_fact("credential_hint", ""),
             },
         )
         try:
@@ -1948,6 +2290,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    _force_utf8_console()
     # Load .env from the project root
     env_path = ENV_FILE
     if env_path.exists():
@@ -1964,14 +2307,22 @@ def main() -> None:
     raw_target = args.target
     target_url, objective = normalize_target_input(raw_target)
     lab_profile = detect_lab_profile(raw_target, target_url)
+    exploit_server_url = extract_exploit_server_url(raw_target)
     if target_url != raw_target:
         console.print(f"[dim]Parsed target URL: {target_url}[/]")
     if lab_profile:
         console.print(f"[dim]Detected lab profile: {lab_profile.get('id')}[/]")
+    if exploit_server_url:
+        console.print(f"[dim]Detected exploit server: {exploit_server_url}[/]")
 
+    scope_domains = list(args.scope_domain or [])
+    if exploit_server_url:
+        exploit_host = (urlparse(exploit_server_url).hostname or "").lower()
+        if exploit_host and exploit_host not in scope_domains:
+            scope_domains.append(exploit_host)
     scope_guard = ScopeGuard.from_target_url(
         target_url,
-        extra_domains=args.scope_domain,
+        extra_domains=scope_domains,
         extra_cidrs=args.scope_cidr,
     )
     preflight_checks = run_preflight(target_url, scope_guard)
@@ -2021,10 +2372,11 @@ def main() -> None:
         interactive=args.interactive,
         objective=objective,
         lab_profile=lab_profile,
-        scope_domains=args.scope_domain,
+        scope_domains=scope_domains,
         scope_cidrs=args.scope_cidr,
         subagents_enabled=not args.no_subagents,
         max_subagents=args.max_subagents,
+        exploit_server_url=exploit_server_url,
     )
 
     result = orchestrator.run()
