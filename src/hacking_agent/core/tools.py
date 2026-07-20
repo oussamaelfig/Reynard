@@ -8,9 +8,9 @@ Provides all tools the agent can call:
   - write_file:         Write/create files in the container
   - list_dir:           List directory contents in the container
   - http_request:       Make HTTP requests with persistent cookie jar
-  - browser_navigate:   Load a URL in Lightpanda headless browser (JS rendered)
-  - browser_execute_js: Execute JavaScript in the browser (prove XSS, extract DOM)
-  - browser_interact:   Click elements or type into forms
+  - browser_navigate:   Load a URL in headless Chromium (Playwright, JS rendered)
+  - browser_execute_js: Execute JavaScript and return its value; capture alert() (XSS proof)
+  - browser_interact:   Click elements, type into forms, submit via real selectors
   - caido_cloud_api:    Call Caido Cloud API operations
   - caido_cloud_request: Raw Caido Cloud REST fallback
   - caido_local_api:    Call local Caido Replay/history bridge operations
@@ -31,9 +31,12 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from hacking_agent.core import browser as browser_mod
 from hacking_agent.core import differ as differ_mod
 from hacking_agent.core import oob
+from hacking_agent.core import parsers as parsers_mod
 from hacking_agent.core import sessions as session_mod
+from hacking_agent.core import tool_selector as tool_selector_mod
 from hacking_agent.core.tool_catalog import known_command_names, render_tool_catalog
 from hacking_agent.core import web_research as web_research_mod
 from hacking_agent.integrations import burp as burp_mod
@@ -283,19 +286,22 @@ TOOL_SCHEMAS = [
         },
     },
     # =========================================================================
-    # Lightpanda Headless Browser Tools
+    # Headless Chromium Browser Tools (Playwright, runs inside the container)
     # =========================================================================
     {
         "type": "function",
         "function": {
             "name": "browser_navigate",
             "description": (
-                "Navigate to a URL using Lightpanda headless browser inside the Kali container. "
-                "Unlike curl, this renders the page with a full JavaScript engine (v8), "
-                "executing client-side JS, DOM manipulation, and dynamic content. "
-                "Returns the fully rendered HTML or Markdown. Essential for: "
-                "XSS labs (JS execution), DOM XSS, pages with JS redirects/rendering, "
-                "CSRF token extraction from dynamic forms, and SPAs."
+                "Navigate to a URL using a real headless Chromium browser (Playwright) "
+                "inside the Kali container. Unlike curl, this renders the page with a "
+                "full browser engine: client-side JS runs, the DOM settles, and dynamic "
+                "content loads. The active auth session's cookies + static headers are "
+                "injected automatically, so authenticated client-side labs work. "
+                "ANY alert()/confirm()/prompt() dialog fired during load is captured and "
+                "reported under 'dialogs'/'xss_proof' — a fired dialog is concrete XSS "
+                "proof. Returns rendered HTML (or body text for markdown), final URL, "
+                "title, HTTP status, and captured dialogs."
             ),
             "parameters": {
                 "type": "object",
@@ -308,9 +314,9 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "enum": ["html", "markdown"],
                         "description": (
-                            "Output format: 'html' for raw rendered HTML (better for "
-                            "XSS/injection analysis), 'markdown' for readable text "
-                            "(better for content extraction). Default: html."
+                            "Output format: 'html' for rendered HTML (best for "
+                            "XSS/injection analysis), 'markdown' for body inner-text "
+                            "(best for content extraction). Default: html."
                         ),
                     },
                     "wait_ms": {
@@ -318,6 +324,13 @@ TOOL_SCHEMAS = [
                         "description": (
                             "Milliseconds to wait after page load for JS to execute. "
                             "Default: 2000. Increase for slow-loading SPAs."
+                        ),
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": (
+                            "Auth session name to use (e.g. 'admin', 'user1'). "
+                            "Omit to use the currently active session."
                         ),
                     },
                 },
@@ -330,12 +343,16 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "browser_execute_js",
             "description": (
-                "Execute JavaScript code on a page loaded in Lightpanda headless browser. "
-                "This is CRITICAL for XSS labs — use it to: (1) Navigate to a URL with an "
-                "XSS payload and check if alert/confirm/prompt was called, (2) Extract "
-                "DOM elements dynamically generated by JS, (3) Read cookies via "
-                "document.cookie, (4) Interact with client-side frameworks like AngularJS. "
-                "The script runs in the page context with full DOM access."
+                "Execute JavaScript on a page loaded in headless Chromium (Playwright) "
+                "and RETURN the script's evaluated value (JSON-serialized), not an HTML "
+                "dump. CRITICAL for XSS labs: any alert()/confirm()/prompt() fired while "
+                "the page loads or while your script runs is captured under 'dialogs' and "
+                "surfaced as 'xss_proof' — treat a fired dialog as proof of DOM/stored/"
+                "reflected XSS. Also use it to read document.cookie, extract "
+                "JS-generated DOM values, or drive client-side frameworks. The active "
+                "auth session cookies/headers are injected. The script may be a single "
+                "expression (its value is returned) or a multi-statement body using "
+                "'return'."
             ),
             "parameters": {
                 "type": "object",
@@ -347,10 +364,10 @@ TOOL_SCHEMAS = [
                     "script": {
                         "type": "string",
                         "description": (
-                            "JavaScript code to execute in the page context. "
-                            "Examples: 'document.cookie', 'document.title', "
+                            "JavaScript to evaluate in the page context. Its value is "
+                            "returned. Examples: 'document.cookie', 'document.title', "
                             "'document.querySelector(\"#csrf\").value', "
-                            "'window.location.href'. The return value is captured."
+                            "'return [...document.querySelectorAll(\"a\")].map(a=>a.href)'."
                         ),
                     },
                     "wait_ms": {
@@ -358,6 +375,12 @@ TOOL_SCHEMAS = [
                         "description": (
                             "Milliseconds to wait after page load before executing JS. "
                             "Default: 2000."
+                        ),
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": (
+                            "Auth session name to use. Omit for the active session."
                         ),
                     },
                 },
@@ -370,11 +393,13 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "browser_interact",
             "description": (
-                "Interact with a web page using Lightpanda — click buttons, "
-                "fill input fields, submit forms. Uses CSS selectors to target "
-                "elements. Useful for: login forms with CSRF tokens, multi-step "
-                "exploits, and pages that require user interaction before revealing "
-                "content. The page is rendered with JS before interaction."
+                "Interact with a page using headless Chromium (Playwright) — click "
+                "buttons, fill inputs, select options, submit forms, or press keys via "
+                "real CSS selectors. The page is fully rendered (JS executed) before "
+                "interaction and the active auth session cookies/headers are injected. "
+                "Any alert()/confirm()/prompt() triggered by the interaction is captured "
+                "under 'dialogs'/'xss_proof'. Useful for login/CSRF flows, multi-step "
+                "exploits, and stored-XSS delivery paths."
             ),
             "parameters": {
                 "type": "object",
@@ -390,8 +415,12 @@ TOOL_SCHEMAS = [
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "enum": ["click", "type", "select"],
-                                    "description": "The action to perform.",
+                                    "enum": ["click", "type", "select", "submit", "press"],
+                                    "description": (
+                                        "The action: click, type (fill), select "
+                                        "(option), submit (the element's form), or "
+                                        "press (a key, default Enter)."
+                                    ),
                                 },
                                 "selector": {
                                     "type": "string",
@@ -399,13 +428,16 @@ TOOL_SCHEMAS = [
                                 },
                                 "value": {
                                     "type": "string",
-                                    "description": "Value to type or select (for 'type' and 'select' actions).",
+                                    "description": (
+                                        "Value to type/select, or the key name for "
+                                        "'press'. Ignored for click/submit."
+                                    ),
                                 },
                             },
                             "required": ["action", "selector"],
                         },
                         "description": (
-                            "List of actions to perform in order. Example: "
+                            "Ordered list of actions. Example: "
                             "[{action:'type', selector:'#username', value:'admin'}, "
                             "{action:'type', selector:'#password', value:'test'}, "
                             "{action:'click', selector:'button[type=submit]'}]"
@@ -414,6 +446,12 @@ TOOL_SCHEMAS = [
                     "wait_ms": {
                         "type": "integer",
                         "description": "Milliseconds to wait after page load. Default: 2000.",
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": (
+                            "Auth session name to use. Omit for the active session."
+                        ),
                     },
                 },
                 "required": ["url", "actions"],
@@ -1019,6 +1057,608 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "burp_get_proxy_history",
+            "description": (
+                "Fetch Burp Suite proxy HTTP history (requests/responses already seen "
+                "by the proxy). Use this to review traffic captured while browsing or "
+                "testing through Burp — a rich source of endpoints, parameters, tokens, "
+                "and workflow steps. Requires the Burp MCP extension to be running."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "description": "Number of history items (default 50)."},
+                    "offset": {"type": "integer", "description": "Pagination offset (default 0)."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "burp_get_proxy_history_regex",
+            "description": (
+                "Fetch Burp Suite proxy HTTP history filtered by a regular expression "
+                "(matched against request/response). Use this to pull only the traffic "
+                "you care about (e.g. a parameter name, an endpoint, a token pattern) "
+                "instead of the full history. Requires the Burp MCP extension."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "regex": {"type": "string", "description": "Regex to filter history items."},
+                    "count": {"type": "integer", "description": "Max items (default 50)."},
+                    "offset": {"type": "integer", "description": "Pagination offset (default 0)."},
+                },
+                "required": ["regex"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "burp_set_intercept",
+            "description": (
+                "Enable or disable Burp Suite proxy intercept. Turn intercept OFF for "
+                "automated/agentic testing so requests are not held in the intercept "
+                "queue; turn it ON only when you deliberately want to pause and inspect "
+                "traffic. Requires the Burp MCP extension."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "True to intercept (pause) traffic, False to let it flow.",
+                    },
+                },
+                "required": ["enabled"],
+            },
+        },
+    },
+    # =========================================================================
+    # Automatic tool selection
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_tools",
+            "description": (
+                "Return a deterministic, ranked shortlist of the best tools for the "
+                "current context (vulnerability class + attack phase + observed "
+                "technology), drawn from the expert playbooks and tool catalog. Call "
+                "this at the start of a phase or when unsure which tool fits, then "
+                "prefer the top recommendation unless you can justify an override. "
+                "Each entry has a score and a short justification."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_class": {
+                        "type": "string",
+                        "description": (
+                            "Vulnerability class or lab type (e.g. 'sqli', 'dom xss', "
+                            "'idor', 'request smuggling', 'graphql')."
+                        ),
+                    },
+                    "phase": {
+                        "type": "string",
+                        "description": "Attack phase: recon | exploit | validate.",
+                    },
+                    "tech": {
+                        "type": "string",
+                        "description": (
+                            "Observed technology/stack hint(s), e.g. 'AngularJS', "
+                            "'nginx', 'PostgreSQL', 'GraphQL'. Comma-separated allowed."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    # =========================================================================
+    # Structured scanner wrappers (parsed into records for the KG)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "ffuf_fuzz",
+            "description": (
+                "Run ffuf content/parameter fuzzing in the container and return "
+                "STRUCTURED results (matched endpoints with status/length), not raw "
+                "output. Put FUZZ where you want values injected in the URL. Discovered "
+                "endpoints are returned as KG-ready records under 'kg_records'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target URL containing the FUZZ keyword, e.g. https://target/FUZZ.",
+                    },
+                    "wordlist": {
+                        "type": "string",
+                        "description": (
+                            "Container path to a wordlist (default "
+                            "/usr/share/seclists/Discovery/Web-Content/raft-small-words.txt)."
+                        ),
+                    },
+                    "match_codes": {
+                        "type": "string",
+                        "description": "Comma-separated status codes to keep (default 200,204,301,302,307,401,403).",
+                    },
+                    "extra_args": {
+                        "type": "string",
+                        "description": "Optional extra ffuf flags (e.g. '-H \"Host: FUZZ.target\"').",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Command timeout in seconds (default 300).",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sqlmap_run",
+            "description": (
+                "Run sqlmap non-interactively against a single URL/parameter and return "
+                "STRUCTURED results: injectable parameters, back-end DBMS, and finding "
+                "records (under 'kg_records'). Use when SQLi is non-trivial/blind or "
+                "data extraction is needed; for a simple known lab a single manual "
+                "payload via http_request is faster."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target URL, e.g. https://target/item?id=1.",
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "POST body for testing body parameters (optional).",
+                    },
+                    "extra_args": {
+                        "type": "string",
+                        "description": (
+                            "Optional extra sqlmap flags (e.g. '-p id --technique=BEU', "
+                            "'--dbms=postgresql', '--dump -T users'). --batch is always added."
+                        ),
+                    },
+                    "level": {"type": "integer", "description": "sqlmap --level (default 2)."},
+                    "risk": {"type": "integer", "description": "sqlmap --risk (default 1)."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 600)."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nmap_scan",
+            "description": (
+                "Run an nmap service/version scan against a host and return STRUCTURED "
+                "results: open ports, services, product/version, plus web endpoints for "
+                "any HTTP(S) port (under 'kg_records'). Use for network/host recon when "
+                "you have an IP/hostname with unknown services."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Host or IP to scan (no scheme), e.g. 10.0.0.5 or target.local.",
+                    },
+                    "ports": {
+                        "type": "string",
+                        "description": "Port spec, e.g. '1-1000' or '80,443,8080'. Default: nmap top ports.",
+                    },
+                    "extra_args": {
+                        "type": "string",
+                        "description": "Optional extra nmap flags (e.g. '-sC', '-Pn', '--script http-title').",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 600)."},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    # =========================================================================
+    # Session registration (multi-user IDOR / authz)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "register_session",
+            "description": (
+                "Create (or overwrite) a named authenticated session mid-run so multi-"
+                "user IDOR/authz labs can hold several identities at once. Supply cookies "
+                "(as a dict + domain, or a raw 'a=b; c=d' header) and/or static headers "
+                "(e.g. Authorization Bearer). Then use swap_session to switch between "
+                "identities; http_request and browser_* honor the active session."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Session name, e.g. 'user2', 'admin'."},
+                    "role_hint": {
+                        "type": "string",
+                        "description": "Role label: 'admin' | 'user' | 'unauth' | tenant tag, etc.",
+                    },
+                    "cookies": {
+                        "type": "object",
+                        "description": "Cookie name->value map to write into this session's jar.",
+                    },
+                    "cookie_domain": {
+                        "type": "string",
+                        "description": "Domain for the cookies dict (e.g. the lab host).",
+                    },
+                    "cookie_header": {
+                        "type": "string",
+                        "description": "Raw Cookie header value ('a=b; c=d'); stored as a static header.",
+                    },
+                    "static_headers": {
+                        "type": "object",
+                        "description": "Static headers to send, e.g. {\"Authorization\": \"Bearer ...\"}.",
+                    },
+                    "set_active": {
+                        "type": "boolean",
+                        "description": "If true, immediately make this the active session (default false).",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    # =========================================================================
+    # Cross-domain tools — Network / pwn / reversing
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "metasploit_run",
+            "description": (
+                "Run a Metasploit workflow non-interactively via a generated resource "
+                "script (or a raw one you supply) inside the container. Provide a module "
+                "plus options (RHOSTS/RPORT/LHOST/PAYLOAD) and it builds and runs the rc. "
+                "Returns stdout plus parsed success/session lines under 'kg_records'. "
+                "Set the exact vulnerable service/version before choosing a module."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "module": {
+                        "type": "string",
+                        "description": "Metasploit module path, e.g. exploit/unix/ftp/vsftpd_234_backdoor.",
+                    },
+                    "options": {
+                        "type": "object",
+                        "description": "Module options as a map, e.g. {\"RHOSTS\": \"10.0.0.5\", \"RPORT\": 21}.",
+                    },
+                    "payload": {
+                        "type": "string",
+                        "description": "Optional PAYLOAD to set, e.g. cmd/unix/reverse.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["run", "check", "exploit"],
+                        "description": "Final action verb for the rc script (default run).",
+                    },
+                    "resource_script": {
+                        "type": "string",
+                        "description": "Raw msf rc script; overrides module/options when provided.",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 300)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "msfvenom_generate",
+            "description": (
+                "Generate a payload with msfvenom inside the container and save it to a "
+                "file. Use for custom stagers/shellcode when a module needs an external "
+                "payload. LHOST/LPORT are your listener (not a scope target)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "Payload, e.g. linux/x64/shell_reverse_tcp."},
+                    "lhost": {"type": "string", "description": "Listener host/IP for the payload."},
+                    "lport": {"type": "integer", "description": "Listener port (default 4444)."},
+                    "format": {"type": "string", "description": "Output format, e.g. elf, exe, python, raw (default elf)."},
+                    "out_file": {"type": "string", "description": "Container path to write (default /data/loot/payload.bin)."},
+                    "extra_args": {"type": "string", "description": "Extra msfvenom flags, e.g. '-e x86/shikata_ga_nai -i 3'."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 120)."},
+                },
+                "required": ["payload"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "radare2_analyze",
+            "description": (
+                "Analyze a local binary with radare2 (r2) and return STRUCTURED results: "
+                "file info, function count, notable strings, and dangerous-call findings "
+                "(gets/strcpy/system/exec, etc.) under 'kg_records'. Use for reversing and "
+                "as the first pwn recon step. File-only: no network target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "binary_path": {"type": "string", "description": "Container path to the binary, e.g. /data/loot/chall."},
+                    "commands": {
+                        "type": "string",
+                        "description": "Optional r2 command string (default 'aaa; iI; afl; izq').",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 120)."},
+                },
+                "required": ["binary_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdb_debug",
+            "description": (
+                "Run gdb in batch mode against a local binary with a list of commands "
+                "(e.g. break/run/info registers/x). Good for finding overflow offsets, "
+                "leaking values, and inspecting runtime state. File-only: no network target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "binary_path": {"type": "string", "description": "Container path to the binary."},
+                    "commands": {
+                        "type": "string",
+                        "description": "Newline- or ';'-separated gdb commands, e.g. 'break main\\nrun\\ninfo registers'.",
+                    },
+                    "args": {"type": "string", "description": "Optional program arguments passed after --args."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 120)."},
+                },
+                "required": ["binary_path", "commands"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pwn_template",
+            "description": (
+                "Binary-exploitation helper: runs checksec on the target and generates a "
+                "ready-to-edit pwntools exploit skeleton (local + optional remote) saved "
+                "under /data/scripts. Returns protections and the script path/content. "
+                "If remote_host is set it becomes an in-scope network target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "binary_path": {"type": "string", "description": "Container path to the target binary."},
+                    "remote_host": {"type": "string", "description": "Optional remote host for the pwntools remote() line."},
+                    "remote_port": {"type": "integer", "description": "Optional remote port for remote()."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 60)."},
+                },
+                "required": ["binary_path"],
+            },
+        },
+    },
+    # =========================================================================
+    # Cross-domain tools — Mobile (Android)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "apk_decompile",
+            "description": (
+                "Decompile an Android APK with apktool (resources/smali) and/or jadx "
+                "(Java source) inside the container. Returns the output directories and a "
+                "file summary. File-only: no network target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "apk_path": {"type": "string", "description": "Container path to the .apk."},
+                    "engine": {
+                        "type": "string",
+                        "enum": ["apktool", "jadx", "both"],
+                        "description": "Which decompiler to run (default both).",
+                    },
+                    "out_dir": {"type": "string", "description": "Output base dir (default /data/loot/<apk-name>)."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 300)."},
+                },
+                "required": ["apk_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apk_analyze",
+            "description": (
+                "Static-analyze a decompiled APK source tree: parse the manifest (package, "
+                "exported components, permissions) and grep for dangerous sinks and secrets "
+                "(WebView JS, exec, crypto, hardcoded keys/URLs). Returns STRUCTURED findings "
+                "under 'kg_records'. File-only: no network target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source_dir": {"type": "string", "description": "Decompiled tree, e.g. /data/loot/app/jadx."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 120)."},
+                },
+                "required": ["source_dir"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "frida_hook",
+            "description": (
+                "Run a Frida instrumentation script against a target app on a USB/local "
+                "device for a bounded duration and return the captured console output. Use "
+                "for root/SSL-pinning bypass or dumping runtime values. Provide either a "
+                "script body or a container script path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "App package name or process name, e.g. com.target.app."},
+                    "script": {"type": "string", "description": "Frida JS body OR a container path to a .js file."},
+                    "spawn": {"type": "boolean", "description": "Spawn the app (-f) instead of attaching (-n). Default true."},
+                    "device": {
+                        "type": "string",
+                        "enum": ["usb", "local", "remote"],
+                        "description": "Device selector: usb (-U), local, or remote (-H). Default usb.",
+                    },
+                    "duration": {"type": "integer", "description": "Seconds to run before detaching (default 15)."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 60)."},
+                },
+                "required": ["target", "script"],
+            },
+        },
+    },
+    # =========================================================================
+    # Cross-domain tools — CTF misc (crypto / stego / forensics / flags)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "stego_extract",
+            "description": (
+                "Extract hidden data from a carrier file using steghide/zsteg/binwalk/"
+                "foremost/exiftool/strings. 'auto' layers metadata, embedded-data carving, "
+                "and LSB/steghide passphrase attempts, then flag-hunts the output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Container path to the carrier file."},
+                    "tool": {
+                        "type": "string",
+                        "enum": ["auto", "steghide", "zsteg", "binwalk", "foremost", "exiftool", "strings"],
+                        "description": "Extraction tool (default auto).",
+                    },
+                    "passphrase": {"type": "string", "description": "Optional steghide passphrase (default empty)."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 120)."},
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hash_crack",
+            "description": (
+                "Crack a hash or password file with john or hashcat using a wordlist "
+                "(default rockyou). Provide the hash inline or a container file path. "
+                "Returns any cracked plaintext."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hash_value": {"type": "string", "description": "A single hash string (written to a temp file)."},
+                    "hash_file": {"type": "string", "description": "Container path to a file of hashes (overrides hash_value)."},
+                    "hash_type": {"type": "string", "description": "john --format or hashcat -m mode (optional; auto if empty)."},
+                    "wordlist": {"type": "string", "description": "Wordlist path (default /usr/share/wordlists/rockyou.txt)."},
+                    "tool": {
+                        "type": "string",
+                        "enum": ["john", "hashcat"],
+                        "description": "Cracking engine (default john).",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 300)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "crypto_helper",
+            "description": (
+                "Pure-Python crypto/encoding helper (no container). Operations: b64decode, "
+                "b64encode, hexdecode, hexencode, rot13, rot (key=N), xor (key=str/hex), "
+                "from_binary, to_binary, url_decode, hash_identify. Use to normalize/"
+                "transform CTF crypto inputs quickly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["b64decode", "b64encode", "hexdecode", "hexencode", "rot13",
+                                 "rot", "xor", "from_binary", "to_binary", "url_decode", "hash_identify"],
+                        "description": "The transform to apply.",
+                    },
+                    "data": {"type": "string", "description": "Input string."},
+                    "key": {"type": "string", "description": "Key/parameter (xor key, rot amount, etc.)."},
+                },
+                "required": ["operation", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "forensics_triage",
+            "description": (
+                "Triage a forensic artifact inside the container. 'auto' fingerprints the "
+                "file then runs the right recon; 'pcap' gives capinfos + protocol/HTTP-object "
+                "stats via tshark; 'carve' runs binwalk+foremost; 'metadata'/'strings' inspect "
+                "the file. Flag-hunts recovered output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Container path to the artifact."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["auto", "pcap", "carve", "metadata", "strings"],
+                        "description": "Triage mode (default auto).",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 180)."},
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "flag_hunter",
+            "description": (
+                "Generic flag post-processor: scan provided text and/or a container file/"
+                "directory for flag patterns (default FLAG{...}/CTF{...}/HTB{...} and similar "
+                "name{...} forms). Supply a custom regex to match a specific challenge format."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Raw text to scan (e.g. prior tool output)."},
+                    "file_path": {"type": "string", "description": "Container file or directory to grep recursively."},
+                    "pattern": {"type": "string", "description": "Custom flag regex (default common CTF flag forms)."},
+                    "timeout": {"type": "integer", "description": "Command timeout seconds (default 60)."},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
 
@@ -1518,32 +2158,38 @@ def http_request(
 
 
 # =============================================================================
-# Lightpanda Browser Functions
+# Headless Chromium Browser Functions (Playwright, in-container)
 # =============================================================================
 
 def browser_navigate(
     url: str,
     output_format: str = "html",
     wait_ms: int = 2000,
+    session: str | None = None,
 ) -> str:
+    """Navigate to a URL using headless Chromium (Playwright) in the container.
+
+    Renders the page with a real browser engine, injects the active auth
+    session's cookies/headers, and captures any alert()/confirm()/prompt()
+    dialogs (XSS proof). Returns rendered content, final URL, status, title,
+    and captured dialogs.
     """
-    Navigate to a URL using Lightpanda headless browser.
-    Renders the page with full JavaScript execution (v8 engine).
-    """
-    dump_flag = "markdown" if output_format == "markdown" else "html"
-    cmd = (
-        f"lightpanda fetch"
-        f" --dump {dump_flag}"
-        f" --wait-ms {wait_ms}"
-        f" '{url}'"
-        f" 2>&1"
+    result = browser_mod.navigate(
+        url, output_format=output_format, wait_ms=wait_ms, session=session,
     )
-    result = _docker_exec(cmd, timeout=60)
     return json.dumps({
-        "rendered_content": result["stdout"],
-        "exit_code": result["exit_code"],
-        "format": dump_flag,
+        "rendered_content": result.get("content", ""),
+        "format": "markdown" if output_format == "markdown" else "html",
         "url": url,
+        "final_url": result.get("final_url", ""),
+        "status": result.get("status"),
+        "title": result.get("title", ""),
+        "dialogs": result.get("dialogs", []),
+        "xss_proof": result.get("xss_proof", ""),
+        "console_errors": result.get("console_errors", []),
+        "session": result.get("session", ""),
+        "ok": result.get("ok", False),
+        "error": result.get("error", ""),
     }, indent=2)
 
 
@@ -1551,28 +2197,28 @@ def browser_execute_js(
     url: str,
     script: str,
     wait_ms: int = 2000,
+    session: str | None = None,
 ) -> str:
+    """Execute JS on a Chromium-rendered page and return its evaluated value.
+
+    Captures alert()/confirm()/prompt() dialogs as XSS proof.
     """
-    Execute JavaScript on a page rendered by Lightpanda.
-    Uses --wait-script to run custom JS after page load.
-    Returns the page HTML with JS effects applied.
-    """
-    # Escape the script for shell
-    escaped_script = script.replace("'", "'\\''")
-    cmd = (
-        f"lightpanda fetch"
-        f" --dump html"
-        f" --wait-ms {wait_ms}"
-        f" --wait-script '{escaped_script}'"
-        f" '{url}'"
-        f" 2>&1"
+    result = browser_mod.execute_js(
+        url, script=script, wait_ms=wait_ms, session=session,
     )
-    result = _docker_exec(cmd, timeout=60)
     return json.dumps({
-        "rendered_html": result["stdout"],
+        "js_result": result.get("js_result"),
         "script": script,
-        "exit_code": result["exit_code"],
         "url": url,
+        "final_url": result.get("final_url", ""),
+        "status": result.get("status"),
+        "title": result.get("title", ""),
+        "dialogs": result.get("dialogs", []),
+        "xss_proof": result.get("xss_proof", ""),
+        "console_errors": result.get("console_errors", []),
+        "session": result.get("session", ""),
+        "ok": result.get("ok", False),
+        "error": result.get("error", ""),
     }, indent=2)
 
 
@@ -1580,53 +2226,29 @@ def browser_interact(
     url: str,
     actions: list[dict],
     wait_ms: int = 2000,
+    session: str | None = None,
 ) -> str:
-    """
-    Interact with a page using Lightpanda via a Puppeteer-style script.
-    Generates a small Node.js/Puppeteer script, writes it to the container,
-    and executes it against Lightpanda's CDP server.
-    """
-    # Build the interaction as a sequence of JS commands using Lightpanda's
-    # wait-script feature: first navigate, then execute interactions
-    js_parts = []
-    for action in actions:
-        selector = action["selector"].replace("'", "\\'")
-        if action["action"] == "click":
-            js_parts.append(
-                f"document.querySelector('{selector}').click();"
-            )
-        elif action["action"] == "type":
-            value = action.get("value", "").replace("'", "\\'")
-            js_parts.append(
-                f"var el = document.querySelector('{selector}');"
-                f"el.value = '{value}';"
-                f"el.dispatchEvent(new Event('input', {{bubbles: true}}));"
-            )
-        elif action["action"] == "select":
-            value = action.get("value", "").replace("'", "\\'")
-            js_parts.append(
-                f"var el = document.querySelector('{selector}');"
-                f"el.value = '{value}';"
-                f"el.dispatchEvent(new Event('change', {{bubbles: true}}));"
-            )
+    """Interact with a Chromium-rendered page via real CSS selectors.
 
-    interaction_script = " ".join(js_parts)
-    escaped_script = interaction_script.replace("'", "'\\''")
-
-    cmd = (
-        f"lightpanda fetch"
-        f" --dump html"
-        f" --wait-ms {wait_ms}"
-        f" --wait-script '{escaped_script}'"
-        f" '{url}'"
-        f" 2>&1"
+    Supports click/type/select/submit/press. Injects the active auth session
+    and captures any alert()/confirm()/prompt() dialogs (XSS proof).
+    """
+    result = browser_mod.interact(
+        url, actions=actions, wait_ms=wait_ms, session=session,
     )
-    result = _docker_exec(cmd, timeout=60)
     return json.dumps({
-        "rendered_html": result["stdout"],
-        "actions_performed": actions,
-        "exit_code": result["exit_code"],
+        "rendered_content": result.get("content", ""),
+        "actions_performed": result.get("actions_performed", actions),
         "url": url,
+        "final_url": result.get("final_url", ""),
+        "status": result.get("status"),
+        "title": result.get("title", ""),
+        "dialogs": result.get("dialogs", []),
+        "xss_proof": result.get("xss_proof", ""),
+        "console_errors": result.get("console_errors", []),
+        "session": result.get("session", ""),
+        "ok": result.get("ok", False),
+        "error": result.get("error", ""),
     }, indent=2)
 
 
@@ -1757,8 +2379,8 @@ def nuclei_scan(url: str, severity: str = "medium,high,critical",
     actionable data. Empty result == no high-severity hits.
     """
     # nuclei is part of the projectdiscovery suite; expect it installed in Kali.
-    rc, _, _ = _docker_exec("which nuclei", timeout=5)
-    if rc != 0:
+    avail = _docker_exec("which nuclei", timeout=5)
+    if avail.get("exit_code", -1) != 0:
         return json.dumps({
             "error": "nuclei not installed in container",
             "hint": "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
@@ -2011,6 +2633,697 @@ def discover_apis(base_url: str) -> str:
 
 
 # =============================================================================
+# Automatic Tool-Selection Tool
+# =============================================================================
+
+def recommend_tools(vuln_class: str = "", phase: str = "",
+                    tech: str = "") -> str:
+    """Return a deterministic ranked shortlist of tools for the context."""
+    tech_val: str | list[str] = tech
+    if isinstance(tech, str) and "," in tech:
+        tech_val = [t.strip() for t in tech.split(",") if t.strip()]
+    available = list(TOOL_FUNCTIONS.keys())
+    ranked = tool_selector_mod.rank_tools(
+        vuln_class=vuln_class or None,
+        phase=phase or None,
+        tech=tech_val or None,
+        available_tools=available,
+    )
+    return json.dumps({
+        "vuln_class": vuln_class,
+        "phase": tool_selector_mod.normalize_phase(phase),
+        "tech": tech,
+        "recommendations": ranked[:10],
+        "rendered": tool_selector_mod.render_recommendations(
+            vuln_class or None, phase or None, tech_val or None, available,
+        ),
+    }, indent=2)
+
+
+# =============================================================================
+# Structured Scanner Wrappers (parsed into KG-ready records)
+# =============================================================================
+
+def ffuf_fuzz(url: str, wordlist: str = "", match_codes: str = "",
+              extra_args: str = "", timeout: int = 300) -> str:
+    """Run ffuf and return structured endpoint records parsed from its JSON."""
+    avail = _docker_exec("command -v ffuf", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "ffuf not installed in container",
+                            "hint": "go install github.com/ffuf/ffuf/v2@latest"})
+    wl = wordlist or "/usr/share/seclists/Discovery/Web-Content/raft-small-words.txt"
+    mc = match_codes or "200,204,301,302,307,401,403"
+    out_path = "/tmp/reynard_ffuf.json"
+    cmd = (
+        f"ffuf -u {shlex.quote(url)} -w {shlex.quote(wl)} "
+        f"-mc {shlex.quote(mc)} -of json -o {out_path} -s "
+        f"{extra_args} >/dev/null 2>&1; cat {out_path} 2>/dev/null"
+    )
+    result = _docker_exec(cmd, timeout=timeout)
+    records = parsers_mod.parse_ffuf(result.get("stdout", ""))
+    return json.dumps({
+        "summary": records["summary"],
+        "kg_records": records,
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def sqlmap_run(url: str, data: str = "", extra_args: str = "",
+               level: int = 2, risk: int = 1, timeout: int = 600) -> str:
+    """Run sqlmap non-interactively and return structured injection records."""
+    avail = _docker_exec("command -v sqlmap", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "sqlmap not installed in container"})
+    parts = [
+        "sqlmap", "-u", shlex.quote(url), "--batch",
+        f"--level={int(level)}", f"--risk={int(risk)}",
+    ]
+    if data:
+        parts += ["--data", shlex.quote(data)]
+    cmd = " ".join(parts) + (f" {extra_args}" if extra_args else "") + " 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    records = parsers_mod.parse_sqlmap(result.get("stdout", ""), url=url)
+    return json.dumps({
+        "summary": records["summary"],
+        "kg_records": records,
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def nmap_scan(target: str, ports: str = "", extra_args: str = "",
+              timeout: int = 600) -> str:
+    """Run an nmap -sV scan (XML) and return structured service records."""
+    avail = _docker_exec("command -v nmap", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "nmap not installed in container"})
+    port_arg = f"-p {shlex.quote(ports)} " if ports else ""
+    cmd = (
+        f"nmap -sV -oX - {port_arg}{extra_args} {shlex.quote(target)} 2>/dev/null"
+    )
+    result = _docker_exec(cmd, timeout=timeout)
+    records = parsers_mod.parse_nmap(result.get("stdout", ""))
+    return json.dumps({
+        "summary": records["summary"],
+        "kg_records": records,
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+# =============================================================================
+# Session Registration Tool
+# =============================================================================
+
+def register_session(name: str, role_hint: str = "unknown",
+                     cookies: dict | None = None, cookie_domain: str = "",
+                     cookie_header: str = "", static_headers: dict | None = None,
+                     set_active: bool = False) -> str:
+    reg = session_mod.get_registry()
+    msg = reg.register_session(
+        name=name,
+        role_hint=role_hint,
+        static_headers=static_headers,
+        cookies=cookies,
+        cookie_domain=cookie_domain,
+        cookie_header=cookie_header,
+        set_active=set_active,
+    )
+    return json.dumps({
+        "status": "ok",
+        "message": msg,
+        "active": reg.active().name,
+        "sessions": reg.names(),
+    }, indent=2)
+
+
+# =============================================================================
+# Cross-domain tool wrappers (network/pwn, mobile, CTF misc)
+# =============================================================================
+
+FLAG_REGEX_DEFAULT = os.getenv(
+    "REYNARD_FLAG_REGEX", r"(?:flag|ctf|key|htb|pico|thm)\{[^}]{1,120}\}"
+)
+_DANGEROUS_C_CALLS = (
+    "system", "exec", "execve", "popen", "gets", "strcpy", "strcat",
+    "sprintf", "vsprintf", "scanf", "memcpy", "read", "fscanf",
+)
+
+
+def _records_skeleton(source: str) -> dict:
+    """Return the ParsedRecords-shaped dict used by parsers.ingest_into_memory."""
+    return {
+        "source": source,
+        "endpoints": [],
+        "parameters": [],
+        "services": [],
+        "findings": [],
+        "summary": "",
+    }
+
+
+def _find_flags(text: str, pattern: str = FLAG_REGEX_DEFAULT) -> list[str]:
+    try:
+        rx = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        rx = re.compile(re.escape(pattern))
+    seen: list[str] = []
+    for match in rx.findall(text or ""):
+        value = match if isinstance(match, str) else match[0]
+        if value and value not in seen:
+            seen.append(value)
+    return seen[:50]
+
+
+def metasploit_run(module: str = "", options: dict | None = None,
+                   payload: str = "", action: str = "run",
+                   resource_script: str = "", timeout: int = 300) -> str:
+    """Run a Metasploit resource script (built from module/options or raw)."""
+    avail = _docker_exec("command -v msfconsole", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "msfconsole not installed in container"})
+    options = options or {}
+    if resource_script:
+        rc_lines = resource_script.splitlines()
+    elif module:
+        rc_lines = [f"use {module}"]
+        for key, value in options.items():
+            rc_lines.append(f"set {key} {value}")
+        if payload:
+            rc_lines.append(f"set PAYLOAD {payload}")
+        rc_lines.append(action if action in {"run", "check", "exploit"} else "run")
+    else:
+        return json.dumps({"error": "provide either 'module' or 'resource_script'"})
+    if not rc_lines or rc_lines[-1].strip() != "exit":
+        rc_lines.append("exit")
+    rc_content = "\n".join(rc_lines) + "\n"
+    rc_path = "/tmp/reynard_msf.rc"
+    cmd = (
+        f"printf %s {shlex.quote(rc_content)} > {rc_path} && "
+        f"msfconsole -q -n -r {rc_path} 2>&1"
+    )
+    result = _docker_exec(cmd, timeout=timeout)
+    stdout = result.get("stdout", "")
+    records = _records_skeleton("metasploit")
+    rhost = str(options.get("RHOSTS") or options.get("RHOST") or "").strip()
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("[+]", "[*] Command shell session",
+                                "[*] Meterpreter session")) and stripped:
+            records["findings"].append({
+                "type": "metasploit",
+                "severity": "high" if "session" in stripped.lower() else "info",
+                "name": stripped[:120],
+                "matched_at": rhost,
+                "detail": stripped[:400],
+            })
+    session_opened = any("session" in f["name"].lower() for f in records["findings"])
+    records["summary"] = (
+        f"metasploit: {'session/success' if session_opened else 'no session'} "
+        f"({len(records['findings'])} signal(s))"
+    )
+    return json.dumps({
+        "resource_script": rc_content,
+        "summary": records["summary"],
+        "kg_records": records,
+        "stdout": stdout,
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def msfvenom_generate(payload: str, lhost: str = "", lport: int = 4444,
+                      format: str = "elf", out_file: str = "",
+                      extra_args: str = "", timeout: int = 120) -> str:
+    """Generate a payload file with msfvenom."""
+    avail = _docker_exec("command -v msfvenom", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "msfvenom not installed in container"})
+    out_path = out_file or "/data/loot/payload.bin"
+    parts = ["msfvenom", "-p", shlex.quote(payload)]
+    if lhost:
+        parts.append(f"LHOST={shlex.quote(lhost)}")
+    if lport:
+        parts.append(f"LPORT={int(lport)}")
+    parts += ["-f", shlex.quote(format), "-o", shlex.quote(out_path)]
+    cmd = " ".join(parts) + (f" {extra_args}" if extra_args else "") + " 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    size = _docker_exec(f"stat -c %s {shlex.quote(out_path)} 2>/dev/null", timeout=10)
+    return json.dumps({
+        "out_file": out_path,
+        "bytes": (size.get("stdout", "") or "").strip(),
+        "stdout": result.get("stdout", ""),
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def radare2_analyze(binary_path: str, commands: str = "",
+                    timeout: int = 120) -> str:
+    """Run radare2 analysis and return structured functions/strings/findings."""
+    avail = _docker_exec("command -v r2", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "radare2 (r2) not installed in container"})
+    cmds = commands or "aaa; iI; afl; izq"
+    cmd = (
+        f"r2 -q -e scr.color=0 -e bin.cache=true "
+        f"-c {shlex.quote(cmds)} {shlex.quote(binary_path)} 2>&1"
+    )
+    result = _docker_exec(cmd, timeout=timeout)
+    stdout = result.get("stdout", "")
+    records = _records_skeleton("radare2")
+    func_count = len(re.findall(r"^0x[0-9a-fA-F]+\s+\d+", stdout, re.MULTILINE))
+    lower = stdout.lower()
+    found_calls = sorted({c for c in _DANGEROUS_C_CALLS if re.search(rf"\b{re.escape(c)}\b", lower)})
+    for call in found_calls:
+        records["findings"].append({
+            "type": "dangerous_call",
+            "severity": "medium",
+            "name": f"uses {call}()",
+            "matched_at": binary_path,
+            "detail": f"radare2 saw a reference to {call}",
+        })
+    for flag in _find_flags(stdout):
+        records["findings"].append({
+            "type": "flag_candidate",
+            "severity": "info",
+            "name": flag,
+            "matched_at": binary_path,
+            "detail": "string matched flag pattern",
+        })
+    records["summary"] = (
+        f"radare2: {func_count} function(s); "
+        f"dangerous calls: {', '.join(found_calls) or 'none'}"
+    )
+    return json.dumps({
+        "summary": records["summary"],
+        "kg_records": records,
+        "stdout": stdout,
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def gdb_debug(binary_path: str, commands: str, args: str = "",
+              timeout: int = 120) -> str:
+    """Run gdb in batch mode with a set of commands against a binary."""
+    avail = _docker_exec("command -v gdb", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "gdb not installed in container"})
+    raw_cmds = re.split(r"[\n;]", commands or "")
+    ex_flags = " ".join(
+        f"-ex {shlex.quote(c.strip())}" for c in raw_cmds if c.strip()
+    )
+    tail = f" --args {shlex.quote(binary_path)} {args}" if args else f" {shlex.quote(binary_path)}"
+    cmd = f"gdb --batch -nx {ex_flags}{tail} 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    return json.dumps({
+        "commands": [c.strip() for c in raw_cmds if c.strip()],
+        "stdout": result.get("stdout", ""),
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def _pwn_skeleton(binary_path: str, remote_host: str, remote_port: int) -> str:
+    if remote_host and remote_port:
+        conn = (
+            "    if args.REMOTE:\n"
+            f"        return remote({remote_host!r}, {int(remote_port)})\n"
+            "    return process(BIN)"
+        )
+    else:
+        conn = "    return process(BIN)"
+    return (
+        "#!/usr/bin/env python3\n"
+        "from pwn import *\n\n"
+        f"BIN = {binary_path!r}\n"
+        "context.binary = elf = ELF(BIN)\n"
+        "context.log_level = 'info'\n\n"
+        "def start():\n"
+        f"{conn}\n\n"
+        "io = start()\n"
+        "# offset = cyclic_find(0x6161616161616161)  # find with a cyclic pattern\n"
+        "# payload = flat({offset: elf.symbols.get('win', 0)})\n"
+        "# io.sendline(payload)\n"
+        "io.interactive()\n"
+    )
+
+
+def pwn_template(binary_path: str, remote_host: str = "",
+                 remote_port: int = 0, timeout: int = 60) -> str:
+    """Run checksec and emit a pwntools exploit skeleton to /data/scripts."""
+    checksec = _docker_exec(
+        f"(pwn checksec {shlex.quote(binary_path)} 2>&1) || "
+        f"rabin2 -I {shlex.quote(binary_path)} 2>&1",
+        timeout=timeout,
+    )
+    base = binary_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or "target"
+    script_path = f"/data/scripts/exploit_{re.sub(r'[^A-Za-z0-9_.-]', '_', base)}.py"
+    skeleton = _pwn_skeleton(binary_path, remote_host, remote_port)
+    _docker_exec("mkdir -p /data/scripts", timeout=10)
+    write = _docker_exec(
+        f"printf %s {shlex.quote(skeleton)} > {shlex.quote(script_path)}",
+        timeout=15,
+    )
+    return json.dumps({
+        "protections": checksec.get("stdout", "") or checksec.get("stderr", ""),
+        "template_path": script_path,
+        "template": skeleton,
+        "remote": bool(remote_host and remote_port),
+        "written": write.get("exit_code") == 0,
+    }, indent=2, default=str)
+
+
+def apk_decompile(apk_path: str, engine: str = "both", out_dir: str = "",
+                  timeout: int = 300) -> str:
+    """Decompile an APK with apktool and/or jadx."""
+    base = apk_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] or "app"
+    out_base = out_dir or f"/data/loot/{re.sub(r'[^A-Za-z0-9_.-]', '_', base)}"
+    outputs: dict[str, Any] = {}
+    _docker_exec(f"mkdir -p {shlex.quote(out_base)}", timeout=10)
+    if engine in ("apktool", "both"):
+        apktool_out = f"{out_base}/apktool"
+        res = _docker_exec(
+            f"apktool d -f {shlex.quote(apk_path)} -o {shlex.quote(apktool_out)} 2>&1",
+            timeout=timeout,
+        )
+        outputs["apktool"] = {"dir": apktool_out, "exit_code": res.get("exit_code"),
+                              "tail": (res.get("stdout", "") or "")[-800:]}
+    if engine in ("jadx", "both"):
+        jadx_out = f"{out_base}/jadx"
+        res = _docker_exec(
+            f"jadx -d {shlex.quote(jadx_out)} {shlex.quote(apk_path)} 2>&1",
+            timeout=timeout,
+        )
+        outputs["jadx"] = {"dir": jadx_out, "exit_code": res.get("exit_code"),
+                           "tail": (res.get("stdout", "") or "")[-800:]}
+    listing = _docker_exec(f"ls -la {shlex.quote(out_base)} 2>&1", timeout=15)
+    return json.dumps({
+        "out_dir": out_base,
+        "engines": outputs,
+        "listing": listing.get("stdout", ""),
+    }, indent=2, default=str)
+
+
+def apk_analyze(source_dir: str, timeout: int = 120) -> str:
+    """Parse the manifest and grep for dangerous sinks/secrets in a decompiled APK."""
+    records = _records_skeleton("apk_analyze")
+    manifest = _docker_exec(
+        f"find {shlex.quote(source_dir)} -name AndroidManifest.xml "
+        f"-maxdepth 4 2>/dev/null | head -n1", timeout=20,
+    )
+    manifest_path = (manifest.get("stdout", "") or "").strip().splitlines()
+    manifest_text = ""
+    if manifest_path:
+        cat = _docker_exec(f"cat {shlex.quote(manifest_path[0])} 2>/dev/null", timeout=20)
+        manifest_text = cat.get("stdout", "")
+    package = ""
+    pkg_match = re.search(r'package="([^"]+)"', manifest_text)
+    if pkg_match:
+        package = pkg_match.group(1)
+    permissions = re.findall(r'uses-permission[^>]*android:name="([^"]+)"', manifest_text)
+    exported = re.findall(r'<(activity|service|receiver|provider)[^>]*android:exported="true"', manifest_text)
+    sink_patterns = (
+        r"addJavascriptInterface", r"setJavaScriptEnabled\(true", r"loadUrl\(",
+        r"Runtime\.getRuntime\(\)\.exec", r"openFileOutput", r"MODE_WORLD_READABLE",
+        r"getExternalStorage", r"SharedPreferences", r"Cipher\.getInstance",
+        r"https?://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]{6,}",
+        r"(?i)(api[_-]?key|secret|password|token)\s*[:=]",
+    )
+    grep_expr = "|".join(sink_patterns)
+    grep = _docker_exec(
+        f"grep -rInE {shlex.quote(grep_expr)} {shlex.quote(source_dir)} "
+        f"2>/dev/null | head -n 200", timeout=timeout,
+    )
+    sink_hits = [ln for ln in (grep.get("stdout", "") or "").splitlines() if ln.strip()]
+    for perm in permissions[:40]:
+        records["findings"].append({
+            "type": "android_permission", "severity": "info",
+            "name": perm, "matched_at": package, "detail": "declared permission",
+        })
+    for hit in sink_hits[:80]:
+        records["findings"].append({
+            "type": "android_sink", "severity": "medium",
+            "name": hit.split(":", 3)[-1].strip()[:120],
+            "matched_at": hit.split(":", 1)[0], "detail": hit[:400],
+        })
+    records["summary"] = (
+        f"apk_analyze: package={package or 'unknown'}, "
+        f"perms={len(permissions)}, exported={len(exported)}, sinks={len(sink_hits)}"
+    )
+    return json.dumps({
+        "package": package,
+        "permissions": permissions,
+        "exported_components": len(exported),
+        "summary": records["summary"],
+        "kg_records": records,
+    }, indent=2, default=str)
+
+
+def frida_hook(target: str, script: str, spawn: bool = True,
+               device: str = "usb", duration: int = 15,
+               timeout: int = 60) -> str:
+    """Run a Frida script against a target app for a bounded duration."""
+    avail = _docker_exec("command -v frida", timeout=5)
+    if avail.get("exit_code", -1) != 0:
+        return json.dumps({"error": "frida not installed in container"})
+    if "\n" in script or "{" in script or not script.startswith("/"):
+        script_path = "/data/scripts/reynard_frida_hook.js"
+        _docker_exec("mkdir -p /data/scripts", timeout=10)
+        _docker_exec(
+            f"printf %s {shlex.quote(script)} > {shlex.quote(script_path)}",
+            timeout=15,
+        )
+    else:
+        script_path = script
+    dev_flag = {"usb": "-U", "local": "", "remote": "-H 127.0.0.1"}.get(device, "-U")
+    mode_flag = f"-f {shlex.quote(target)}" if spawn else f"-n {shlex.quote(target)}"
+    cmd = (
+        f"timeout {int(duration)} frida {dev_flag} {mode_flag} "
+        f"-l {shlex.quote(script_path)} --runtime=v8 -q 2>&1 || true"
+    )
+    result = _docker_exec(cmd, timeout=max(timeout, duration + 10))
+    return json.dumps({
+        "target": target,
+        "script_path": script_path,
+        "output": result.get("stdout", ""),
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def stego_extract(file_path: str, tool: str = "auto", passphrase: str = "",
+                  timeout: int = 120) -> str:
+    """Extract hidden data from a carrier file with common stego tools."""
+    q = shlex.quote(file_path)
+    steps: dict[str, str] = {}
+    if tool in ("auto", "exiftool"):
+        steps["exiftool"] = f"(exiftool {q} 2>/dev/null || echo 'exiftool unavailable')"
+    if tool in ("auto", "strings"):
+        steps["strings"] = f"strings -n 6 {q} 2>/dev/null | head -n 200"
+    if tool in ("auto", "binwalk"):
+        steps["binwalk"] = f"binwalk {q} 2>&1 | head -n 60"
+    if tool in ("steghide",) or tool == "auto":
+        out = "/tmp/reynard_steghide.out"
+        pw = shlex.quote(passphrase)
+        steps["steghide"] = (
+            f"steghide extract -sf {q} -p {pw} -xf {out} -f 2>&1; "
+            f"echo '--- extracted ---'; cat {out} 2>/dev/null | head -c 4000"
+        )
+    if tool in ("zsteg",):
+        steps["zsteg"] = f"(zsteg -a {q} 2>&1 || echo 'zsteg unavailable') | head -n 120"
+    if tool in ("foremost",):
+        steps["foremost"] = f"foremost -i {q} -o /tmp/reynard_foremost 2>&1 | tail -n 20"
+    outputs: dict[str, Any] = {}
+    combined = ""
+    for name, sub in steps.items():
+        res = _docker_exec(sub, timeout=timeout)
+        text = res.get("stdout", "") or res.get("stderr", "")
+        outputs[name] = text[:4000]
+        combined += "\n" + text
+    return json.dumps({
+        "file": file_path,
+        "tool": tool,
+        "outputs": outputs,
+        "flags": _find_flags(combined),
+    }, indent=2, default=str)
+
+
+def hash_crack(hash_value: str = "", hash_file: str = "", hash_type: str = "",
+               wordlist: str = "", tool: str = "john", timeout: int = 300) -> str:
+    """Crack a hash/password file with john or hashcat."""
+    wl = wordlist or "/usr/share/wordlists/rockyou.txt"
+    target_file = hash_file
+    if not target_file:
+        if not hash_value:
+            return json.dumps({"error": "provide hash_value or hash_file"})
+        target_file = "/tmp/reynard_hash.txt"
+        _docker_exec(f"printf %s {shlex.quote(hash_value)} > {target_file}", timeout=10)
+    if tool == "hashcat":
+        avail = _docker_exec("command -v hashcat", timeout=5)
+        if avail.get("exit_code", -1) != 0:
+            return json.dumps({"error": "hashcat not installed in container"})
+        mode = f"-m {shlex.quote(hash_type)} " if hash_type else ""
+        cmd = (
+            f"hashcat {mode}-a 0 {shlex.quote(target_file)} {shlex.quote(wl)} "
+            f"--potfile-disable --quiet 2>&1; "
+            f"hashcat {mode}-a 0 {shlex.quote(target_file)} {shlex.quote(wl)} --show 2>/dev/null"
+        )
+    else:
+        avail = _docker_exec("command -v john", timeout=5)
+        if avail.get("exit_code", -1) != 0:
+            return json.dumps({"error": "john not installed in container"})
+        fmt = f"--format={shlex.quote(hash_type)} " if hash_type else ""
+        cmd = (
+            f"john {fmt}--wordlist={shlex.quote(wl)} {shlex.quote(target_file)} 2>&1; "
+            f"echo '--- cracked ---'; john --show {fmt}{shlex.quote(target_file)} 2>/dev/null"
+        )
+    result = _docker_exec(cmd, timeout=timeout)
+    stdout = result.get("stdout", "")
+    return json.dumps({
+        "tool": tool,
+        "wordlist": wl,
+        "output": stdout,
+        "flags": _find_flags(stdout),
+        "exit_code": result.get("exit_code"),
+    }, indent=2, default=str)
+
+
+def crypto_helper(operation: str, data: str, key: str = "") -> str:
+    """Pure-Python crypto/encoding transforms for CTF inputs."""
+    import base64
+    import binascii
+    from urllib.parse import unquote
+
+    try:
+        if operation == "b64decode":
+            result = base64.b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", "replace")
+        elif operation == "b64encode":
+            result = base64.b64encode(data.encode()).decode()
+        elif operation == "hexdecode":
+            result = bytes.fromhex(re.sub(r"\s+", "", data)).decode("utf-8", "replace")
+        elif operation == "hexencode":
+            result = data.encode().hex()
+        elif operation == "rot13":
+            import codecs
+            result = codecs.encode(data, "rot_13")
+        elif operation == "rot":
+            shift = int(key or 13)
+            result = "".join(
+                chr((ord(c) - base + shift) % 26 + base)
+                if c.isalpha() else c
+                for c in data
+                for base in [ord("A") if c.isupper() else ord("a")]
+            )
+        elif operation == "xor":
+            if all(ch in "0123456789abcdefABCDEF" for ch in key) and key and len(key) % 2 == 0:
+                key_bytes = bytes.fromhex(key)
+            else:
+                key_bytes = (key or "\x00").encode()
+            raw = data.encode("latin-1", "ignore")
+            result = bytes(
+                b ^ key_bytes[i % len(key_bytes)] for i, b in enumerate(raw)
+            ).decode("utf-8", "replace")
+        elif operation == "from_binary":
+            bits = re.sub(r"\s+", "", data)
+            result = "".join(
+                chr(int(bits[i:i + 8], 2)) for i in range(0, len(bits) - 7, 8)
+            )
+        elif operation == "to_binary":
+            result = " ".join(format(ord(c), "08b") for c in data)
+        elif operation == "url_decode":
+            result = unquote(data)
+        elif operation == "hash_identify":
+            stripped = data.strip()
+            length_map = {32: "MD5/NTLM", 40: "SHA1", 56: "SHA224",
+                          64: "SHA256", 96: "SHA384", 128: "SHA512"}
+            hexish = bool(re.fullmatch(r"[0-9a-fA-F]+", stripped))
+            guess = length_map.get(len(stripped), "unknown") if hexish else "non-hex (bcrypt/argon/other)"
+            if stripped.startswith("$2"):
+                guess = "bcrypt"
+            elif stripped.startswith("$argon2"):
+                guess = "argon2"
+            result = f"length={len(stripped)} guess={guess}"
+        else:
+            return json.dumps({"error": f"unknown operation: {operation}"})
+    except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
+        return json.dumps({"error": f"{operation} failed: {exc}"})
+    return json.dumps({
+        "operation": operation,
+        "result": result,
+        "flags": _find_flags(result if isinstance(result, str) else ""),
+    }, indent=2, default=str)
+
+
+def forensics_triage(file_path: str, action: str = "auto",
+                     timeout: int = 180) -> str:
+    """Triage a forensic artifact (pcap/disk/memory/file)."""
+    q = shlex.quote(file_path)
+    ftype = _docker_exec(f"file -b {q} 2>/dev/null", timeout=15).get("stdout", "").strip()
+    resolved = action
+    if action == "auto":
+        low = f"{ftype.lower()} {file_path.lower()}"
+        if "pcap" in low or "capture file" in low:
+            resolved = "pcap"
+        elif file_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".zip", ".gz")):
+            resolved = "carve"
+        else:
+            resolved = "strings"
+    steps: dict[str, str] = {}
+    if resolved == "pcap":
+        steps["capinfos"] = f"(capinfos {q} 2>/dev/null || echo 'capinfos unavailable')"
+        steps["protocols"] = f"(tshark -r {q} -q -z io,phs 2>/dev/null || echo 'tshark unavailable') | head -n 60"
+        steps["http_objects"] = (
+            f"(tshark -r {q} -Y http -T fields -e http.request.full_uri "
+            f"-e http.file_data 2>/dev/null || true) | head -n 80"
+        )
+    elif resolved == "carve":
+        steps["binwalk"] = f"binwalk -e {q} 2>&1 | head -n 60"
+        steps["foremost"] = f"foremost -i {q} -o /tmp/reynard_forensics 2>&1 | tail -n 20"
+        steps["exiftool"] = f"(exiftool {q} 2>/dev/null || true)"
+    elif resolved == "metadata":
+        steps["exiftool"] = f"(exiftool {q} 2>/dev/null || echo 'exiftool unavailable')"
+        steps["file"] = f"file {q} 2>/dev/null"
+    else:
+        steps["strings"] = f"strings -n 6 {q} 2>/dev/null | head -n 300"
+    outputs: dict[str, Any] = {}
+    combined = ""
+    for name, sub in steps.items():
+        res = _docker_exec(sub, timeout=timeout)
+        text = res.get("stdout", "") or res.get("stderr", "")
+        outputs[name] = text[:5000]
+        combined += "\n" + text
+    return json.dumps({
+        "file": file_path,
+        "file_type": ftype,
+        "action": resolved,
+        "outputs": outputs,
+        "flags": _find_flags(combined),
+    }, indent=2, default=str)
+
+
+def flag_hunter(text: str = "", file_path: str = "",
+                pattern: str = "", timeout: int = 60) -> str:
+    """Scan text and/or container files for flag patterns."""
+    rx = pattern or FLAG_REGEX_DEFAULT
+    found: list[str] = []
+    if text:
+        found.extend(_find_flags(text, rx))
+    file_matches: list[str] = []
+    if file_path:
+        grep = _docker_exec(
+            f"grep -rIEoa {shlex.quote(rx)} {shlex.quote(file_path)} 2>/dev/null | head -n 100",
+            timeout=timeout,
+        )
+        for line in (grep.get("stdout", "") or "").splitlines():
+            value = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+            if value and value not in file_matches:
+                file_matches.append(value)
+    for value in file_matches:
+        if value not in found:
+            found.append(value)
+    return json.dumps({
+        "pattern": rx,
+        "flags": found[:100],
+        "count": len(found),
+    }, indent=2, default=str)
+
+
+# =============================================================================
 # Tool Dispatcher
 # =============================================================================
 
@@ -2167,6 +3480,141 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         https=args.get("https", True),
         tab_name=args.get("tab_name"),
     ), indent=2),
+    "burp_get_proxy_history": lambda args: json.dumps(burp_mod.get_client().get_proxy_history(
+        count=args.get("count", 50),
+        offset=args.get("offset", 0),
+    ), indent=2),
+    "burp_get_proxy_history_regex": lambda args: json.dumps(burp_mod.get_client().get_proxy_history_regex(
+        regex=args["regex"],
+        count=args.get("count", 50),
+        offset=args.get("offset", 0),
+    ), indent=2),
+    "burp_set_intercept": lambda args: json.dumps(burp_mod.get_client().set_intercept(
+        enabled=args["enabled"],
+    ), indent=2),
+    # ---- Automatic tool selection ----
+    "recommend_tools": lambda args: recommend_tools(
+        vuln_class=args.get("vuln_class", ""),
+        phase=args.get("phase", ""),
+        tech=args.get("tech", ""),
+    ),
+    # ---- Structured scanner wrappers ----
+    "ffuf_fuzz": lambda args: ffuf_fuzz(
+        url=args["url"],
+        wordlist=args.get("wordlist", ""),
+        match_codes=args.get("match_codes", ""),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 300),
+    ),
+    "sqlmap_run": lambda args: sqlmap_run(
+        url=args["url"],
+        data=args.get("data", ""),
+        extra_args=args.get("extra_args", ""),
+        level=args.get("level", 2),
+        risk=args.get("risk", 1),
+        timeout=args.get("timeout", 600),
+    ),
+    "nmap_scan": lambda args: nmap_scan(
+        target=args["target"],
+        ports=args.get("ports", ""),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 600),
+    ),
+    # ---- Session registration ----
+    "register_session": lambda args: register_session(
+        name=args["name"],
+        role_hint=args.get("role_hint", "unknown"),
+        cookies=args.get("cookies"),
+        cookie_domain=args.get("cookie_domain", ""),
+        cookie_header=args.get("cookie_header", ""),
+        static_headers=args.get("static_headers"),
+        set_active=args.get("set_active", False),
+    ),
+    # ---- Cross-domain: network / pwn / reversing ----
+    "metasploit_run": lambda args: metasploit_run(
+        module=args.get("module", ""),
+        options=args.get("options"),
+        payload=args.get("payload", ""),
+        action=args.get("action", "run"),
+        resource_script=args.get("resource_script", ""),
+        timeout=args.get("timeout", 300),
+    ),
+    "msfvenom_generate": lambda args: msfvenom_generate(
+        payload=args["payload"],
+        lhost=args.get("lhost", ""),
+        lport=args.get("lport", 4444),
+        format=args.get("format", "elf"),
+        out_file=args.get("out_file", ""),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "radare2_analyze": lambda args: radare2_analyze(
+        binary_path=args["binary_path"],
+        commands=args.get("commands", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "gdb_debug": lambda args: gdb_debug(
+        binary_path=args["binary_path"],
+        commands=args["commands"],
+        args=args.get("args", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "pwn_template": lambda args: pwn_template(
+        binary_path=args["binary_path"],
+        remote_host=args.get("remote_host", ""),
+        remote_port=args.get("remote_port", 0),
+        timeout=args.get("timeout", 60),
+    ),
+    # ---- Cross-domain: mobile (Android) ----
+    "apk_decompile": lambda args: apk_decompile(
+        apk_path=args["apk_path"],
+        engine=args.get("engine", "both"),
+        out_dir=args.get("out_dir", ""),
+        timeout=args.get("timeout", 300),
+    ),
+    "apk_analyze": lambda args: apk_analyze(
+        source_dir=args["source_dir"],
+        timeout=args.get("timeout", 120),
+    ),
+    "frida_hook": lambda args: frida_hook(
+        target=args["target"],
+        script=args["script"],
+        spawn=args.get("spawn", True),
+        device=args.get("device", "usb"),
+        duration=args.get("duration", 15),
+        timeout=args.get("timeout", 60),
+    ),
+    # ---- Cross-domain: CTF misc (crypto / stego / forensics / flags) ----
+    "stego_extract": lambda args: stego_extract(
+        file_path=args["file_path"],
+        tool=args.get("tool", "auto"),
+        passphrase=args.get("passphrase", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "hash_crack": lambda args: hash_crack(
+        hash_value=args.get("hash_value", ""),
+        hash_file=args.get("hash_file", ""),
+        hash_type=args.get("hash_type", ""),
+        wordlist=args.get("wordlist", ""),
+        tool=args.get("tool", "john"),
+        timeout=args.get("timeout", 300),
+    ),
+    "crypto_helper": lambda args: crypto_helper(
+        operation=args["operation"],
+        data=args["data"],
+        key=args.get("key", ""),
+    ),
+    "forensics_triage": lambda args: forensics_triage(
+        file_path=args["file_path"],
+        action=args.get("action", "auto"),
+        timeout=args.get("timeout", 180),
+    ),
+    "flag_hunter": lambda args: flag_hunter(
+        text=args.get("text", ""),
+        file_path=args.get("file_path", ""),
+        pattern=args.get("pattern", ""),
+        timeout=args.get("timeout", 60),
+    ),
 }
 
 

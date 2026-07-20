@@ -16,6 +16,7 @@ question — agents cannot bypass it by self-declaring success.
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 from hacking_agent.core.schemas import PoC
 
@@ -74,6 +75,78 @@ class EvidenceStore:
     def all_pocs(self) -> list[PoC]:
         with self._lock:
             return list(self._pocs)
+
+    # =====================================================================
+    # Durable persistence (SQLite, cross-run) — additive, opt-in-safe
+    # =====================================================================
+
+    def persist(self, store: Any, target: str, lab_class: str) -> bool:
+        """Persist the PoC ledger to a DurableStore. No-op if store is None;
+        never raises (durable memory is best-effort)."""
+        if store is None:
+            return False
+        try:
+            with self._lock:
+                rows = [
+                    {"id": p.id, "vuln_id": p.vuln_id, "payload": p.payload,
+                     "request_summary": p.request_summary,
+                     "response_excerpt": p.response_excerpt,
+                     "verdict": p.verdict, "agent_name": p.agent_name,
+                     "timestamp": p.timestamp}
+                    for p in self._pocs
+                ]
+            store.save_pocs(target, lab_class, rows)
+            return True
+        except Exception:
+            return False
+
+    def rehydrate(self, store: Any, target: str, lab_class: str) -> int:
+        """Rehydrate prior PoCs for the same target/lab-class to prime the run
+        with previously verified findings. Returns the count restored."""
+        if store is None:
+            return 0
+        count = 0
+        try:
+            for r in store.load_pocs(target, lab_class):
+                request = r.get("request_summary") or ""
+                if not request.startswith("REHYDRATED:"):
+                    request = f"REHYDRATED: {request}".strip()
+                try:
+                    poc = PoC(
+                        id=r.get("id", ""),
+                        vuln_id=r.get("vuln_id", ""),
+                        payload=r.get("payload", ""),
+                        request_summary=request,
+                        response_excerpt=r.get("response_excerpt", ""),
+                        verdict=r.get("verdict", "success"),
+                        agent_name=r.get("agent_name", "validator"),
+                        timestamp=r.get("timestamp") or "",
+                    )
+                except Exception:
+                    continue
+                with self._lock:
+                    if not poc.id:
+                        poc = poc.model_copy(update={"id": self.next_poc_id()})
+                    self._pocs.append(poc)
+                    self._bump_seq(poc.id)
+                count += 1
+        except Exception:
+            return count
+        return count
+
+    def load_from_db(self, store: Any, target: str, lab_class: str) -> int:
+        """Alias for rehydrate()."""
+        return self.rehydrate(store, target, lab_class)
+
+    def _bump_seq(self, poc_id: str) -> None:
+        """Keep the id sequence ahead of any rehydrated ids to avoid clashes."""
+        if poc_id and poc_id.startswith("poc:"):
+            try:
+                n = int(poc_id.split(":", 1)[1])
+                if n > self._poc_seq:
+                    self._poc_seq = n
+            except (ValueError, IndexError):
+                pass
 
     def summarize(self) -> str:
         """Human-readable summary for prompt injection."""

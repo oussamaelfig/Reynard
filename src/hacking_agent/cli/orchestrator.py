@@ -39,6 +39,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -55,19 +56,29 @@ from hacking_agent.agents import (
     ReporterAgent,
     ValidatorAgent,
 )
+from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
 from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.memory import AgentMemory
+from hacking_agent.core.metering import get_token_meter
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.preflight import has_fatal_failure, run_preflight
 from hacking_agent.core.providers import ProviderRegistry
-from hacking_agent.core.schemas import AgentName, AgentResult, AgentTask, CoordinatorDecision, ToolDecision
+from hacking_agent.core.schemas import (
+    AgentName, AgentResult, AgentTask, CoordinatorDecision, Hypothesis,
+    PivotDecision, ToolDecision,
+)
 from hacking_agent.core.scope import ScopeGuard
+from hacking_agent.core.strategy import (
+    HypothesisAgenda, PHASE_SEQUENCE, PHASE_TO_AGENT, StrategyEngine, next_phase,
+)
 from hacking_agent.core.subagents import BoundedSubagentScheduler, SubagentPolicy, SubagentSpec
 from hacking_agent.core import sessions as session_mod
+from hacking_agent.core import lab_intel as lab_intel_mod
+from hacking_agent.core.tool_selector import render_recommendations
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.integrations import caido_local as caido_local_mod
@@ -75,6 +86,36 @@ from hacking_agent.core.state_machine import Event, State, StateMachine, StateMa
 from hacking_agent.ui.live import start_dashboard
 
 console = Console()
+
+PIVOT_SYSTEM = """You are the PIVOT strategist for an autonomous pentest run that is STUCK.
+You are invoked only after repeated failures. Think hard and diagnose the
+root cause, then propose the single most promising CONCRETE next vector that
+has NOT already been tried and failed.
+
+You will be shown: the target, the hypothesis agenda (with per-vector status,
+heat, and fail counts), the current evidence, and the recent failed attempts.
+
+Rules:
+- Do NOT repeat a demoted/failed vector verbatim — change the primitive,
+  parameter, endpoint, encoding, session, or detection channel (in-band ->
+  OOB -> differential).
+- Prefer a specific, testable vector over generic advice.
+- Set give_up=true ONLY when every plausible vector is genuinely exhausted.
+
+Output a SINGLE PivotDecision JSON object.
+"""
+
+SELF_CRITIQUE_SYSTEM = """You are the SELF-CRITIQUE reviewer. The run is about to be
+concluded as a FAILURE (no verified finding). Before it stops, review the full
+evidence and the failed-attempt log and decide whether ONE more concrete,
+previously-untried vector is worth trying.
+
+Be honest: if the surface is genuinely exhausted, set give_up=true and do not
+invent noise. Otherwise propose exactly one concrete, actionable vector with a
+specific parameter/endpoint/technique.
+
+Output a SINGLE PivotDecision JSON object.
+"""
 
 AUTH_HEAVY_PLAYBOOKS = {
     "authentication",
@@ -119,84 +160,124 @@ class SessionLogger:
 # Methodology loader
 # =============================================================================
 
-def load_methodology(vuln_type: str | None) -> str:
-    """Load a relevant methodology file based on vulnerability type.
+# Corrected keyword -> methodology file map. Used only as a FALLBACK when the
+# RAG retriever returns nothing (empty corpus / cold cache). The previous
+# version mis-routed authentication/api -> idor_authz, host header ->
+# cache_poisoning, and xxe/command injection -> blind; those are fixed here and
+# the newly authored class files are wired in.
+_METHODOLOGY_FALLBACK: list[tuple[str, str]] = [
+    ("cross-site scripting",          "xss_advanced.md"),
+    ("xss",                           "xss_advanced.md"),
+    ("sql injection",                 "sqli.md"),
+    ("sqli",                          "sqli.md"),
+    ("nosql",                         "nosqli.md"),
+    ("mongo",                         "nosqli.md"),
+    ("ssrf",                          "ssrf.md"),
+    ("server-side request",           "ssrf.md"),
+    ("ssti",                          "ssti.md"),
+    ("template injection",            "ssti.md"),
+    ("idor",                          "idor_authz.md"),
+    ("insecure direct object",        "idor_authz.md"),
+    ("access control",                "idor_authz.md"),
+    ("authorization",                 "idor_authz.md"),
+    ("authz",                         "idor_authz.md"),
+    ("broken access",                 "idor_authz.md"),
+    ("privilege",                     "idor_authz.md"),
+    ("authentication",                "authentication.md"),
+    ("login",                         "authentication.md"),
+    ("password reset",                "authentication.md"),
+    ("mfa",                           "authentication.md"),
+    ("2fa",                           "authentication.md"),
+    ("jwt",                           "jwt.md"),
+    ("json web token",                "jwt.md"),
+    ("oauth",                         "oauth.md"),
+    ("openid",                        "oauth.md"),
+    ("oidc",                          "oauth.md"),
+    ("deserial",                      "deserialization.md"),
+    ("pickle",                        "deserialization.md"),
+    ("smuggl",                        "request_smuggling.md"),
+    ("desync",                        "request_smuggling.md"),
+    ("cache deception",               "web_cache_deception.md"),
+    ("cache poison",                  "cache_poisoning.md"),
+    ("host header",                   "host_header.md"),
+    ("x-forwarded-host",              "host_header.md"),
+    ("xxe",                           "xxe.md"),
+    ("xml external",                  "xxe.md"),
+    ("command injection",             "command_injection.md"),
+    ("os command",                    "command_injection.md"),
+    ("csrf",                          "csrf.md"),
+    ("cross-site request forgery",    "csrf.md"),
+    ("cors",                          "cors.md"),
+    ("cross-origin",                  "cors.md"),
+    ("clickjack",                     "clickjacking.md"),
+    ("path traversal",                "path_traversal.md"),
+    ("directory traversal",           "path_traversal.md"),
+    ("file upload",                   "file_upload.md"),
+    ("web shell",                     "file_upload.md"),
+    ("race condition",                "race_conditions.md"),
+    ("business logic",                "business_logic.md"),
+    ("logic flaw",                    "business_logic.md"),
+    ("information disclosure",        "information_disclosure.md"),
+    ("info disclosure",               "information_disclosure.md"),
+    ("websocket",                     "websockets.md"),
+    ("graphql",                       "graphql.md"),
+    ("prototype pollution",           "prototype_pollution.md"),
+    ("web llm",                       "web_llm.md"),
+    ("llm attack",                    "web_llm.md"),
+    ("prompt injection",              "web_llm.md"),
+    ("android",                       "android_frida_root_bypass.md"),
+    ("frida",                         "android_frida_root_bypass.md"),
+    ("rce",                           "command_injection.md"),
+    ("log4",                          "blind.md"),
+    ("jndi",                          "blind.md"),
+]
 
-    The coordinator specifies the vulnerability type in the task context,
-    and we match it against the methodology filenames to keep context
-    windows lean (only load what's needed, not all 37KB).
-    """
-    if not vuln_type:
-        return ""
+
+def _methodology_from_files(vuln_type: str) -> str:
+    """Fallback keyword-based single-file load (RAG-independent)."""
     method_dir = METHODOLOGIES_DIR
     if not method_dir.is_dir():
         return ""
-
-    # Keyword -> primary methodology file (first-match wins).
     vuln_lower = vuln_type.lower()
-    mapping: list[tuple[str, str]] = [
-        # Primary keywords (longest-prefix-ish first)
-        ("cross-site scripting", "xss_advanced.md"),
-        ("xss",                   "xss_advanced.md"),
-        ("sql injection",         "sqli.md"),
-        ("sqli",                  "sqli.md"),
-        ("sql",                   "sqli.md"),
-        ("nosql",                 "nosqli.md"),
-        ("mongo",                 "nosqli.md"),
-        ("ssrf",                  "ssrf.md"),
-        ("server-side request",   "ssrf.md"),
-        ("ssti",                  "ssti.md"),
-        ("template injection",    "ssti.md"),
-        ("api testing",           "idor_authz.md"),
-        ("api",                   "idor_authz.md"),
-        ("authentication",        "idor_authz.md"),
-        ("idor",                  "idor_authz.md"),
-        ("authz",                 "idor_authz.md"),
-        ("authorization",         "idor_authz.md"),
-        ("broken access",         "idor_authz.md"),
-        ("privilege",             "idor_authz.md"),
-        ("jwt",                   "jwt.md"),
-        ("token",                 "jwt.md"),
-        ("deserial",              "deserialization.md"),
-        ("pickle",                "deserialization.md"),
-        ("smuggl",                "request_smuggling.md"),
-        ("desync",                "request_smuggling.md"),
-        ("cache deception",       "web_cache_deception.md"),
-        ("cache poison",          "cache_poisoning.md"),
-        ("cache",                 "cache_poisoning.md"),
-        ("host header",           "cache_poisoning.md"),
-        ("xxe",                   "blind.md"),
-        ("xml external",          "blind.md"),
-        ("command injection",     "blind.md"),
-        ("rce",                   "blind.md"),
-        ("log4",                  "blind.md"),
-        ("jndi",                  "blind.md"),
-        ("android",               "android_frida_root_bypass.md"),
-        ("frida",                 "android_frida_root_bypass.md"),
-    ]
     sections: list[str] = []
     seen: set[str] = set()
-    for keyword, filename in mapping:
+    for keyword, filename in _METHODOLOGY_FALLBACK:
         if keyword in vuln_lower and filename not in seen:
             path = method_dir / filename
             if path.exists():
                 content = path.read_text(encoding="utf-8")
                 sections.append(f"\n\n# METHODOLOGY REFERENCE ({filename})\n{content}")
                 seen.add(filename)
-                # Stop at first hit — don't pile on multiple ~10KB files.
                 break
-
-    # Always append the cross-cutting blind-vuln playbook unless it was
-    # already the primary match. The blind playbook is short and generic;
-    # it tells the model how to use OOB and differential tools regardless
-    # of bug class.
     if "blind.md" not in seen:
         blind_path = method_dir / "blind.md"
         if blind_path.exists():
             content = blind_path.read_text(encoding="utf-8")
             sections.append(f"\n\n# CROSS-CUTTING (blind.md)\n{content}")
-
     return "".join(sections)
+
+
+def load_methodology(vuln_type: str | None, hypothesis: str = "",
+                     phase: str = "", k: int = 6) -> str:
+    """Retrieve relevant methodology via local RAG over methodologies/.
+
+    A query is built from the vuln class + current hypothesis + phase and the
+    top-k retrieved technique chunks (source file + heading) are injected. This
+    replaces the old keyword first-match single-file load. If the retriever
+    yields nothing (no corpus / cold cache / offline), it degrades to corrected
+    keyword-based file loading so the feature never hard-fails.
+    """
+    query = " ".join(p for p in (vuln_type, hypothesis, phase) if p).strip()
+    if not query:
+        return ""
+    try:
+        from hacking_agent.core.knowledge import retrieve_context
+        rag = retrieve_context(query, k=k)
+    except Exception:
+        rag = ""
+    if rag:
+        return rag
+    return _methodology_from_files(vuln_type or "")
 
 
 # =============================================================================
@@ -225,6 +306,11 @@ class Orchestrator:
         self.interactive = interactive
         self.subagents_enabled = subagents_enabled
         self.max_subagents = max(1, max_subagents)
+        # Cost-budget caps (0 = disabled). When exceeded mid-run, the
+        # orchestrator stops dispatching specialists and forces a final report.
+        self.max_tokens_budget = int(os.getenv("LLM_MAX_TOKENS_BUDGET", "0") or 0)
+        self.max_cost_budget = float(os.getenv("LLM_MAX_COST_BUDGET", "0") or 0)
+        self.token_meter = get_token_meter()
         self.logger = SessionLogger()
         self.scope_guard = ScopeGuard.from_target_url(
             target_url,
@@ -270,6 +356,20 @@ class Orchestrator:
             StateMachineConfig(max_iterations=max_iterations)
         )
         self.evidence = EvidenceStore()
+
+        # ---- durable cross-run memory (opt-in-safe; None => in-memory only) --
+        # Disable explicitly with REYNARD_DURABLE_MEMORY=0. Any open failure
+        # degrades silently to the current per-run behaviour.
+        self.durable = None
+        if os.getenv("REYNARD_DURABLE_MEMORY", "1").lower() not in ("0", "false", "no"):
+            self.durable = open_durable_store()
+        self.durable_target = (urlparse(target_url).netloc or target_url or "").lower()
+        self.lab_class = str(
+            self.lab_profile.get("playbook_id")
+            or self.lab_profile.get("vulnerability")
+            or "web"
+        ).lower()
+
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
             self.memory, self.sm, scope_guard=self.scope_guard
@@ -334,6 +434,50 @@ class Orchestrator:
         self.last_result: AgentResult | None = None
         self.session_start = time.time()
 
+        # ---- WS2: strategy engine + first-class hypothesis agenda ----
+        self.strategy = StrategyEngine()
+        self.agenda = HypothesisAgenda()
+        self.active_hypothesis: Hypothesis | None = None
+        self.target_category = self._detect_target_category()
+        if self.target_category:
+            self.memory.add_fact(
+                "target_category", self.target_category, source="lab_intel/category"
+            )
+        self._needs_pivot = False
+        self._pivot_used = 0
+        self._self_critique_done = False
+        self._report_gate_count = 0
+        self._max_report_gates = int(os.getenv("REYNARD_MAX_REPORT_GATES", "6") or 6)
+        self._report_gating_enabled = os.getenv(
+            "REYNARD_REPORT_GATING", "1"
+        ).lower() not in ("0", "false", "no")
+
+    # ---- category-profiler routing hook (shared with WS5 sibling) --------
+
+    def _detect_target_category(self) -> str:
+        """Best-effort category detection via lab_intel, guarded so it works
+        whether or not the concurrent WS5 sibling has landed a detector."""
+        cat = str((self.lab_profile or {}).get("category", "") or "")
+        if cat:
+            return cat
+        fn = getattr(lab_intel_mod, "detect_target_category", None)
+        if callable(fn):
+            for args in (
+                (self.target_url, self.objective, self.lab_profile),
+                (self.target_url, self.objective),
+                (self.lab_profile,),
+                (self.target_url,),
+            ):
+                try:
+                    res = fn(*args)
+                except TypeError:
+                    continue
+                except Exception:
+                    break
+                if res:
+                    return str(res)
+        return ""
+
     # ---- main loop -------------------------------------------------------
 
     def run(self) -> AgentResult | None:
@@ -364,7 +508,9 @@ class Orchestrator:
         # PLANNING → ROUTING
         self.sm.transition(Event.START, "Session initialized")
         emit("state", {"state": self.sm.state.value, "message": "Session initialized"})
+        self._rehydrate_durable()
         self._run_bootstrap_subagents()
+        self._seed_hypotheses()
 
         final_result: AgentResult | None = None
 
@@ -382,6 +528,21 @@ class Orchestrator:
                     self.sm.transition(Event.BUDGET_EXHAUSTED, "max iterations reached")
                 break
 
+            # ---- cost/token budget guard ----
+            budget_hit = self._budget_exceeded()
+            if budget_hit:
+                console.print(
+                    f"[red bold]⛔ Cost budget exceeded ({budget_hit}) — "
+                    "forcing report.[/]"
+                )
+                self.logger.log(f"Cost budget exceeded ({budget_hit}) — forcing report")
+                emit("budget_exceeded", {
+                    "reason": budget_hit,
+                    **self._token_cost_snapshot(),
+                })
+                final_result = self._dispatch_reporter()
+                break
+
             try:
                 result = self._step()
                 if result is not None:
@@ -397,12 +558,14 @@ class Orchestrator:
                 traceback.print_exc()
                 break
 
+        self._persist_durable()
         self._print_summary()
         emit("session_end", {
             "target": self.target_url,
             "success": bool(final_result and final_result.success),
             "iterations": self.sm.iteration,
             "tool_calls": sum(self.sm.tool_calls.values()),
+            **self._token_cost_snapshot(),
         })
         self.logger.log(f"Session ended. Duration: {time.time() - self.session_start:.1f}s")
         self.logger.close()
@@ -421,12 +584,17 @@ class Orchestrator:
         console.print("[bold cyan]🧠 Coordinator deciding...[/]")
         self.logger.log(f"[ROUTING] iteration={self.sm.iteration}")
 
+        # Refresh the hottest OPEN hypothesis + mirror its phase into memory so
+        # the coordinator and RAG methodology loader see the active vector/phase.
+        self._select_active_hypothesis()
+
         try:
             decision: CoordinatorDecision = self.coordinator.decide(
                 target_url=self.target_url,
                 last_result=self.last_result,
                 objective=self.objective,
                 lab_profile=self.lab_profile,
+                agenda_context=self._agenda_context(),
             )
         except Exception as e:
             console.print(f"[red]Coordinator failure: {e}[/]")
@@ -465,6 +633,11 @@ class Orchestrator:
         })
 
         # ---- REPORTING gate ----
+        # WS2/WS6: don't let the coordinator report prematurely. If the
+        # hypothesis agenda still has untried actionable vectors (and no
+        # verified evidence yet), force progress; and run one self-critique
+        # pass proposing a fresh vector before we ever conclude failure.
+        decision = self._intercept_done(decision)
         if decision.done:
             console.print("[bold green]✅ Coordinator says: DONE → reporting[/]")
             self.sm.transition(Event.REPORT_REQUESTED, "coordinator done=True")
@@ -476,52 +649,10 @@ class Orchestrator:
         agent_name: AgentName = decision.next_agent  # type: ignore[assignment]
         task: AgentTask = decision.task  # type: ignore[assignment]
 
-        # Inject normalized target/objective/lab profile into every specialist task.
-        context = {**task.context, "target_url": self.target_url}
-        if self.objective:
-            context["objective"] = self.objective
-        if self.lab_profile:
-            context["lab_profile"] = self.lab_profile
-        if self.playbook_context:
-            context["expert_playbook"] = self.playbook_context
-        task = task.model_copy(update={"context": context})
-
-        # Inject methodology for exploitation tasks
-        if agent_name == "exploitation":
-            vuln_type = ""
-            # Try 1: Get vuln_type from the explicit target vulnerability entity
-            if task.target_vulnerability_id:
-                vuln_entity = self.memory.get_entity(task.target_vulnerability_id)
-                if vuln_entity:
-                    vuln_type = vuln_entity.attrs.get("vuln_type", "")
-            # Try 2: Infer vuln_type from any theoretical vulnerability in the KG
-            if not vuln_type:
-                all_vulns = self.memory.ranked_query(
-                    "Vulnerability", min_pheromone=0.0, status="theoretical"
-                )
-                if all_vulns:
-                    vuln_type = all_vulns[0].attrs.get("vuln_type", "")
-            # Try 3: Infer from the task description itself
-            if not vuln_type:
-                desc_lower = task.task_description.lower()
-                for keyword in ["sqli", "sql injection", "xss", "ssrf", "ssti",
-                                "idor", "jwt", "deserialization", "smuggling",
-                                "cache", "nosql", "command injection", "rce"]:
-                    if keyword in desc_lower:
-                        vuln_type = keyword
-                        break
-            if vuln_type:
-                methodology = load_methodology(vuln_type)
-                if methodology:
-                    task = task.model_copy(
-                        update={"context": {
-                            **task.context,
-                            "methodology": methodology,
-                        }}
-                    )
-                    self.logger.log(
-                        f"[METHODOLOGY] Injected methodology for vuln_type={vuln_type}"
-                    )
+        # Inject shared context (target/objective/lab/playbook), the active
+        # StrategyEngine phase + agenda, deterministic tool recommendations,
+        # and RAG methodology keyed on the ACTIVE hypothesis + phase.
+        task = self._inject_task_context(task, agent_name)
 
         self.sm.transition(Event.DECISION_DONE, f"dispatching {agent_name}")
         self.sm.record_dispatch(agent_name)
@@ -615,6 +746,9 @@ class Orchestrator:
         # ---- UPDATING: record outcome ----
         self.sm.record_agent_outcome(agent_name, result.success)
 
+        # ---- WS2: advance/backtrack the active hypothesis + phase ----
+        self._update_agenda_after_outcome(agent_name, result)
+
         # ---- Pheromone boosting ----
         # Boost pheromone on verified vulnerabilities so they stay hot
         # for the reporter. Decay-based prioritisation would otherwise
@@ -657,17 +791,23 @@ class Orchestrator:
             self.sm.transition(Event.REPORT_DONE, "report after lab_solved")
             return report
 
-        # Check for pivot
-        if self.sm.should_pivot():
+        # Check for pivot — triggered by consecutive failures OR by the
+        # hypothesis agenda demoting a vector (real backtracking).
+        if self._needs_pivot or self.sm.should_pivot():
+            reason = "agenda backtrack" if self._needs_pivot else "consecutive failure threshold"
+            self._needs_pivot = False
             console.print(
-                f"[yellow bold]🔄 PIVOT — {self.sm.consecutive_failures} "
+                f"[yellow bold]🔄 PIVOT ({reason}) — {self.sm.consecutive_failures} "
                 f"consecutive failures (last: {self.sm.last_failed_agent})[/]"
             )
             self.logger.log(
-                f"[ESCALATING] consecutive_failures={self.sm.consecutive_failures}, "
+                f"[ESCALATING] reason={reason} "
+                f"consecutive_failures={self.sm.consecutive_failures}, "
                 f"last_failed={self.sm.last_failed_agent}"
             )
-            self.sm.transition(Event.PIVOT_REQUESTED, "consecutive failure threshold")
+            self.sm.transition(Event.PIVOT_REQUESTED, reason)
+            # High-reasoning escalation: only when stuck, then back to routing.
+            self._run_pivot(reason)
             # Reset failure counter and re-route
             self.sm.consecutive_failures = 0
             self.sm.transition(Event.DECISION_DONE, "post-pivot re-route")
@@ -678,6 +818,617 @@ class Orchestrator:
         # Normal: go back to ROUTING
         self.sm.transition(Event.DECISION_DONE, "cycle back to routing")
         return None
+
+    # ---- WS2: hypothesis agenda + strategy phase chaining ----------------
+
+    def _seed_hypotheses(self) -> None:
+        """Seed the agenda from the lab profile, target category, durable
+        successful techniques, and any rehydrated theoretical vulnerabilities."""
+        try:
+            playbook_id = str(self.lab_profile.get("playbook_id") or "")
+            vuln = str(
+                self.lab_profile.get("vulnerability")
+                or playbook_id
+                or self.target_category
+                or ""
+            )
+            if vuln:
+                self.agenda.add(
+                    text=(
+                        f"Confirm {vuln} on {self.target_url} per lab profile "
+                        f"{self.lab_profile.get('id', 'n/a')}."
+                    ),
+                    vuln_type=vuln,
+                    vector=str(self.lab_profile.get("parameter") or ""),
+                    phase="recon",
+                    heat=1.2,
+                    notes="seed:lab_profile",
+                )
+            # Durable memory: boost previously successful techniques for this class.
+            if self.durable is not None:
+                try:
+                    for w in self.durable.successful_techniques(self.lab_class)[:6]:
+                        self.agenda.add(
+                            text=f"Retry known-good technique: {w['technique']} via {w['tool']}.",
+                            vuln_type=str(w.get("technique", "")),
+                            vector=str(w.get("tool", "")),
+                            phase="injection",
+                            heat=1.5,
+                            notes="seed:durable_win",
+                        )
+                except Exception:
+                    pass
+            # Non-web categories: seed from the category profiler's playbooks so
+            # network/binary/mobile/crypto/stego/forensics targets get a
+            # populated, category-appropriate agenda (not just web/PortSwigger).
+            self._seed_category_hypotheses()
+            self._sync_agenda_from_memory()
+            if self.agenda.all():
+                self.logger.log(
+                    f"[AGENDA] seeded {len(self.agenda.all())} hypotheses "
+                    f"(category={self.target_category or 'n/a'})"
+                )
+                emit("hypothesis_agenda", {
+                    "count": len(self.agenda.all()),
+                    "category": self.target_category,
+                })
+        except Exception as e:
+            self.logger.log(f"[AGENDA] seed failed (degrading): {e}")
+
+    def _sync_agenda_from_memory(self) -> None:
+        """Fold theoretical Vulnerability entities (e.g. analyst output) into
+        the agenda as ranked hypotheses, deduped."""
+        try:
+            for v in self.memory.ranked_query(
+                "Vulnerability", min_pheromone=0.0, status="theoretical"
+            ):
+                self.agenda.add(
+                    text=str(v.attrs.get("hypothesis", ""))[:300]
+                        or str(v.attrs.get("vuln_type", "")),
+                    vuln_type=str(v.attrs.get("vuln_type", "")),
+                    vector=str(v.attrs.get("parameter") or ""),
+                    target_entity_id=v.id,
+                    phase="injection",
+                    heat=max(0.5, float(v.pheromone_weight())),
+                    notes="seed:analyst",
+                )
+        except Exception:
+            pass
+
+    # Entry phase per non-web category. Crypto challenges are usually acted on
+    # directly (no recon surface), everything else starts with enumeration.
+    _CATEGORY_SEED_PHASE: dict[str, str] = {
+        "network": "recon",
+        "binary": "recon",
+        "mobile": "recon",
+        "crypto": "injection",
+        "stego": "recon",
+        "forensics": "recon",
+        "misc": "recon",
+    }
+
+    def _seed_category_hypotheses(self) -> None:
+        """Seed the agenda from category_playbooks() for a detected NON-web
+        category. Web/PortSwigger targets are seeded by the existing lab-profile
+        path and are intentionally skipped here (backward-compatible)."""
+        category = (self.target_category or "").strip().lower()
+        if not category or category == "web":
+            return
+        fn = getattr(lab_intel_mod, "category_playbooks", None)
+        if not callable(fn):
+            return
+        try:
+            playbooks = fn(category)
+        except Exception:
+            return
+        if not playbooks:
+            return
+        phase = self._CATEGORY_SEED_PHASE.get(category, "recon")
+        for idx, playbook in enumerate(playbooks):
+            self.agenda.add(
+                text=(
+                    f"Pursue the {category} playbook '{playbook}' against "
+                    f"{self.target_url}."
+                ),
+                vuln_type=category,
+                vector=str(playbook),
+                phase=phase,
+                heat=1.15 - (0.05 * idx),
+                notes="seed:category_playbook",
+            )
+
+    def _select_active_hypothesis(self) -> Hypothesis | None:
+        self._sync_agenda_from_memory()
+        h = self.agenda.hottest_open()
+        self.active_hypothesis = h
+        if h:
+            self.memory.current_hypothesis = h.text
+            self._sync_memory_phase(h.phase)
+        return h
+
+    def _sync_memory_phase(self, phase: str) -> None:
+        """Mirror the active hypothesis phase into memory.progress so
+        get_current_phase() (used by RAG methodology loading) stays aligned."""
+        if phase not in PHASE_SEQUENCE:
+            return
+        cur_idx = PHASE_SEQUENCE.index(phase)
+        try:
+            for p in self.memory.DEFAULT_PHASES:
+                if p not in PHASE_SEQUENCE:
+                    continue
+                p_idx = PHASE_SEQUENCE.index(p)
+                if p_idx < cur_idx:
+                    self.memory.update_progress(p, "done")
+                elif p_idx == cur_idx:
+                    self.memory.update_progress(p, "in_progress")
+        except Exception:
+            pass
+
+    def _agenda_context(self) -> str:
+        parts = [self.agenda.render()]
+        if self.active_hypothesis is not None:
+            h = self.active_hypothesis
+            parts.append(
+                f"\n# ACTIVE HYPOTHESIS (pursue this via forced phase chaining)\n"
+                f"  vector: {h.vuln_type or '?'} @ {h.vector or 'n/a'}\n"
+                f"  phase: {h.phase} (StrategyEngine)\n"
+                f"  text: {h.text[:200]}"
+            )
+        if self.target_category:
+            parts.append(f"\n# TARGET CATEGORY\n  {self.target_category}")
+        return "\n".join(parts)
+
+    def _inner_budget_hint(self) -> int:
+        """Adaptive inner-loop budget: deeper for hard/expert playbooks."""
+        base = int(os.getenv("REYNARD_INNER_BUDGET", "0") or 0)
+        difficulty = str(self.lab_profile.get("difficulty", "")).lower()
+        playbook_id = str(self.lab_profile.get("playbook_id", ""))
+        hint = base
+        if any(k in difficulty for k in ("expert", "advanced", "hard", "practitioner")):
+            hint = max(hint, 16)
+        if playbook_id in AUTH_HEAVY_PLAYBOOKS:
+            hint = max(hint, 14)
+        return hint
+
+    def _inject_task_context(self, task: AgentTask, agent_name: str) -> AgentTask:
+        context = {**task.context, "target_url": self.target_url}
+        if self.objective:
+            context["objective"] = self.objective
+        if self.lab_profile:
+            context["lab_profile"] = self.lab_profile
+        if self.playbook_context:
+            context["expert_playbook"] = self.playbook_context
+
+        inner_hint = self._inner_budget_hint()
+        if inner_hint:
+            context["inner_budget"] = inner_hint
+
+        # Active StrategyEngine phase + agenda.
+        phase = ""
+        if self.active_hypothesis is not None:
+            phase = self.active_hypothesis.phase
+            context["strategy_phase"] = phase
+            context["active_hypothesis"] = self.active_hypothesis.text
+            context["hypothesis_agenda"] = self.agenda.render()
+            try:
+                context["phase_instructions"] = self.strategy.get_phase_prompt(
+                    phase, self.memory.get_all_facts()
+                )
+            except Exception:
+                pass
+
+        # Resolve a vuln_type for tool-selection + methodology.
+        vuln_type = self._resolve_vuln_type(task)
+
+        # WS1: deterministic tool recommendations at phase entry.
+        try:
+            tech = self.memory.get_fact("technology_stack") or ""
+            recs = render_recommendations(
+                vuln_class=vuln_type or self.target_category or None,
+                phase=phase or self.memory.get_current_phase(),
+                tech=tech,
+            )
+            if recs:
+                if self.durable is not None:
+                    try:
+                        wins = self.durable.successful_techniques(self.lab_class)[:4]
+                        if wins:
+                            recs += "\n# PRIOR WINS (durable memory): " + ", ".join(
+                                f"{w['tool']}" for w in wins
+                            )
+                    except Exception:
+                        pass
+                context["tool_recommendations"] = recs
+        except Exception:
+            pass
+
+        # WS3: RAG methodology keyed on ACTIVE hypothesis + phase, for every
+        # specialist that can act on it (not just exploitation).
+        if agent_name in ("exploitation", "recon", "analyst", "validator") and vuln_type:
+            try:
+                methodology = load_methodology(
+                    vuln_type,
+                    hypothesis=self.memory.current_hypothesis or "",
+                    phase=phase or self.memory.get_current_phase(),
+                )
+                if methodology:
+                    context["methodology"] = methodology
+                    self.logger.log(
+                        f"[METHODOLOGY] Injected RAG methodology for "
+                        f"vuln_type={vuln_type} agent={agent_name} phase={phase}"
+                    )
+            except Exception:
+                pass
+
+        return task.model_copy(update={"context": context})
+
+    def _resolve_vuln_type(self, task: AgentTask) -> str:
+        if self.active_hypothesis is not None and self.active_hypothesis.vuln_type:
+            return self.active_hypothesis.vuln_type
+        if task.target_vulnerability_id:
+            ve = self.memory.get_entity(task.target_vulnerability_id)
+            if ve:
+                vt = ve.attrs.get("vuln_type", "")
+                if vt:
+                    return vt
+        vulns = self.memory.ranked_query(
+            "Vulnerability", min_pheromone=0.0, status="theoretical"
+        )
+        if vulns:
+            vt = vulns[0].attrs.get("vuln_type", "")
+            if vt:
+                return vt
+        desc_lower = task.task_description.lower()
+        for keyword in ["sqli", "sql injection", "xss", "ssrf", "ssti",
+                        "idor", "jwt", "deserialization", "smuggling",
+                        "cache", "nosql", "command injection", "rce"]:
+            if keyword in desc_lower:
+                return keyword
+        return ""
+
+    def _update_agenda_after_outcome(self, agent_name: str, result: AgentResult) -> None:
+        h = self.active_hypothesis
+        if h is None:
+            return
+        self.agenda.record_attempt(h)
+        self._record_incremental_technique(h, result)
+        if result.success:
+            if h.phase == "exploit" or self._hypothesis_has_verified_evidence(h):
+                self.agenda.record_success(h)
+                self.logger.log(f"[AGENDA] hypothesis VERIFIED: {h.vuln_type}@{h.vector}")
+            else:
+                new_phase = self.agenda.advance_phase(h)
+                self._sync_memory_phase(h.phase)
+                self.logger.log(
+                    f"[AGENDA] phase advanced -> {new_phase} for {h.vuln_type}@{h.vector}"
+                )
+        else:
+            backtracked = self.agenda.record_failure(h)
+            if backtracked:
+                self._needs_pivot = True
+                self.logger.log(
+                    f"[AGENDA] vector DEMOTED (backtrack): {h.vuln_type}@{h.vector} "
+                    f"after {h.fail_count} fails"
+                )
+                emit("hypothesis_demoted", {
+                    "vuln_type": h.vuln_type, "vector": h.vector,
+                    "fail_count": h.fail_count,
+                })
+
+    def _hypothesis_has_verified_evidence(self, h: Hypothesis) -> bool:
+        try:
+            if h.target_entity_id:
+                ent = self.memory.get_entity(h.target_entity_id)
+                if ent and ent.attrs.get("status") == "verified":
+                    return True
+                if self.evidence.is_verified(h.target_entity_id):
+                    return True
+        except Exception:
+            pass
+        return bool(self.memory.get_fact("lab_solved"))
+
+    def _has_verified_evidence(self) -> bool:
+        try:
+            if any(p.verdict == "success" for p in self.evidence.all_pocs()):
+                return True
+        except Exception:
+            pass
+        return bool(self.memory.get_fact("lab_solved"))
+
+    # ---- WS2: pivot escalation (high reasoning, only when stuck) ---------
+
+    def _run_pivot(self, reason: str) -> None:
+        if self._budget_exceeded():
+            return
+        try:
+            provider = self.registry.get("pivot")
+        except Exception as e:
+            self.logger.log(f"[PIVOT] provider unavailable: {e}")
+            return
+        try:
+            decision: PivotDecision = provider.call_typed(
+                PIVOT_SYSTEM, self._build_pivot_prompt(reason), PivotDecision
+            )
+        except Exception as e:
+            self.logger.log(f"[PIVOT] escalation failed (degrading): {e}")
+            return
+        self._pivot_used += 1
+        self.logger.log(f"[PIVOT] diagnosis={decision.diagnosis[:200]}")
+        emit("reasoning_note", {
+            "agent": "pivot",
+            "text": decision.diagnosis,
+            "new_hypothesis": decision.new_hypothesis,
+        })
+        console.print(f"[magenta]🧭 Pivot: {decision.diagnosis[:160]}[/]")
+        self._apply_pivot(decision, default_heat=1.8)
+
+    def _apply_pivot(self, decision: PivotDecision, default_heat: float) -> None:
+        if decision.new_hypothesis:
+            self.agenda.add(
+                text=decision.new_hypothesis,
+                vuln_type=decision.new_vuln_type,
+                vector=decision.recommended_vector,
+                phase="injection",
+                heat=default_heat,
+                notes="pivot",
+            )
+        # Boost any existing hypothesis matching the recommended vector.
+        if decision.recommended_vector:
+            needle = decision.recommended_vector.lower()
+            for h in self.agenda.open_hypotheses():
+                if needle and (needle in h.vector.lower() or needle in h.text.lower()):
+                    h.heat = min(1.0 + default_heat, h.heat + 0.5)
+
+    def _build_pivot_prompt(self, reason: str) -> str:
+        sections = [
+            f"# TARGET\n{self.target_url}",
+            f"\n# WHY INVOKED\n{reason}",
+        ]
+        if self.objective:
+            sections.append(f"\n# OBJECTIVE\n{self.objective}")
+        if self.target_category:
+            sections.append(f"\n# TARGET CATEGORY\n{self.target_category}")
+        sections.append(f"\n{self.agenda.render(limit=12)}")
+        try:
+            sections.append(f"\n{self.evidence.summarize()}")
+        except Exception:
+            pass
+        try:
+            sections.append(f"\n{self.memory.failure_summary(12)}")
+        except Exception:
+            pass
+        sections.append(
+            "\n# YOUR OUTPUT\nDiagnose the blocker and propose ONE concrete, "
+            "untried vector. Output a single PivotDecision JSON."
+        )
+        return "\n".join(sections)
+
+    # ---- WS6: report gating + self-critique before failure --------------
+
+    def _intercept_done(self, decision: CoordinatorDecision) -> CoordinatorDecision:
+        if not decision.done:
+            return decision
+        if self._has_verified_evidence() or self.agenda.any_verified():
+            return decision
+        # 1. Gate premature reporting while untried actionable vectors remain.
+        if self._should_gate_report():
+            override = self._forced_dispatch_decision()
+            if override is not None:
+                self._report_gate_count += 1
+                console.print(
+                    "[yellow]⛔ Report gated — hypothesis agenda not exhausted; "
+                    "forcing progress.[/]"
+                )
+                self.logger.log(
+                    f"[GATE] premature report suppressed "
+                    f"(gate #{self._report_gate_count})"
+                )
+                emit("report_gated", {
+                    "gate_count": self._report_gate_count,
+                    "next_agent": override.next_agent,
+                })
+                return override
+        # 2. Self-critique once: propose one more concrete vector, then try it.
+        if self._maybe_self_critique():
+            override = self._forced_dispatch_decision()
+            if override is not None:
+                console.print(
+                    "[cyan]🔎 Self-critique proposed a new vector — trying once.[/]"
+                )
+                return override
+        return decision
+
+    def _should_gate_report(self) -> bool:
+        if not self._report_gating_enabled:
+            return False
+        if self.sm.iteration >= int(self.sm.config.max_iterations * 0.9):
+            return False
+        if self._budget_exceeded():
+            return False
+        if self._report_gate_count >= self._max_report_gates:
+            return False
+        return self.agenda.has_unattempted()
+
+    def _forced_dispatch_decision(self) -> CoordinatorDecision | None:
+        h = self._select_active_hypothesis()
+        if h is None:
+            return None
+        agent = PHASE_TO_AGENT.get(h.phase, "exploitation")
+        target_vuln = h.target_entity_id or self._first_theoretical_vuln_id()
+        if agent == "exploitation" and not target_vuln:
+            # Need a theoretical finding first.
+            agent = "analyst"
+        task = AgentTask(
+            task_description=(
+                f"[forced] Pursue hypothesis ({h.phase} phase): {h.text}"
+            ),
+            context={},
+            target_vulnerability_id=target_vuln if agent == "exploitation" else None,
+        )
+        return CoordinatorDecision(
+            done=False,
+            next_agent=agent,  # type: ignore[arg-type]
+            task=task,
+            reasoning=(
+                "Report gated / self-critique: agenda not exhausted; forcing "
+                f"progress on hottest hypothesis via {agent}."
+            ),
+        )
+
+    def _first_theoretical_vuln_id(self) -> str | None:
+        vulns = self.memory.ranked_query(
+            "Vulnerability", min_pheromone=0.0, status="theoretical"
+        )
+        return vulns[0].id if vulns else None
+
+    def _maybe_self_critique(self) -> bool:
+        if self._self_critique_done:
+            return False
+        self._self_critique_done = True
+        if self._has_verified_evidence() or self.agenda.any_verified():
+            return False
+        if self.sm.is_iteration_exhausted() or self._budget_exceeded():
+            return False
+        try:
+            provider = self.registry.get("pivot")
+            decision: PivotDecision = provider.call_typed(
+                SELF_CRITIQUE_SYSTEM,
+                self._build_pivot_prompt("final self-critique before failure"),
+                PivotDecision,
+            )
+        except Exception as e:
+            self.logger.log(f"[SELF_CRITIQUE] failed (degrading): {e}")
+            return False
+        if decision.give_up or not decision.new_hypothesis:
+            self.logger.log("[SELF_CRITIQUE] no actionable vector; concluding.")
+            return False
+        self._apply_pivot(decision, default_heat=2.0)
+        self.logger.log(
+            f"[SELF_CRITIQUE] added vector: {decision.new_hypothesis[:140]}"
+        )
+        emit("self_critique", {
+            "diagnosis": decision.diagnosis,
+            "new_hypothesis": decision.new_hypothesis,
+        })
+        return True
+
+    def _record_incremental_technique(self, h: Hypothesis, result: AgentResult) -> None:
+        """WS3: record per-outcome technique success/dead-end into durable
+        memory inside the loop (not only at run end)."""
+        if self.durable is None or h is None:
+            return
+        try:
+            outcome = "success" if result.success else "deadend"
+            technique = h.vuln_type or (h.text[:60] if h.text else self.lab_class)
+            tool = h.vector or PHASE_TO_AGENT.get(h.phase, "exploitation")
+            self.durable.record_technique(
+                self.lab_class,
+                technique=technique,
+                tool=tool,
+                outcome=outcome,
+                detail=str(result.summary)[:200],
+            )
+        except Exception as e:
+            self.logger.log(f"[DURABLE] incremental record failed: {e}")
+
+    # ---- durable cross-run memory hooks ---------------------------------
+
+    def _rehydrate_durable(self) -> None:
+        """Prime the run with prior knowledge for this target/lab-class.
+
+        Rehydrated entities are treated as WARM (see AgentMemory.rehydrate) so
+        stale monotonic decay timestamps never make a cold finding look hot.
+        Successful techniques / known dead-ends for the lab class are surfaced
+        as suspected facts so the coordinator can prime and avoid them.
+        """
+        if self.durable is None:
+            return
+        try:
+            n_kg = self.memory.rehydrate(
+                self.durable, self.durable_target, self.lab_class)
+            n_ev = self.evidence.rehydrate(
+                self.durable, self.durable_target, self.lab_class)
+            wins = self.durable.successful_techniques(self.lab_class)
+            deads = self.durable.known_deadends(self.lab_class)
+            if wins:
+                self.memory.add_fact(
+                    "primed_successful_techniques",
+                    "; ".join(f"{w['technique']} via {w['tool']} (x{w['count']})"
+                              for w in wins[:8]),
+                    confidence="suspected", source="durable_memory",
+                )
+            if deads:
+                self.memory.add_fact(
+                    "primed_known_deadends",
+                    "; ".join(f"{d['technique']}/{d['tool']} (x{d['count']})"
+                              for d in deads[:8]),
+                    confidence="suspected", source="durable_memory",
+                )
+            if n_kg or n_ev or wins or deads:
+                console.print(
+                    f"[dim]🧠 Durable memory primed: {n_kg} entities, {n_ev} PoCs, "
+                    f"{len(wins)} known-good, {len(deads)} dead-ends[/]"
+                )
+            self.logger.log(
+                f"[DURABLE] rehydrated kg={n_kg} pocs={n_ev} wins={len(wins)} "
+                f"deadends={len(deads)} (target={self.durable_target}, "
+                f"class={self.lab_class})"
+            )
+            emit("durable_rehydrate", {
+                "entities": n_kg, "pocs": n_ev,
+                "successful_techniques": len(wins), "known_deadends": len(deads),
+                "lab_class": self.lab_class,
+            })
+        except Exception as e:
+            self.logger.log(f"[DURABLE] rehydrate failed (degrading): {e}")
+
+    def _record_learned_techniques(self) -> None:
+        """Derive success / dead-end technique records from this run's outcome."""
+        if self.durable is None:
+            return
+        try:
+            for vuln in self.memory.query("Vulnerability"):
+                if not self.evidence.is_verified(vuln.id):
+                    continue
+                technique = vuln.attrs.get("vuln_type") or self.lab_class
+                self.durable.record_technique(
+                    self.lab_class, technique=technique,
+                    tool=str(self.lab_profile.get("playbook_id", "exploitation")),
+                    outcome="success",
+                    detail=str(vuln.attrs.get("description", ""))[:200],
+                )
+            for fr in self.memory.failed_attempts:
+                self.durable.record_technique(
+                    self.lab_class, technique=fr.phase or "attempt",
+                    tool=fr.tool, outcome="deadend", detail=fr.reason,
+                )
+        except Exception as e:
+            self.logger.log(f"[DURABLE] technique recording failed: {e}")
+
+    def _persist_durable(self) -> None:
+        """Persist KG + evidence + learned techniques at run end."""
+        if self.durable is None:
+            return
+        try:
+            self._record_learned_techniques()
+            ok_mem = self.memory.persist(
+                self.durable, self.durable_target, self.lab_class)
+            ok_ev = self.evidence.persist(
+                self.durable, self.durable_target, self.lab_class)
+            self.logger.log(
+                f"[DURABLE] persisted memory={ok_mem} evidence={ok_ev} "
+                f"(target={self.durable_target}, class={self.lab_class})"
+            )
+            emit("durable_persist", {
+                "memory": ok_mem, "evidence": ok_ev, "lab_class": self.lab_class,
+            })
+        except Exception as e:
+            self.logger.log(f"[DURABLE] persist failed: {e}")
+        finally:
+            try:
+                self.durable.close()
+            except Exception:
+                pass
 
     # ---- bounded subagent bootstrap -------------------------------------
 
@@ -954,6 +1705,35 @@ class Orchestrator:
             self.sm.transition(Event.REPORT_DONE, "forced report completed")
         return result
 
+    # ---- cost/token budget ------------------------------------------------
+
+    def _token_cost_snapshot(self) -> dict:
+        """Cumulative token totals + estimated cost for UI / logs / result."""
+        totals = self.token_meter.totals()
+        return {
+            "prompt_tokens": totals["prompt_tokens"],
+            "completion_tokens": totals["completion_tokens"],
+            "total_tokens": totals["total_tokens"],
+            "llm_calls": totals["calls"],
+            "estimated_cost_usd": self.token_meter.estimated_cost(),
+        }
+
+    def _budget_exceeded(self) -> str | None:
+        """Return a human-readable reason if a configured budget cap is hit."""
+        if self.max_tokens_budget or self.max_cost_budget:
+            snap = self._token_cost_snapshot()
+            if self.max_tokens_budget and snap["total_tokens"] >= self.max_tokens_budget:
+                return (
+                    f"tokens {snap['total_tokens']} >= "
+                    f"LLM_MAX_TOKENS_BUDGET {self.max_tokens_budget}"
+                )
+            if self.max_cost_budget and snap["estimated_cost_usd"] >= self.max_cost_budget:
+                return (
+                    f"cost ${snap['estimated_cost_usd']} >= "
+                    f"LLM_MAX_COST_BUDGET ${self.max_cost_budget}"
+                )
+        return None
+
     # ---- display helpers --------------------------------------------------
 
     def _print_banner(self) -> None:
@@ -997,12 +1777,24 @@ class Orchestrator:
         table.add_row("Failures", f"{self.sm.consecutive_failures}/{self.sm.config.max_consecutive_failures}")
         table.add_row("KG entities", str(len(self.memory.entities)))
         table.add_row("Evidence", f"{len(self.evidence.all_pocs())} PoC(s)")
+        snap = self._token_cost_snapshot()
+        budget_hint = ""
+        if self.max_tokens_budget:
+            budget_hint = f" / {self.max_tokens_budget}"
+        table.add_row("Tokens", f"{snap['total_tokens']}{budget_hint}")
+        if self.max_cost_budget or snap["estimated_cost_usd"]:
+            table.add_row("Est. cost", f"${snap['estimated_cost_usd']}")
         console.print(Panel(table, title="[dim]Orchestrator State[/]", border_style="dim", expand=False))
 
     def _print_summary(self) -> None:
         duration = time.time() - self.session_start
         all_pocs = self.evidence.all_pocs()
         verified = sum(1 for p in all_pocs if p.verdict == "success")
+        snap = self._token_cost_snapshot()
+        cost_line = (
+            f"[bold]Est. cost:[/] ${snap['estimated_cost_usd']}\n"
+            if (self.max_cost_budget or snap["estimated_cost_usd"]) else ""
+        )
 
         summary = Panel(
             f"[bold]Duration:[/] {duration:.1f}s\n"
@@ -1011,6 +1803,10 @@ class Orchestrator:
             f"[bold]Agent dispatches:[/] {json.dumps(self.sm.agent_dispatches)}\n"
             f"[bold]KG entities:[/] {len(self.memory.entities)}\n"
             f"[bold]PoCs recorded:[/] {len(all_pocs)} ({verified} verified)\n"
+            f"[bold]Tokens:[/] {snap['total_tokens']} "
+            f"(prompt {snap['prompt_tokens']} / completion {snap['completion_tokens']}, "
+            f"{snap['llm_calls']} LLM calls)\n"
+            f"{cost_line}"
             f"[bold]Log:[/] {self.logger.path}",
             title="[bold green]Session Summary[/]",
             border_style="green",
@@ -1022,6 +1818,36 @@ class Orchestrator:
 # =============================================================================
 # CLI
 # =============================================================================
+
+def _print_extended_readiness() -> None:
+    """WS6: surface the check_runtime self-check (Kali tools + Chromium/
+    Playwright + Caido bridge + readiness score) from the orchestrator
+    --preflight path. Single source of truth lives in scripts/check_runtime.py.
+    """
+    try:
+        import importlib.util
+        cr_path = Path(__file__).resolve().parents[3] / "scripts" / "check_runtime.py"
+        if not cr_path.exists():
+            return
+        spec = importlib.util.spec_from_file_location("reynard_check_runtime", cr_path)
+        if spec is None or spec.loader is None:
+            return
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        report = module.run_self_check()
+        score = report["readiness_score"]
+        style = "green" if score >= 70 else ("yellow" if score >= 40 else "red")
+        console.print(f"[{style}]preflight readiness score: {score}/100[/]")
+        for tool, status in report["kali_tools"].items():
+            tstyle = "green" if status == "ok" else ("yellow" if status == "unknown" else "red")
+            console.print(f"  [{tstyle}]kali:{tool}[/] {status}")
+        pw = report["playwright"]
+        console.print(f"  chromium/playwright: {pw['status']} — {pw['message']}")
+        cd = report["caido_bridge"]
+        console.print(f"  caido_bridge: {cd['status']} — {cd['message']}")
+    except Exception as exc:
+        console.print(f"[yellow]extended readiness check skipped: {exc}[/]")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -1154,6 +1980,7 @@ def main() -> None:
         status = "OK" if check.ok else ("FAIL" if check.fatal else "WARN")
         console.print(f"[{style}]preflight {status}[/] {check.name}: {check.message}")
     if args.preflight:
+        _print_extended_readiness()
         sys.exit(1 if has_fatal_failure(preflight_checks) else 0)
     if has_fatal_failure(preflight_checks):
         console.print("[red]Fatal preflight failure; refusing to start run.[/]")

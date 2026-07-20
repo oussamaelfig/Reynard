@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -16,12 +18,134 @@ load_dotenv(ROOT / ".env")
 
 from hacking_agent.core.providers import ProviderRegistry  # noqa: E402
 
+CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
+
+# Tools the agent expects inside the Kali container. Weighted into readiness.
+EXPECTED_KALI_TOOLS = [
+    "curl", "nmap", "sqlmap", "ffuf", "gobuster", "nuclei",
+    "whatweb", "nikto", "python3", "interactsh-client",
+]
+
 
 def package_version(name: str) -> str:
     try:
         return metadata.version(name)
     except metadata.PackageNotFoundError:
         return "not installed"
+
+
+# =============================================================================
+# Preflight self-check (WS6): Kali tools + Chromium/Playwright + Caido bridge
+# =============================================================================
+
+def _run(cmd: list[str], timeout: int = 6) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _docker_available() -> bool:
+    proc = _run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=5)
+    return bool(proc and proc.returncode == 0 and proc.stdout.strip())
+
+
+def _container_running(name: str) -> bool:
+    proc = _run(["docker", "ps", "--filter", f"name={name}", "--format", "{{.Names}}"], timeout=5)
+    return bool(proc and proc.returncode == 0 and name in (proc.stdout or ""))
+
+
+def _tool_in_container(tool: str) -> bool:
+    proc = _run(["docker", "exec", CONTAINER_NAME, "which", tool], timeout=6)
+    return bool(proc and proc.returncode == 0 and proc.stdout.strip())
+
+
+def check_kali_tools() -> dict[str, str]:
+    """Return {tool: 'ok'|'missing'|'unknown'} for each expected Kali tool.
+
+    Prefers checking inside the container; falls back to local PATH; marks
+    'unknown' when neither Docker nor the local binary can be consulted.
+    """
+    results: dict[str, str] = {}
+    container_up = _docker_available() and _container_running(CONTAINER_NAME)
+    for tool in EXPECTED_KALI_TOOLS:
+        if container_up:
+            results[tool] = "ok" if _tool_in_container(tool) else "missing"
+        elif shutil.which(tool):
+            results[tool] = "ok"
+        else:
+            results[tool] = "unknown"
+    return results
+
+
+def check_playwright_chromium() -> tuple[str, str]:
+    """Return (status, message) for Chromium/Playwright readiness.
+
+    Playwright runs inside the Kali container, so prefer probing there; degrade
+    to a local import check otherwise.
+    """
+    if _docker_available() and _container_running(CONTAINER_NAME):
+        proc = _run(
+            ["docker", "exec", CONTAINER_NAME, "python3", "-c",
+             "import playwright; from playwright.sync_api import sync_playwright; print('ok')"],
+            timeout=15,
+        )
+        if proc and proc.returncode == 0 and "ok" in (proc.stdout or ""):
+            return "ok", "playwright importable in container"
+        return "missing", "playwright not importable in container (run: playwright install chromium)"
+    try:
+        import playwright  # noqa: F401
+        return "ok", "playwright importable locally (container not checked)"
+    except Exception as exc:
+        return "unknown", f"container down; local playwright not importable: {exc}"
+
+
+def check_caido_bridge() -> tuple[str, str]:
+    try:
+        from hacking_agent.integrations import caido_local as caido_local_mod
+        result = caido_local_mod.CaidoLocalBridgeClient(timeout=2.0).status()
+        if result.get("ok"):
+            return "ok", "Caido local bridge reachable"
+        return "warn", "Caido local bridge not reachable (optional)"
+    except Exception as exc:
+        return "unknown", f"Caido bridge check failed: {exc}"
+
+
+def run_self_check() -> dict:
+    """Aggregate readiness checks and compute a 0-100 readiness score."""
+    tools = check_kali_tools()
+    pw_status, pw_msg = check_playwright_chromium()
+    caido_status, caido_msg = check_caido_bridge()
+
+    # Score: Kali tools 70%, Playwright 20%, Caido 10% (Caido optional -> warn ok).
+    tool_ok = sum(1 for v in tools.values() if v == "ok")
+    tool_score = (tool_ok / len(tools)) * 70 if tools else 0
+    pw_score = 20 if pw_status == "ok" else (10 if pw_status == "unknown" else 0)
+    caido_score = 10 if caido_status in ("ok", "warn") else 0
+    score = round(tool_score + pw_score + caido_score)
+
+    return {
+        "kali_tools": tools,
+        "playwright": {"status": pw_status, "message": pw_msg},
+        "caido_bridge": {"status": caido_status, "message": caido_msg},
+        "readiness_score": score,
+    }
+
+
+def print_self_check(report: dict | None = None) -> int:
+    report = report or run_self_check()
+    print("Preflight self-check")
+    tools = report["kali_tools"]
+    for tool, status in tools.items():
+        mark = {"ok": "OK", "missing": "MISSING", "unknown": "UNKNOWN"}.get(status, status)
+        print(f"  kali:{tool}: {mark}")
+    pw = report["playwright"]
+    print(f"  chromium/playwright: {pw['status'].upper()} — {pw['message']}")
+    cd = report["caido_bridge"]
+    print(f"  caido_bridge: {cd['status'].upper()} — {cd['message']}")
+    print(f"  readiness_score: {report['readiness_score']}/100")
+    print()
+    return report["readiness_score"]
 
 
 def env_value(name: str) -> str:
@@ -73,6 +197,8 @@ def main() -> None:
     print()
 
     print(ProviderRegistry.from_env().describe())
+    print()
+    print_self_check()
 
 
 if __name__ == "__main__":

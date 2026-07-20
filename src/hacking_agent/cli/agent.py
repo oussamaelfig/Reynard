@@ -367,8 +367,15 @@ class HackingAgent:
         model: str,
         scope_domains: list[str] | None = None,
         scope_cidrs: list[str] | None = None,
+        provider_config=None,
     ):
-        """Initialize the agent with API credentials and model config."""
+        """Initialize the agent with API credentials and model config.
+
+        `provider_config` (a ProviderConfig from ProviderRegistry) consolidates
+        the legacy single-agent LLM stack with the multi-agent path: when
+        supplied, its reasoning_effort / enable_thinking_param controls are
+        applied to the streaming call so both stacks behave identically.
+        """
 
         if not api_key:
             console.print("[bold red]ERROR: No API key found![/]")
@@ -381,6 +388,7 @@ class HackingAgent:
             base_url=base_url,
         )
         self.model = model
+        self.provider_config = provider_config
 
         # Conversation history (maintained across all iterations)
         self.messages: list[dict] = []
@@ -456,17 +464,41 @@ class HackingAgent:
             "phase": self.memory.get_current_phase(),
         })
 
+        # Consolidated reasoning controls (shared with the multi-agent stack).
+        reasoning_kwargs: dict = {}
+        cfg = self.provider_config
+        if cfg is not None:
+            if getattr(cfg, "reasoning_effort", None) and cfg.reasoning_effort != "none":
+                reasoning_kwargs["reasoning_effort"] = cfg.reasoning_effort
+            if getattr(cfg, "enable_thinking_param", False):
+                reasoning_kwargs["extra_body"] = {"enable_thinking": True}
+
         for attempt in range(MAX_RETRIES):
             try:
-                stream = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=self.messages,
-                    tools=TOOL_SCHEMAS,
-                    tool_choice="auto",
-                    temperature=0.0,
-                    max_tokens=16384,
-                    stream=True,
-                )
+                try:
+                    stream = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=self.messages,
+                        tools=TOOL_SCHEMAS,
+                        tool_choice="auto",
+                        temperature=0.0,
+                        max_tokens=16384,
+                        stream=True,
+                        **reasoning_kwargs,
+                    )
+                except TypeError:
+                    # Provider/client rejected an unsupported reasoning kwarg —
+                    # retry once without it (graceful degradation).
+                    reasoning_kwargs = {}
+                    stream = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=self.messages,
+                        tools=TOOL_SCHEMAS,
+                        tool_choice="auto",
+                        temperature=0.0,
+                        max_tokens=16384,
+                        stream=True,
+                    )
 
                 # ----- Stream and display in real-time -----
                 content_parts: list[str] = []
@@ -1396,13 +1428,32 @@ Environment Variables:
         border_style="cyan",
     ))
 
+    # Consolidate configuration through ProviderRegistry (single source of
+    # truth shared with the multi-agent orchestrator). CLI flags still win.
+    provider_config = None
+    resolved_key = API_KEY
+    resolved_base = args.base_url
+    resolved_model = args.model
+    try:
+        from hacking_agent.core.providers import ProviderRegistry
+        provider_config = ProviderRegistry.from_env().config("default")
+        resolved_key = API_KEY or provider_config.api_key
+        # Respect explicit CLI overrides; otherwise fall back to the registry.
+        if args.base_url == API_BASE_URL and provider_config.base_url:
+            resolved_base = provider_config.base_url
+        if args.model == MODEL_NAME and provider_config.model:
+            resolved_model = provider_config.model
+    except Exception as exc:
+        console.print(f"[yellow]Provider registry unavailable, using legacy config: {exc}[/]")
+
     # Initialize agent
     agent = HackingAgent(
-        api_key=API_KEY,
-        base_url=args.base_url,
-        model=args.model,
+        api_key=resolved_key,
+        base_url=resolved_base,
+        model=resolved_model,
         scope_domains=args.scope_domain,
         scope_cidrs=args.scope_cidr,
+        provider_config=provider_config,
     )
 
     if args.interactive:

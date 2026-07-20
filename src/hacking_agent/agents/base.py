@@ -27,6 +27,7 @@ from urllib.parse import unquote
 from pydantic import BaseModel
 from rich.console import Console
 
+from hacking_agent.core import context
 from hacking_agent.core.analyzer import ResponseAnalyzer
 from hacking_agent.core.events import emit
 from hacking_agent.core.evidence import EvidenceStore
@@ -174,6 +175,13 @@ class BudgetedToolExecutor:
 
         # ----- auto-analyze HTTP/browser responses -----
         signals = self._auto_analyze(decision.tool, decision.args, raw_result)
+        # WS1: a fired alert/confirm/prompt dialog is concrete XSS proof.
+        signals = self._merge_browser_proof(decision.tool, raw_result, signals)
+        # WS1: fold structured scanner output into the knowledge graph.
+        if decision.tool in ("ffuf_fuzz", "sqlmap_run", "nmap_scan"):
+            self._ingest_scanner_records(
+                decision.tool, decision.args, raw_result, agent_name, iteration
+            )
         if signals:
             self._signals_to_facts(signals, agent_name, iteration)
             findings = self._format_findings(signals)
@@ -368,6 +376,57 @@ class BudgetedToolExecutor:
         except Exception:
             return None
 
+    def _merge_browser_proof(self, tool_name: str, raw_result: str,
+                             signals: dict | None) -> dict | None:
+        """Promote a fired JS dialog (alert/confirm/prompt) to an XSS proof
+        signal so downstream analyzer/validator/exploitation treat it as
+        concrete evidence of DOM/stored/reflected XSS."""
+        if tool_name not in {"browser_navigate", "browser_execute_js",
+                             "browser_interact"}:
+            return signals
+        try:
+            parsed = json.loads(raw_result)
+        except (json.JSONDecodeError, TypeError):
+            return signals
+        if not isinstance(parsed, dict):
+            return signals
+        proof = parsed.get("xss_proof")
+        dialogs = parsed.get("dialogs")
+        if not proof and not dialogs:
+            return signals
+        merged = dict(signals or {})
+        merged["xss_proof"] = str(proof) if proof else f"{len(dialogs)} dialog(s) fired"
+        merged["dialog_fired"] = True
+        merged["reflected"] = True
+        return merged
+
+    def _ingest_scanner_records(self, tool_name: str, args: dict,
+                                raw_result: str, agent_name: str,
+                                iteration: int) -> None:
+        """WS1: parse ffuf/sqlmap/nmap `kg_records` into the KG via parsers."""
+        try:
+            parsed = json.loads(raw_result)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(parsed, dict):
+            return
+        records = parsed.get("kg_records")
+        if not isinstance(records, dict):
+            return
+        try:
+            from hacking_agent.core import parsers
+            target_url = str(args.get("url") or self.memory.target_url or "")
+            counts = parsers.ingest_into_memory(self.memory, records, target_url)
+            if counts and any(counts.values()):
+                emit("finding", {
+                    "agent": agent_name,
+                    "tool": tool_name,
+                    "summary": f"ingested {counts}",
+                    "phase": "recon",
+                })
+        except Exception:
+            pass
+
     def _classify_result(self, raw_result: str, signals: dict | None) -> str:
         if signals:
             if signals.get("lab_solved"):    return "SOLVED"
@@ -417,6 +476,12 @@ class BudgetedToolExecutor:
             self.memory.add_fact("waf_detected", True, source=src, iteration=iteration)
         if signals.get("lab_solved"):
             self.memory.add_fact("lab_solved", True, source=src, iteration=iteration)
+        if signals.get("xss_proof"):
+            self.memory.add_fact("xss_confirmed", True, source=src, iteration=iteration)
+            self.memory.add_fact(
+                "xss_proof", str(signals["xss_proof"])[:200],
+                source=src, iteration=iteration,
+            )
 
     def _format_findings(self, signals: dict) -> str:
         out: list[str] = []
@@ -428,6 +493,8 @@ class BudgetedToolExecutor:
             out.append("angular_evaluated=TRUE")
         if signals.get("waf_detected"):
             out.append("WAF_DETECTED")
+        if signals.get("xss_proof"):
+            out.append("🚨 XSS_PROOF (dialog fired)")
         if signals.get("lab_solved"):
             out.append("🎉 LAB_SOLVED")
         return " | ".join(out)
@@ -451,6 +518,7 @@ class BaseAgent(ABC):
         self.sm = state_machine
         self.evidence = evidence
         self.tools = tool_executor    # may be None for coordinator/reporter
+        self._ctx_snapshot: dict[str, Any] | None = None
         if not self.name:
             raise NotImplementedError(f"{self.__class__.__name__} must set `name`")
 
@@ -465,7 +533,14 @@ class BaseAgent(ABC):
     # --- shared prompt helpers --------------------------------------------
 
     def kg_summary(self) -> str:
-        return self.memory.kg_snapshot() + "\n\n" + self.memory.failure_summary(10)
+        text, self._ctx_snapshot = context.build_incremental_context(
+            self.memory, self._ctx_snapshot
+        )
+        return text
+
+    def compact_observation(self, raw: str, signals: dict | None = None) -> str:
+        """Signal-preserving compaction of a tool observation (LLM-free)."""
+        return context.compact_observation(raw, signals)
 
     def state_summary(self) -> str:
         return self.sm.snapshot()

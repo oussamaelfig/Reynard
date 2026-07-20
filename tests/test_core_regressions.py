@@ -13,7 +13,9 @@ from hacking_agent.cli.lab_eval import DEFAULT_CASES, evaluate_case
 from hacking_agent.core.expert_playbooks import EXPERT_PLAYBOOKS, render_playbook_context
 from hacking_agent.core.failure import classify_failure
 from hacking_agent.core.lab_intel import (
+    category_playbooks,
     detect_lab_profile,
+    detect_target_category,
     extract_credentials,
     normalize_target_input,
 )
@@ -25,9 +27,9 @@ from hacking_agent.core.providers import (
     _provider_display_name,
 )
 from hacking_agent.core.schemas import AgentResult, AgentTask, PoC, ToolDecision
-from hacking_agent.core.schemas import ProviderConfig
+from hacking_agent.core.schemas import CoordinatorDecision, PivotDecision, ProviderConfig
 from hacking_agent.core.scope import ScopeGuard, ScopeViolation
-from hacking_agent.core.state_machine import StateMachine
+from hacking_agent.core.state_machine import Event, StateMachine
 from hacking_agent.core.subagents import (
     BoundedSubagentScheduler,
     SubagentPolicy,
@@ -587,6 +589,177 @@ class ToolRegressionTests(unittest.TestCase):
         finally:
             if os.path.exists(path):
                 os.remove(path)
+
+
+# =============================================================================
+# WS2/WS5 finalization: category -> agenda seeding + offline integration drive
+# =============================================================================
+
+def _build_offline_orchestrator(target, objective="", lab_profile=None,
+                                max_iterations=12):
+    """Construct an Orchestrator fully offline (dummy key, no durable DB, no
+    subagents, lexical RAG). Never makes a network call."""
+    from hacking_agent.cli.orchestrator import Orchestrator
+
+    env = {
+        "DEEPSEEK_API_KEY": "test-key",
+        "REYNARD_DURABLE_MEMORY": "0",
+        "REYNARD_EMBEDDINGS": "lexical",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        return Orchestrator(
+            target_url=target,
+            objective=objective,
+            lab_profile=lab_profile,
+            subagents_enabled=False,
+            max_iterations=max_iterations,
+        )
+
+
+class _FakeProvider:
+    """Offline stand-in for an LLMProvider (pivot/self-critique role)."""
+
+    def call_typed(self, system, user, schema, max_retries=0):
+        return schema(diagnosis="surface exhausted", give_up=True)
+
+    def call_text(self, system, user, max_retries=0):
+        return ""
+
+
+class _ScriptedCoordinator:
+    """Always routes to exploitation so the specialist outcome script drives
+    the agenda mechanics deterministically."""
+
+    def decide(self, **kwargs):
+        return CoordinatorDecision(
+            done=False,
+            next_agent="exploitation",
+            task=AgentTask(task_description="pursue active hypothesis", context={}),
+            reasoning="scripted route",
+        )
+
+
+class _ScriptedSpecialist:
+    """Returns queued success/failure outcomes, then defaults to success."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    def execute(self, task):
+        self.calls += 1
+        ok = self._outcomes.pop(0) if self._outcomes else True
+        return AgentResult(success=ok, summary="signal" if ok else "no signal")
+
+
+class CategoryAgendaSeedingTests(unittest.TestCase):
+    def test_category_playbooks_cover_non_web_categories(self):
+        self.assertEqual(
+            set(category_playbooks("network")), {"network_pentest", "metasploit"}
+        )
+        self.assertEqual(
+            set(category_playbooks("binary")),
+            {"binary_pwn", "reverse_engineering"},
+        )
+        self.assertEqual(category_playbooks("web"), ["essential_skills"])
+
+    def test_network_ip_target_seeds_category_agenda(self):
+        orch = _build_offline_orchestrator(
+            "10.10.10.10", "Enumerate services on the authorized box."
+        )
+        try:
+            self.assertEqual(orch.target_category, "network")
+            orch._seed_hypotheses()
+            agenda = orch.agenda.all()
+            self.assertTrue(agenda, "non-web target produced an empty agenda")
+            seeded = {h.vector for h in agenda
+                      if h.notes == "seed:category_playbook"}
+            self.assertTrue({"network_pentest", "metasploit"} <= seeded)
+            for h in agenda:
+                if h.notes == "seed:category_playbook":
+                    self.assertEqual(h.vuln_type, "network")
+        finally:
+            orch.logger.close()
+
+    def test_binary_bin_target_seeds_pwn_playbooks(self):
+        self.assertEqual(detect_target_category("challenge.bin", "ELF pwn"), "binary")
+        orch = _build_offline_orchestrator(
+            "challenge.bin", "Reverse engineer this ELF binary and pop a shell."
+        )
+        try:
+            self.assertEqual(orch.target_category, "binary")
+            orch._seed_hypotheses()
+            seeded = {h.vector for h in orch.agenda.all()
+                      if h.notes == "seed:category_playbook"}
+            self.assertTrue({"binary_pwn", "reverse_engineering"} <= seeded)
+        finally:
+            orch.logger.close()
+
+    def test_web_target_seeding_stays_backward_compatible(self):
+        target = "https://0abc.web-security-academy.net/"
+        profile = detect_lab_profile("Reflected XSS lab. Target: " + target, target)
+        orch = _build_offline_orchestrator(target, "Reflected XSS lab.",
+                                           lab_profile=profile)
+        try:
+            self.assertEqual(orch.target_category, "web")
+            orch._seed_hypotheses()
+            notes = {h.notes for h in orch.agenda.all()}
+            self.assertNotIn("seed:category_playbook", notes)
+            self.assertTrue(any(h.vuln_type == "xss" for h in orch.agenda.all()))
+        finally:
+            orch.logger.close()
+
+
+class OrchestratorDryRunTests(unittest.TestCase):
+    def test_offline_integration_drive(self):
+        target = "https://0abc.web-security-academy.net/"
+        profile = detect_lab_profile("Reflected XSS lab. Target: " + target, target)
+        orch = _build_offline_orchestrator(target, "Reflected XSS lab.",
+                                           lab_profile=profile, max_iterations=12)
+        try:
+            with patch("hacking_agent.cli.orchestrator.load_methodology",
+                       return_value=""), \
+                    patch("hacking_agent.cli.orchestrator.console"):
+                orch.sm.transition(Event.START, "test")
+                orch._seed_hypotheses()
+
+                # (1) hypotheses get seeded from the lab profile.
+                self.assertTrue(orch.agenda.all())
+                primary = next(h for h in orch.agenda.all()
+                               if h.notes == "seed:lab_profile")
+                self.assertEqual(primary.phase, "recon")
+
+                # A cooler alternative so demotion can backtrack to it.
+                alt = orch.agenda.add(
+                    text="Alternative vector", vuln_type="sqli", vector="category",
+                    phase="recon", heat=0.4, notes="test:alt",
+                )
+
+                orch.coordinator = _ScriptedCoordinator()
+                spec = _ScriptedSpecialist([True, False, False, False])
+                orch.specialists = {k: spec for k in orch.specialists}
+                orch.registry.get = lambda role: _FakeProvider()
+
+                # (2)+(3) coordinator step selects the hottest OPEN hypothesis
+                # and a success advances its StrategyEngine phase.
+                orch._step()
+                self.assertIs(orch.active_hypothesis, primary)
+                self.assertEqual(primary.phase, "injection")
+
+                # (4) repeated failure demotes the vector and backtracks.
+                for _ in range(3):
+                    orch._step()
+                self.assertEqual(primary.status, "demoted")
+                self.assertIs(orch._select_active_hypothesis(), alt)
+
+                # (5) report gating prevents premature done while alt untried.
+                gated = orch._intercept_done(
+                    CoordinatorDecision(done=True, reasoning="premature")
+                )
+                self.assertFalse(gated.done)
+                self.assertIsNotNone(gated.next_agent)
+        finally:
+            orch.logger.close()
 
 
 if __name__ == "__main__":

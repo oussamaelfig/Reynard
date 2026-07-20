@@ -122,10 +122,23 @@ class ScopeGuard:
                          "browser_execute_js", "browser_interact"):
             return self._dedupe([args.get("url", "")])
         if tool_name in ("capture_baseline", "diff_against_baseline",
-                         "nuclei_scan", "extract_js_endpoints"):
+                         "nuclei_scan", "extract_js_endpoints",
+                         "ffuf_fuzz", "sqlmap_run"):
             return self._dedupe([args.get("url", "")])
         if tool_name == "request_smuggling_probe":
             return self._dedupe([args.get("url", "")])
+        if tool_name == "nmap_scan":
+            return self._dedupe([args.get("target", "")])
+        if tool_name == "metasploit_run":
+            opts = args.get("options", {})
+            if isinstance(opts, dict):
+                return self._dedupe([
+                    str(opts.get("RHOSTS", "")),
+                    str(opts.get("RHOST", "")),
+                ])
+            return []
+        if tool_name == "pwn_template":
+            return self._dedupe([args.get("remote_host", "")])
         if tool_name == "discover_apis":
             return self._dedupe([args.get("base_url", "")])
         if tool_name == "caido_local_api":

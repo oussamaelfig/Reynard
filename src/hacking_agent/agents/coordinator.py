@@ -17,8 +17,11 @@ pivot to a different vector.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 
+from hacking_agent.core import context as ctx_mod
 from hacking_agent.core.expert_playbooks import render_playbook_context
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.memory import AgentMemory
@@ -106,14 +109,18 @@ class CoordinatorAgent:
         self.memory = memory
         self.sm = state_machine
         self.evidence = evidence
+        # WS4: per-turn incremental KG context (diff vs. last snapshot) instead
+        # of re-sending the full snapshot every routing turn.
+        self._ctx_snapshot: dict[str, Any] | None = None
 
     def decide(self, target_url: str,
                last_result: AgentResult | None = None,
                objective: str = "",
-               lab_profile: dict | None = None) -> CoordinatorDecision:
+               lab_profile: dict | None = None,
+               agenda_context: str = "") -> CoordinatorDecision:
         """Pick the next specialist. Validates output strictly via Pydantic."""
         prompt = self._build_user_prompt(
-            target_url, last_result, objective, lab_profile
+            target_url, last_result, objective, lab_profile, agenda_context
         )
         decision = self.provider.call_typed(
             COORDINATOR_SYSTEM, prompt, CoordinatorDecision
@@ -130,15 +137,26 @@ class CoordinatorAgent:
     def _build_user_prompt(self, target_url: str,
                             last_result: AgentResult | None,
                             objective: str = "",
-                            lab_profile: dict | None = None) -> str:
+                            lab_profile: dict | None = None,
+                            agenda_context: str = "") -> str:
+        kg_context, self._ctx_snapshot = ctx_mod.build_incremental_context(
+            self.memory, self._ctx_snapshot
+        )
         sections: list[str] = [
             f"# TARGET\n{target_url}",
             f"\n# STATE MACHINE\n{self.sm.snapshot()}",
             f"\n{render_tool_catalog('general')}",
-            f"\n{self.memory.kg_snapshot()}",
-            f"\n{self.memory.failure_summary(10)}",
+            f"\n{kg_context}",
             f"\n{self.evidence.summarize()}",
         ]
+        if agenda_context:
+            sections.append(
+                f"\n{agenda_context}\n"
+                "Prefer the hottest OPEN/ACTIVE hypothesis. Follow the forced "
+                "phase chain (RECON -> INJECTION -> CONTEXT -> ... -> EXPLOIT) "
+                "for the active vector; do not report while untried hypotheses "
+                "remain and no finding is verified."
+            )
         if objective:
             sections.insert(1, f"\n# USER OBJECTIVE\n{objective}")
         if lab_profile:

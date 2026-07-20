@@ -31,12 +31,27 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from hacking_agent.core.events import emit
+from hacking_agent.core.metering import get_token_meter
 from hacking_agent.core.schemas import ProviderConfig
 
 T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 3
+
+
+def _prompt_cache_enabled() -> bool:
+    """Provider prompt caching (Anthropic cache_control breakpoints). Default ON.
+
+    DeepSeek and other OpenAI-compatible gateways cache automatically server-side
+    on the longest stable request prefix; the agents already emit the system
+    prompt (and stable catalog/playbook prefix) first, so no per-call flag is
+    needed there. This toggle only gates the explicit Anthropic breakpoints.
+    """
+    raw = os.getenv("REYNARD_PROMPT_CACHE")
+    if raw is None or raw.strip() == "":
+        return True
+    return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
 class ProviderError(RuntimeError):
@@ -146,6 +161,27 @@ def _token_param_name(config: ProviderConfig) -> str:
     return "max_completion_tokens" if _is_openai_reasoning_chat_model(config.model) else "max_tokens"
 
 
+def _meter_and_emit(config: ProviderConfig, prompt_tokens: int, completion_tokens: int) -> None:
+    """Record token usage in the shared meter and publish a live event."""
+    prompt_tokens = int(prompt_tokens or 0)
+    completion_tokens = int(completion_tokens or 0)
+    if not (prompt_tokens or completion_tokens):
+        return
+    meter = get_token_meter()
+    meter.record(config.role, prompt_tokens, completion_tokens)
+    totals = meter.totals()
+    emit("token_usage", {
+        "agent": config.role,
+        "model": config.model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cumulative_prompt_tokens": totals["prompt_tokens"],
+        "cumulative_completion_tokens": totals["completion_tokens"],
+        "cumulative_total_tokens": totals["total_tokens"],
+        "estimated_cost_usd": meter.estimated_cost(),
+    })
+
+
 def _emit_llm_request_trace(config: ProviderConfig, *, mode: str, schema: str | None, attempt: int) -> None:
     """Print and publish a concise, secret-free LLM call trace."""
     provider = _provider_display_name(config)
@@ -184,6 +220,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig):
         self.config = config
+        # Some OpenAI-compatible gateways reject stream_options; disabled on error.
+        self._stream_usage = True
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -224,6 +262,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     kwargs["extra_body"] = {"enable_thinking": True}
 
                 kwargs["stream"] = True
+                if self._stream_usage:
+                    kwargs["stream_options"] = {"include_usage": True}
                 _emit_llm_request_trace(
                     self.config,
                     mode="typed",
@@ -237,8 +277,12 @@ class OpenAICompatibleProvider(LLMProvider):
                 
                 raw = ""
                 is_first_reasoning = True
+                usage_obj = None
                 
                 for chunk in resp:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage:
+                        usage_obj = chunk_usage
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -269,6 +313,13 @@ class OpenAICompatibleProvider(LLMProvider):
                         
                 if not is_first_reasoning:
                     console.print() # Newline after reasoning completes
+
+                if usage_obj is not None:
+                    _meter_and_emit(
+                        self.config,
+                        getattr(usage_obj, "prompt_tokens", 0),
+                        getattr(usage_obj, "completion_tokens", 0),
+                    )
 
                 data = json.loads(_strip_fence(raw))
                 validated = schema.model_validate(data)
@@ -307,6 +358,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     continue
                 if "enable_thinking" in msg:
                     self.config.enable_thinking_param = False
+                    continue
+                # Some gateways reject stream_options — retry without usage streaming.
+                if "stream_options" in msg:
+                    self._stream_usage = False
                     continue
                 # Some local servers reject response_format — retry without it.
                 if "response_format" in msg or "not supported" in msg:
@@ -352,6 +407,8 @@ class OpenAICompatibleProvider(LLMProvider):
                     kwargs["extra_body"] = {"enable_thinking": True}
                     
                 kwargs["stream"] = True
+                if self._stream_usage:
+                    kwargs["stream_options"] = {"include_usage": True}
                 _emit_llm_request_trace(
                     self.config,
                     mode="text",
@@ -365,8 +422,12 @@ class OpenAICompatibleProvider(LLMProvider):
                 
                 raw = ""
                 is_first_reasoning = True
+                usage_obj = None
                 
                 for chunk in resp:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage:
+                        usage_obj = chunk_usage
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -395,7 +456,14 @@ class OpenAICompatibleProvider(LLMProvider):
                 
                 if not is_first_reasoning:
                     console.print()
-                    
+
+                if usage_obj is not None:
+                    _meter_and_emit(
+                        self.config,
+                        getattr(usage_obj, "prompt_tokens", 0),
+                        getattr(usage_obj, "completion_tokens", 0),
+                    )
+
                 emit("llm_end", {
                     "agent": self.config.role,
                     "model": self.config.model,
@@ -412,6 +480,9 @@ class OpenAICompatibleProvider(LLMProvider):
                     continue
                 if "enable_thinking" in msg:
                     self.config.enable_thinking_param = False
+                    continue
+                if "stream_options" in msg:
+                    self._stream_usage = False
                     continue
                 if attempt < max_retries:
                     continue
@@ -444,11 +515,34 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, config: ProviderConfig):
         self.config = config
+        # Prompt caching is disabled at runtime if the API rejects cache_control.
+        self._prompt_cache = _prompt_cache_enabled()
         try:
             from anthropic import Anthropic
         except ImportError as e:
             raise ProviderError(f"anthropic package required: pip install anthropic ({e})")
         self._client = Anthropic(api_key=config.api_key, base_url=config.base_url)
+
+    def _cache_prefix(
+        self, system: str, tools: list[dict] | None = None
+    ) -> tuple[Any, list[dict] | None]:
+        """Attach cache_control breakpoints to the stable system+tools prefix.
+
+        Anthropic caches the tools then the system block, so marking both makes
+        the large, unchanging instruction/schema prefix a cache hit across turns
+        while the volatile per-turn user content stays uncached. When caching is
+        disabled the plain string/tool list is returned unchanged.
+        """
+        if not self._prompt_cache:
+            return system, tools
+        system_param: Any = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+        tools_param = tools
+        if tools:
+            tools_param = [dict(t) for t in tools]
+            tools_param[-1] = {**tools_param[-1], "cache_control": {"type": "ephemeral"}}
+        return system_param, tools_param
 
     def call_typed(self, system, user, schema, max_retries=DEFAULT_MAX_RETRIES):
         schema_json = schema.model_json_schema()
@@ -468,12 +562,13 @@ class AnthropicProvider(LLMProvider):
 
         for attempt in range(max_retries + 1):
             try:
+                system_param, tools_param = self._cache_prefix(system, [tool_def])
                 msg_kwargs: dict[str, Any] = dict(
                     model=self.config.model,
                     max_tokens=self.config.max_tokens,
                     temperature=self.config.temperature,
-                    system=system,
-                    tools=[tool_def],
+                    system=system_param,
+                    tools=tools_param,
                     tool_choice={"type": "tool", "name": "respond_with_structured_output"},
                     messages=[{"role": "user", "content": user}],
                 )
@@ -488,6 +583,13 @@ class AnthropicProvider(LLMProvider):
                     msg_kwargs["temperature"] = 1.0
                     msg_kwargs.pop("tool_choice", None)
                 resp = self._client.messages.create(**msg_kwargs)
+                usage = getattr(resp, "usage", None)
+                if usage is not None:
+                    _meter_and_emit(
+                        self.config,
+                        getattr(usage, "input_tokens", 0),
+                        getattr(usage, "output_tokens", 0),
+                    )
                 for block in resp.content:
                     if getattr(block, "type", None) == "thinking":
                         emit("reasoning_delta", {
@@ -527,6 +629,10 @@ class AnthropicProvider(LLMProvider):
                 if any(s in msg for s in ("rate", "429", "overloaded", "timeout")):
                     time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
                     continue
+                # Some endpoints/models reject cache_control — retry uncached.
+                if self._prompt_cache and "cache" in msg:
+                    self._prompt_cache = False
+                    continue
                 emit("error", {
                     "agent": self.config.role,
                     "component": "llm",
@@ -550,11 +656,12 @@ class AnthropicProvider(LLMProvider):
         })
         for attempt in range(max_retries + 1):
             try:
+                system_param, _ = self._cache_prefix(system)
                 msg_kwargs: dict[str, Any] = dict(
                     model=self.config.model,
                     max_tokens=self.config.max_tokens,
                     temperature=self.config.temperature,
-                    system=system,
+                    system=system_param,
                     messages=[{"role": "user", "content": user}],
                 )
                 if self.config.thinking_enabled:
@@ -564,6 +671,13 @@ class AnthropicProvider(LLMProvider):
                     }
                     msg_kwargs["temperature"] = 1.0
                 resp = self._client.messages.create(**msg_kwargs)
+                usage = getattr(resp, "usage", None)
+                if usage is not None:
+                    _meter_and_emit(
+                        self.config,
+                        getattr(usage, "input_tokens", 0),
+                        getattr(usage, "output_tokens", 0),
+                    )
                 parts: list[str] = []
                 for block in resp.content:
                     if getattr(block, "type", None) == "thinking":
@@ -590,6 +704,10 @@ class AnthropicProvider(LLMProvider):
                 msg = str(e).lower()
                 if attempt < max_retries and any(s in msg for s in ("rate", "429", "overloaded", "timeout")):
                     time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
+                    continue
+                # Some endpoints/models reject cache_control — retry uncached.
+                if self._prompt_cache and "cache" in msg:
+                    self._prompt_cache = False
                     continue
                 if attempt < max_retries:
                     continue
@@ -766,6 +884,10 @@ class ProviderRegistry:
                 "DEEPSEEK_API_KEY in your .env."
             )
 
+        # Default sampling controls (preserve ProviderConfig defaults if unset).
+        default_temperature = float(os.getenv("LLM_DEFAULT_TEMPERATURE", "0.0"))
+        default_max_tokens = int(os.getenv("LLM_DEFAULT_MAX_TOKENS", "4096"))
+
         # Default reasoning controls (apply unless per-role overrides set).
         default_reasoning = os.getenv("LLM_DEFAULT_REASONING_EFFORT") or None
         default_thinking = os.getenv("LLM_DEFAULT_THINKING", "false").lower() == "true"
@@ -781,6 +903,8 @@ class ProviderRegistry:
             api_key=default_key,
             base_url=default_base if default_kind == "openai-compatible" else os.getenv("LLM_DEFAULT_BASE_URL"),
             supports_json_mode=default_json,
+            temperature=default_temperature,
+            max_tokens=default_max_tokens,
             reasoning_effort=default_reasoning,
             thinking_enabled=default_thinking,
             thinking_budget_tokens=default_thinking_budget,
@@ -799,7 +923,9 @@ class ProviderRegistry:
             has_explicit_override = any(
                 os.getenv(f"{prefix}_{suffix}") is not None
                 for suffix in ("API_KEY", "MODEL", "REASONING_EFFORT",
-                               "THINKING", "ENABLE_THINKING_PARAM")
+                               "THINKING", "ENABLE_THINKING_PARAM",
+                               "TEMPERATURE", "MAX_TOKENS", "JSON_MODE",
+                               "PROVIDER", "BASE_URL")
             )
             if not has_explicit_override and role_default_effort is None:
                 continue
@@ -831,6 +957,8 @@ class ProviderRegistry:
             enable_thinking_param = os.getenv(
                 f"{prefix}_ENABLE_THINKING_PARAM", str(default_enable_thinking_param)
             ).lower() == "true"
+            temperature = float(os.getenv(f"{prefix}_TEMPERATURE", str(default_temperature)))
+            max_tokens = int(os.getenv(f"{prefix}_MAX_TOKENS", str(default_max_tokens)))
 
             configs[role] = ProviderConfig(
                 role=role,
@@ -841,6 +969,8 @@ class ProviderRegistry:
                 api_key=os.getenv(f"{prefix}_API_KEY") or cls._provider_key(requested_provider) or default_key,
                 base_url=base_url if kind == "openai-compatible" else os.getenv(f"{prefix}_BASE_URL"),
                 supports_json_mode=json_mode,
+                temperature=temperature,
+                max_tokens=max_tokens,
                 reasoning_effort=effort,
                 thinking_enabled=thinking_enabled,
                 thinking_budget_tokens=thinking_budget,
@@ -855,6 +985,15 @@ class ProviderRegistry:
         if cache_key not in self._cache:
             self._cache[cache_key] = self._build(cfg)
         return self._cache[cache_key]
+
+    def config(self, role: str = "default") -> ProviderConfig:
+        """Return the resolved ProviderConfig for a role (falls back to default).
+
+        Exposed so the legacy single-agent CLI (cli/agent.py) can build its
+        OpenAI client from the SAME configuration source as the multi-agent
+        path, eliminating behavioural drift between the two LLM stacks.
+        """
+        return self._configs.get(role) or self._configs["default"]
 
     @staticmethod
     def _build(cfg: ProviderConfig) -> LLMProvider:

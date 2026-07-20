@@ -174,6 +174,8 @@ HTML = r"""<!doctype html>
         <div class="metric"><span>Tool Calls</span><strong id="toolCount">0</strong></div>
         <div class="metric"><span>Searches</span><strong id="searchCount">0</strong></div>
         <div class="metric"><span>Findings</span><strong id="findingCount">0</strong></div>
+        <div class="metric"><span>Tokens</span><strong id="tokenCount">0</strong></div>
+        <div class="metric"><span>Est. Cost (USD)</span><strong id="costEstimate">$0</strong></div>
         <h3>Tools</h3>
         <div id="tools"><div class="empty">No tool calls yet.</div></div>
         <h3>Facts</h3>
@@ -182,7 +184,7 @@ HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { events: 0, tools: 0, searches: 0, findings: 0, toolCounts: new Map(), facts: new Map() };
+    const state = { events: 0, tools: 0, searches: 0, findings: 0, tokens: 0, cost: 0, toolCounts: new Map(), facts: new Map() };
     const el = (id) => document.getElementById(id);
     const timeline = el("timeline");
     const reasoning = el("reasoning");
@@ -207,6 +209,8 @@ HTML = r"""<!doctype html>
       el("toolCount").textContent = state.tools;
       el("searchCount").textContent = state.searches;
       el("findingCount").textContent = state.findings;
+      el("tokenCount").textContent = state.tokens.toLocaleString();
+      el("costEstimate").textContent = `$${state.cost.toFixed(4)}`;
       const tools = el("tools");
       tools.innerHTML = state.toolCounts.size ? "" : `<div class="empty">No tool calls yet.</div>`;
       [...state.toolCounts.entries()].sort((a,b)=>b[1]-a[1]).forEach(([name,count]) => {
@@ -249,6 +253,14 @@ HTML = r"""<!doctype html>
         state.toolCounts.set(name, (state.toolCounts.get(name) || 0) + 1);
       }
       if (event.type === "web_search" && event.payload?.stage !== "start") state.searches++;
+      if (event.type === "token_usage") {
+        if (typeof event.payload?.cumulative_total_tokens === "number") state.tokens = event.payload.cumulative_total_tokens;
+        if (typeof event.payload?.estimated_cost_usd === "number") state.cost = event.payload.estimated_cost_usd;
+      }
+      if ((event.type === "session_end" || event.type === "budget_exceeded")) {
+        if (typeof event.payload?.total_tokens === "number") state.tokens = event.payload.total_tokens;
+        if (typeof event.payload?.estimated_cost_usd === "number") state.cost = event.payload.estimated_cost_usd;
+      }
       if (event.type === "memory_fact") state.facts.set(event.payload.key, event.payload.value);
       if (event.type === "finding") state.findings++;
       addLine(event);
@@ -258,7 +270,7 @@ HTML = r"""<!doctype html>
     source.onopen = () => el("conn").textContent = "live";
     source.onerror = () => el("conn").textContent = "reconnecting";
     source.onmessage = (msg) => handle(JSON.parse(msg.data));
-    ["session_start","session_end","agent_start","agent_result","llm_start","llm_end","llm_validation_error","tool_start","tool_result","tool_blocked","web_search","web_fetch","memory_fact","finding","state","error","reasoning_note","reasoning_delta"].forEach(type => {
+    ["session_start","session_end","agent_start","agent_result","llm_start","llm_end","llm_validation_error","tool_start","tool_result","tool_blocked","web_search","web_fetch","memory_fact","finding","state","error","reasoning_note","reasoning_delta","token_usage","budget_exceeded"].forEach(type => {
       source.addEventListener(type, (msg) => handle(JSON.parse(msg.data)));
     });
   </script>

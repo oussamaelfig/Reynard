@@ -104,6 +104,68 @@ class SessionRegistry:
             self._sessions[session.name] = session
             return f"Session '{session.name}' registered (jar={jar}, role={session.role_hint})."
 
+    def register_session(
+        self,
+        name: str,
+        role_hint: str = "unknown",
+        description: str = "",
+        static_headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        cookie_domain: str = "",
+        cookie_header: str = "",
+        set_active: bool = False,
+        overwrite: bool = True,
+    ) -> str:
+        """Create (or overwrite) a named session mid-run.
+
+        Cookies can be supplied three ways (any combination):
+          - `cookies` dict + `cookie_domain` -> written to the Netscape jar
+          - `cookie_header` string ("a=b; c=d") -> stored as a static Cookie header
+          - `static_headers` -> e.g. {"Authorization": "Bearer ..."}
+        This is the primitive multi-user IDOR / authz labs use to hold several
+        identities at once (pair with swap_session).
+        """
+        headers = dict(static_headers or {})
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+        sess = AuthSession(
+            name=name,
+            description=description,
+            static_headers=headers,
+            role_hint=role_hint,
+        )
+        msgs = [self.register(sess, overwrite=overwrite)]
+        if cookies:
+            msgs.append(self.write_cookies(name, cookies, cookie_domain))
+        if set_active:
+            msgs.append(self.set_active(name))
+        return " ".join(msgs)
+
+    def write_cookies(self, name: str, cookies: dict[str, str],
+                      domain: str = "") -> str:
+        """Write a cookies dict into a session's Netscape cookie jar."""
+        with self._lock:
+            sess = self._sessions.get(name)
+            if not sess:
+                return f"Unknown session '{name}'"
+            jar = sess.cookie_jar_path()
+            dom = domain or "localhost"
+            dom = dom if dom.startswith(".") else dom
+            lines = ["# Netscape HTTP Cookie File"]
+            for ck_name, ck_value in cookies.items():
+                lines.append(
+                    "\t".join([dom, "TRUE", "/", "TRUE", "0", str(ck_name), str(ck_value)])
+                )
+            payload = "\n".join(lines) + "\n"
+            import base64
+            b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+            cmd = (f"mkdir -p {os.path.dirname(jar)} && "
+                    f"echo {b64} | base64 -d > {jar}")
+            rc, _, err = _docker_exec(cmd, timeout=15)
+            if rc != 0:
+                return f"Failed to write cookies into container: {err}"
+            return f"Wrote {len(cookies)} cookie(s) into session '{name}' jar."
+
     def import_cookies_from_host(self, name: str, host_path: str) -> str:
         """Copy a cookies file from the host into the container session jar."""
         with self._lock:

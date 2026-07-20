@@ -37,6 +37,168 @@ COMMON_PORTSWIGGER_USERS = {
     "victim", "attacker",
 }
 
+# ---------------------------------------------------------------------------
+# Target-category profiler (web / network / binary / mobile / crypto /
+# stego / forensics / misc). Web detection stays fully backward-compatible:
+# PortSwigger hosts and clear web signals still resolve to CATEGORY_WEB.
+# ---------------------------------------------------------------------------
+CATEGORY_WEB = "web"
+CATEGORY_NETWORK = "network"
+CATEGORY_BINARY = "binary"
+CATEGORY_MOBILE = "mobile"
+CATEGORY_CRYPTO = "crypto"
+CATEGORY_STEGO = "stego"
+CATEGORY_FORENSICS = "forensics"
+CATEGORY_MISC = "misc"
+
+CATEGORIES = (
+    CATEGORY_WEB, CATEGORY_NETWORK, CATEGORY_BINARY, CATEGORY_MOBILE,
+    CATEGORY_CRYPTO, CATEGORY_STEGO, CATEGORY_FORENSICS, CATEGORY_MISC,
+)
+
+# When two categories tie on score, earlier entries win (more specific first).
+_CATEGORY_PRIORITY = (
+    CATEGORY_MOBILE, CATEGORY_BINARY, CATEGORY_FORENSICS, CATEGORY_STEGO,
+    CATEGORY_CRYPTO, CATEGORY_NETWORK, CATEGORY_WEB,
+)
+
+_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    CATEGORY_MOBILE: (
+        "apk", ".apk", "android", "androidmanifest", "dalvik", "smali",
+        "apktool", "jadx", "frida", "objection", ".ipa", ".dex", ".aab",
+        "mobile app", "play store", "root detection", "ssl pinning",
+    ),
+    CATEGORY_BINARY: (
+        "pwn", "buffer overflow", "stack overflow", "heap overflow", "rop",
+        "ret2", "shellcode", "gadget", "format string", "strcpy", "gets(",
+        "radare", "ghidra", "gdb", "disassemble", "reverse engineer",
+        "reverse-engineering", "reverse engineering", ".elf", "binary exploitation",
+        "canary", "nx bit", "aslr", "got overwrite", "use-after-free",
+        "heap exploitation", "pwntools", "one_gadget", "libc",
+    ),
+    CATEGORY_CRYPTO: (
+        "rsa", "aes", "3des", "xor cipher", "ciphertext", "plaintext",
+        "decrypt", "encryption", "cryptograph", "discrete log",
+        "elliptic curve", "ecdsa", "ecb", "cbc", "ctr mode", "padding oracle",
+        "modulus", "public key", "private key", "factorize", "factordb",
+        "nonce reuse", "one-time pad", "caesar", "vigenere",
+        "substitution cipher", "affine cipher",
+    ),
+    CATEGORY_STEGO: (
+        "steg", "steganography", "steghide", "zsteg", "lsb",
+        "least significant bit", "hidden in the image", "hidden message",
+        "spectrogram", "stegsolve", "outguess", "exiftool", "exif data",
+    ),
+    CATEGORY_FORENSICS: (
+        "forensic", "pcap", "pcapng", "wireshark", "tshark",
+        "network capture", "packet capture", "memory dump", "memdump",
+        "volatility", "disk image", "file carving", ".raw image", ".mem",
+        "autopsy", "registry hive", "evtx", "recover deleted", "binwalk",
+        "foremost",
+    ),
+    CATEGORY_NETWORK: (
+        "nmap", "port scan", "portscan", " smb", "samba", " ssh", " ftp",
+        "telnet", "rdp", "snmp", "service enumeration", "metasploit",
+        "msfconsole", "msfvenom", "active directory", "kerberos", "ldap",
+        "netbios", "reverse shell", "bind shell", "privilege escalation",
+        "lateral movement", "/24", "subnet", "open port",
+    ),
+    CATEGORY_WEB: (
+        "http://", "https://", "cookie", "xss", "sql injection", "sqli",
+        "csrf", "ssrf", "web app", "login page", "api endpoint", "jwt",
+        ".php", "javascript", "http header", "query parameter", "file upload",
+        "graphql", "oauth", "cors", "web-security-academy", "portswigger",
+        "request smuggling", "ssti", "path traversal", "deserialization",
+    ),
+}
+
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$")
+_HOST_PORT_RE = re.compile(r"^[a-zA-Z0-9.-]+:\d+$")
+_MOBILE_EXTS = (".apk", ".ipa", ".dex", ".aab")
+_BINARY_EXTS = (".elf", ".bin", ".exe", ".so", ".o", ".out")
+_STEGO_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".wav", ".mp3")
+_FORENSICS_EXTS = (".pcap", ".pcapng", ".raw", ".mem", ".dmp", ".vmem", ".e01", ".evtx")
+
+_CATEGORY_PLAYBOOKS: dict[str, list[str]] = {
+    CATEGORY_WEB: ["essential_skills"],
+    CATEGORY_NETWORK: ["network_pentest", "metasploit"],
+    CATEGORY_BINARY: ["binary_pwn", "reverse_engineering"],
+    CATEGORY_MOBILE: ["mobile_android"],
+    CATEGORY_CRYPTO: ["crypto"],
+    CATEGORY_STEGO: ["stego"],
+    CATEGORY_FORENSICS: ["forensics"],
+    CATEGORY_MISC: ["ctf_misc"],
+}
+
+
+def category_playbooks(category: str) -> list[str]:
+    """Return the ordered playbook keys associated with a target category."""
+    return list(_CATEGORY_PLAYBOOKS.get((category or "").strip().lower(), []))
+
+
+def _target_shape_scores(target: str) -> dict[str, int]:
+    """Score categories from the *shape* of the target token alone."""
+    scores: dict[str, int] = {}
+    token = (target or "").strip()
+    if not token:
+        return scores
+    lower = token.lower()
+    if lower.startswith(("http://", "https://")):
+        scores[CATEGORY_WEB] = scores.get(CATEGORY_WEB, 0) + 2
+    if lower.endswith(_MOBILE_EXTS):
+        scores[CATEGORY_MOBILE] = scores.get(CATEGORY_MOBILE, 0) + 3
+    elif lower.endswith(_BINARY_EXTS):
+        scores[CATEGORY_BINARY] = scores.get(CATEGORY_BINARY, 0) + 3
+    elif lower.endswith(_FORENSICS_EXTS):
+        scores[CATEGORY_FORENSICS] = scores.get(CATEGORY_FORENSICS, 0) + 3
+    elif lower.endswith(_STEGO_EXTS):
+        scores[CATEGORY_STEGO] = scores.get(CATEGORY_STEGO, 0) + 2
+    if "://" not in lower:
+        if _IPV4_RE.match(lower):
+            scores[CATEGORY_NETWORK] = scores.get(CATEGORY_NETWORK, 0) + 2
+        elif _HOST_PORT_RE.match(lower):
+            scores[CATEGORY_NETWORK] = scores.get(CATEGORY_NETWORK, 0) + 1
+    return scores
+
+
+def detect_target_category(target: str, objective: str = "") -> str:
+    """Classify an objective/target into one of ``CATEGORIES``.
+
+    Deterministic keyword + target-shape scorer. PortSwigger hosts and clear
+    web signals resolve to ``CATEGORY_WEB`` so existing web detection is
+    preserved. Returns ``CATEGORY_MISC`` when no signal is found.
+    """
+    haystack = f" {(objective or '').lower()} {(target or '').lower()} "
+
+    parsed_host = ""
+    token = (target or "").strip()
+    if token:
+        parsed = urlparse(token if "://" in token else f"http://{token}")
+        parsed_host = (parsed.hostname or "").lower()
+    if "web-security-academy.net" in parsed_host or "portswigger" in haystack:
+        return CATEGORY_WEB
+
+    scores: dict[str, int] = {c: 0 for c in _CATEGORY_PRIORITY}
+    for category, needles in _CATEGORY_KEYWORDS.items():
+        for needle in needles:
+            if needle in haystack:
+                scores[category] += 1
+    for category, bonus in _target_shape_scores(target).items():
+        scores[category] = scores.get(category, 0) + bonus
+
+    best = max(scores.values()) if scores else 0
+    if best <= 0:
+        if parsed_host and (_IPV4_RE.match(token.lower()) or _HOST_PORT_RE.match(token.lower())):
+            return CATEGORY_NETWORK
+        if token.lower().startswith(("http://", "https://")):
+            return CATEGORY_WEB
+        return CATEGORY_MISC
+
+    for category in _CATEGORY_PRIORITY:
+        if scores.get(category, 0) == best:
+            return category
+    return CATEGORY_MISC
+
 
 def extract_first_url(text: str) -> str:
     """Return the first URL in text, trimmed for common sentence punctuation."""
@@ -131,6 +293,7 @@ def _portswigger_profile(raw: str, profile: dict) -> dict:
             profile["credentials_hint"] = (
                 f"{credentials[0]['username']}:{credentials[0]['password']}"
             )
+    profile.setdefault("category", CATEGORY_WEB)
     return enrich_lab_profile(profile, raw)
 
 

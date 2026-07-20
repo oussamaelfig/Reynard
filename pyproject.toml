@@ -15,6 +15,16 @@ dependencies = [
   "python-dotenv>=1.0.0",
   "pydantic>=2.5.0",
   "anthropic>=0.40.0",
+  "playwright>=1.40.0",
+]
+
+# Optional extras. The base install works without these: local RAG
+# (core/knowledge.py) auto-falls back to a pure-Python BM25 retriever, and the
+# Ollama embedding backend needs no PyPI dependency (just OLLAMA_BASE_URL).
+[project.optional-dependencies]
+rag = [
+  "sentence-transformers>=2.2.0",  # local all-MiniLM-L6-v2 embeddings
+  "numpy>=1.24.0",
 ]
 
 [project.scripts]

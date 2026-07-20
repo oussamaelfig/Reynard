@@ -16,6 +16,7 @@ messages, response headers, and parameter behaviour.
 from __future__ import annotations
 
 from hacking_agent.agents.base import BaseAgent
+from hacking_agent.core import context
 from hacking_agent.core.schemas import AgentResult, AgentTask, AnalystOutput, Vulnerability
 from hacking_agent.core.tool_catalog import render_tool_catalog
 
@@ -134,18 +135,23 @@ class AnalystAgent(BaseAgent):
         )
 
     def _build_prompt(self, task: AgentTask) -> str:
-        playbook_section = ""
+        stable = [f"# TASK\n{task.task_description}"]
         if task.context.get("expert_playbook"):
-            playbook_section = f"{task.context['expert_playbook']}\n\n"
-        return (
-            f"# TASK\n{task.task_description}\n\n"
-            f"{playbook_section}"
-            f"{render_tool_catalog('exploitation')}\n\n"
-            f"{self.kg_summary()}\n\n"
-            "# OUTPUT\n"
+            stable.append(f"\n{task.context['expert_playbook']}")
+        if task.context.get("hypothesis_agenda"):
+            stable.append(f"\n{task.context['hypothesis_agenda']}")
+        if task.context.get("tool_recommendations"):
+            stable.append(f"\n{task.context['tool_recommendations']}")
+        if task.context.get("methodology"):
+            stable.append(f"\n{task.context['methodology']}")
+        stable.append(f"\n{render_tool_catalog('exploitation')}")
+        volatile = [
+            f"\n{self.kg_summary()}",
+            "\n# OUTPUT\n"
             "Return a SINGLE AnalystOutput JSON. Each Vulnerability MUST "
-            "reference an existing target_entity_id from the KG above."
-        )
+            "reference an existing target_entity_id from the KG above.",
+        ]
+        return context.assemble_prompt(stable, volatile)
 
     def _fast_portswigger_sqli_hidden_data(
         self, task: AgentTask, lab_profile: dict

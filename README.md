@@ -12,7 +12,7 @@
   <img alt="Authorized Use" src="https://img.shields.io/badge/Authorized%20Use-Only-E53935?style=for-the-badge">
 </p>
 
-Reynard is a structured multi-agent hacking assistant that runs against **authorized CTF, lab, and pentest targets**. It combines LLM reasoning with a Kali Docker runtime, live dashboard, persistent memory, payload deduplication, web research, Caido local/Cloud integrations, optional Burp MCP fallback hooks, and a curated tool-selection catalog.
+Reynard is a structured multi-agent hacking assistant that runs against **authorized CTF, lab, and pentest targets**. It combines LLM reasoning with a Kali Docker runtime, a **real headless Chromium browser** (DOM/JS with `alert()` capture), **automatic tool selection**, **structured scanner parsing**, **local RAG over the methodology corpus**, **durable cross-run memory**, a **hypothesis-agenda orchestrator** (phase chaining, backtracking, pivot, and self-critique), **cross-domain support** (web / network / pwn / mobile / CTF), and **token/cost metering with budget caps**.
 
 > **Use only on systems you own, intentionally vulnerable labs, CTF infrastructure, or targets where you have explicit written authorization.**
 
@@ -32,6 +32,15 @@ Reynard is a structured multi-agent hacking assistant that runs against **author
 - 🧵 **Bounded subagents**: safe profile/readiness/analysis lanes run in parallel; exploitation remains serialized unless a race-condition playbook explicitly opts in.
 - ☁️ **Caido support**: local Replay/history bridge for testing plus Cloud API for user/team/workspace/subscription/PAT operations.
 - 🧩 **Burp MCP fallback**: traffic/repeater/intruder/collaborator tools when the Burp MCP extension is online.
+- 🌐 **Real browser**: headless Chromium via Playwright runs inside the container for genuine DOM/JS execution and XSS `alert()` proof (`browser_navigate` / `browser_execute_js` / `browser_interact`).
+- 🎯 **Automatic tool selection**: a deterministic selector recommends the best tools per vuln-class/phase/tech stack at each phase entry (`recommend_tools`).
+- 🧷 **Structured scanner parsing**: `ffuf`, `sqlmap`, `nmap`, and `nuclei` output is parsed into structured signals instead of raw text.
+- 📚 **RAG methodology retrieval**: the `methodologies/` corpus is chunked, embedded (sentence-transformers → Ollama → BM25 fallback), and retrieved per active hypothesis + phase.
+- 🗃️ **Durable cross-run memory**: an opt-in-safe SQLite store remembers verified techniques and dead-ends per target/lab-class and rehydrates them on the next run.
+- 🧭 **Hypothesis-agenda orchestration**: a first-class ranked agenda drives the 6-phase StrategyEngine with real backtracking (failed vectors are demoted), a high-reasoning `pivot` role when stuck, and one self-critique pass before ever concluding failure. Report gating blocks premature "done" while untried vectors remain.
+- 🌍 **Cross-domain targets**: a category profiler routes web / network / pwn(binary) / mobile / crypto / stego / forensics / CTF-misc targets, each seeding a category-appropriate agenda (`metasploit_run`, `radare2_analyze`, `gdb_debug`, `pwn_template`, `apk_decompile`, `frida_hook`, `stego_extract`, `hash_crack`, `crypto_helper`, `forensics_triage`, `flag_hunter`, …).
+- 💰 **Token/cost metering + budgets**: every LLM call is metered; `LLM_MAX_TOKENS_BUDGET` / `LLM_MAX_COST_BUDGET` force a final report when exceeded.
+- 📊 **Live solve-rate eval**: `reynard-lab-eval --live` runs real end-to-end labs and emits a solved/attempted scorecard (offline mode remains a readiness check).
 
 ---
 
@@ -82,7 +91,7 @@ flowchart LR
 reynard/
 |-- agent.py                 # Single-agent compatibility launcher
 |-- orchestrator.py          # Multi-agent launcher
-|-- Dockerfile               # Kali image with tools, Lightpanda, Z4nzu HackingTool
+|-- Dockerfile               # Kali image with tools, headless Chromium (Playwright), Z4nzu HackingTool
 |-- docker-compose.yml       # Starts container named reynard-kali
 |-- requirements.txt         # Python dependencies
 |-- pyproject.toml           # Package metadata
@@ -126,6 +135,14 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+Optional: install the local RAG vector backend (sentence-transformers) for
+higher-quality methodology retrieval. Without it, retrieval falls back to
+pure-Python BM25:
+
+```powershell
+pip install "reynard[rag]"
+```
+
 ### 3. Build and start the Kali runtime
 
 ```powershell
@@ -140,7 +157,17 @@ The container is named:
 reynard-kali
 ```
 
-The image can be large and the first build can take a long time because it installs Kali packages, Go tools, Lightpanda, and the Z4nzu HackingTool repository.
+The image can be large and the first build can take a long time because it installs Kali packages, Go tools, the Z4nzu HackingTool repository, headless **Chromium via Playwright** (real DOM/JS + `alert()` capture), and the cross-domain toolchain (`gdb`/`pwntools`, `radare2`, `apktool`/`jadx`/`frida`, `exiftool`, `tshark`, `steghide`, `zsteg`, `hashcat`/`john`). The build fails loudly if Playwright/Chromium or any required Go binary is missing.
+
+### Verify the runtime (preflight)
+
+Before a live run, validate provider config, scope, Kali tools, Chromium/Playwright, and the Caido bridge — then exit:
+
+```powershell
+python orchestrator.py --preflight "https://TARGET"
+```
+
+`--preflight` prints a readiness score (0–100) and per-tool status and exits without dispatching any specialist.
 
 ### 4. Run the multi-agent orchestrator
 
@@ -176,6 +203,21 @@ reynard-lab-eval --pretty
 
 The default evaluator suite covers every PortSwigger topic mapped in
 `docs/portswigger-coverage-matrix.md`.
+
+#### Live solve-rate scorecard (`--live`)
+
+The offline check validates readiness; `--live` runs the **real** multi-agent
+orchestrator against a config-listed set of labs and writes a solved/attempted
+scorecard (JSON + markdown) under `logs/`:
+
+```powershell
+reynard-lab-eval --live --config .\eval\labs.sample.yaml --per-lab-timeout 900 --max-total-seconds 0 --max-iterations 30
+```
+
+- `--config` — JSON/YAML list of labs (see `eval/labs.sample.yaml`; credentials come from env, never hardcoded).
+- `--per-lab-timeout` — per-lab wall-clock cap (env `EVAL_PER_LAB_TIMEOUT`, default 900s, 0 = none).
+- `--max-total-seconds` — stop launching new labs after this budget (env `EVAL_MAX_TOTAL_SECONDS`, 0 = unlimited).
+- `--max-iterations` — default per-lab dispatch budget (labs may override).
 
 ```powershell
 python orchestrator.py --ui --no-oob --max-iterations 25 "Solve this authorized PortSwigger Web Security Academy lab: SQL injection vulnerability in WHERE clause allowing retrieval of hidden data. Target: https://YOUR-LAB.web-security-academy.net/"
@@ -431,6 +473,94 @@ Reynard falls back to DuckDuckGo HTML search.
 For blind XXE/SSRF/CMDi labs, do **not** use `--no-oob`; the agent needs OOB
 callbacks through `interactsh-client`, Burp Collaborator, or another approved
 callback service.
+
+---
+
+## ⚙️ Environment Variables
+
+All of these are optional and have safe defaults — see `.env.example` for the
+authoritative, commented list. Grouped by subsystem:
+
+### Sampling / reasoning
+
+```env
+LLM_DEFAULT_TEMPERATURE=0.0          # preserved default 0.0
+LLM_DEFAULT_MAX_TOKENS=4096          # preserved default 4096
+LLM_DEFAULT_REASONING_EFFORT=high    # per-role *_REASONING_EFFORT also supported
+LLM_DEFAULT_THINKING=false
+LLM_DEFAULT_THINKING_BUDGET=8000
+```
+
+Every role (`coordinator`, `recon`, `analyst`, `exploitation`, `validator`,
+`reporter`, `pivot`) accepts the same suffixes, e.g. `LLM_EXPLOITATION_MAX_TOKENS`.
+
+### Token / cost metering + budget caps
+
+```env
+LLM_INPUT_PRICE_PER_1K=0             # per-1k-token input price (for cost est.)
+LLM_OUTPUT_PRICE_PER_1K=0            # per-1k-token output price
+LLM_MAX_TOKENS_BUDGET=0             # 0 = disabled; forces final report when hit
+LLM_MAX_COST_BUDGET=0              # 0 = disabled; forces final report when hit
+```
+
+### RAG methodology retrieval
+
+```env
+REYNARD_EMBEDDINGS=auto             # sentence-transformers | ollama | lexical | auto
+REYNARD_EMBEDDINGS_MODEL=           # override embedding model name
+OLLAMA_BASE_URL=http://localhost:11434  # used by the ollama embedding backend
+```
+
+Install the optional local vector backend with `pip install "reynard[rag]"`.
+Without it, retrieval degrades gracefully to pure-Python BM25.
+
+### Durable cross-run memory
+
+```env
+REYNARD_DURABLE_MEMORY=1            # set 0/false to disable the SQLite store
+REYNARD_MEMORY_DB=logs/reynard_memory.db  # durable store path
+```
+
+### Context management & prompt caching
+
+```env
+REYNARD_CONTEXT_COMPACTION=1        # signal-preserving observation compaction
+REYNARD_CONTEXT_MAX_CHARS=6000      # per-observation budget
+REYNARD_CONTEXT_KG_DIFF=1           # send KG diffs after the first turn
+REYNARD_PROMPT_CACHE=1              # Anthropic cache_control breakpoints
+REYNARD_FEWSHOT_EXPLOITS=0          # opt-in few-shot exploit transcripts
+```
+
+### Orchestration strategy (hypothesis agenda / report gating)
+
+```env
+REYNARD_REPORT_GATING=1             # gate premature reports while vectors remain
+REYNARD_MAX_REPORT_GATES=6          # safety cap on gated reports per run
+REYNARD_INNER_BUDGET=0              # inner-loop tool budget floor (0 = defaults)
+LLM_PIVOT_PROVIDER=                 # the high-reasoning "stuck" escalation role
+LLM_PIVOT_MODEL=
+LLM_PIVOT_REASONING_EFFORT=xhigh
+```
+
+### Cross-domain / CTF
+
+```env
+REYNARD_FLAG_REGEX=(?:flag|ctf|key|htb|pico|thm)\{[^}]{1,120}\}  # flag_hunter format
+```
+
+### Browser (headless Chromium)
+
+```env
+BROWSER_EXEC_TIMEOUT=90             # max seconds per browser job
+# PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium   # explicit binary (optional)
+```
+
+### Live eval harness
+
+```env
+EVAL_PER_LAB_TIMEOUT=900            # per-lab wall-clock timeout (CLI: --per-lab-timeout)
+EVAL_MAX_TOTAL_SECONDS=0            # global wall-clock budget (0 = unlimited)
+```
 
 ---
 

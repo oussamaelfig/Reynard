@@ -24,3 +24,32 @@ pydantic>=2.5.0
 
 # Anthropic SDK (optional — only needed if using Claude as a provider)
 anthropic>=0.40.0
+
+# Playwright drives the headless Chromium browser (browser_* tools). The
+# Python package is installed here; the Chromium binary + OS deps are installed
+# inside the Kali container by the Dockerfile (`playwright install --with-deps
+# chromium`), since the browser runs in-container.
+playwright>=1.40.0
+
+# =============================================================================
+# OPTIONAL — Local RAG embeddings (WS3, core/knowledge.py)
+# =============================================================================
+# All imports are guarded. Without these, RAG auto-falls back to a pure-Python
+# BM25 lexical retriever, so the base install works offline with zero API cost.
+# For best retrieval quality, install the sentence-transformers backend:
+#   pip install "reynard[rag]"     (or uncomment the two lines below)
+# The Ollama backend (REYNARD_EMBEDDINGS=ollama, nomic-embed-text) needs NO
+# PyPI dependency — only a reachable OLLAMA_BASE_URL.
+# sentence-transformers>=2.2.0
+# numpy>=1.24.0
+
+# =============================================================================
+# Cross-domain tooling (WS5) is CONTAINER-SIDE, not host pip deps.
+# =============================================================================
+# The network/pwn, mobile, and CTF-misc tools (metasploit_run, radare2_analyze,
+# gdb_debug, pwn_template, apk_decompile, apk_analyze, frida_hook, stego_extract,
+# hash_crack, forensics_triage) shell out to binaries installed INSIDE the Kali
+# container by the Dockerfile: metasploit, radare2/rabin2, gdb, pwntools,
+# apktool/jadx, frida, steghide/zsteg/binwalk/foremost, exiftool, tshark, john,
+# hashcat. The crypto_helper tool runs on the host and uses only the standard
+# library, so no additional host packages are required.

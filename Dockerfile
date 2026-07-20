@@ -22,6 +22,9 @@ ENV TERM=xterm-256color
 # ---------------------------------------------------------------------------
 # 2. Update repos and install core system dependencies
 # ---------------------------------------------------------------------------
+# tshark is non-interactive-safe when dumpcap is not setuid (we only read pcaps).
+RUN echo "wireshark-common wireshark-common/install-setuid boolean false" | debconf-set-selections
+
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     # Core utilities
     git curl wget unzip jq tree vim nano tmux \
@@ -40,12 +43,12 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     proxychains4 tor \
     # Wireless (useful for some tools even in containers)
     aircrack-ng \
-    # Reverse engineering
-    radare2 binwalk \
+    # Reverse engineering + debugging (pwn/rev workflows)
+    radare2 binwalk gdb gdb-multiarch \
     # Password cracking
     john hashcat hydra \
-    # Forensics
-    foremost steghide \
+    # Forensics (steghide/foremost + exiftool metadata + tshark for pcap)
+    foremost steghide libimage-exiftool-perl tshark \
     # Man-in-the-middle
     bettercap ettercap-text-only \
     # Android tools
@@ -56,8 +59,12 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     sslscan testssl.sh \
     # Container/process tools
     procps \
-    # Frida for Android instrumentation
-    && pip3 install --break-system-packages frida-tools objection \
+    # Frida for Android instrumentation + pwntools for binary exploitation
+    && pip3 install --break-system-packages frida-tools objection pwntools \
+    # zsteg (Ruby) for PNG/BMP LSB steganography
+    && gem install zsteg \
+    # Make rockyou immediately usable for hash_crack (Kali ships it gzipped)
+    && (gzip -dkf /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true) \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -74,14 +81,23 @@ RUN git clone https://github.com/Z4nzu/hackingtool.git /opt/hackingtool \
 ENV GOPATH=/root/go
 ENV PATH=$PATH:/usr/local/go/bin:/root/go/bin
 
-RUN go install github.com/tomnomnom/httprobe@latest 2>/dev/null || true \
-    && go install github.com/tomnomnom/waybackurls@latest 2>/dev/null || true \
-    && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest 2>/dev/null || true \
-    && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest 2>/dev/null || true \
-    && go install github.com/projectdiscovery/httpx/cmd/httpx@latest 2>/dev/null || true \
-    && go install github.com/ffuf/ffuf/v2@latest 2>/dev/null || true \
-    && go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest 2>/dev/null || true \
-    && ln -sf /root/go/bin/interactsh-client /usr/local/bin/interactsh-client 2>/dev/null || true
+# Fail the build loudly if any required Go tool does not install — a silently
+# missing binary here breaks recon at runtime and is much harder to diagnose.
+RUN go install github.com/tomnomnom/httprobe@latest \
+    && go install github.com/tomnomnom/waybackurls@latest \
+    && go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+    && go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
+    && go install github.com/projectdiscovery/httpx/cmd/httpx@latest \
+    && go install github.com/ffuf/ffuf/v2@latest \
+    && go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest \
+    && ln -sf /root/go/bin/interactsh-client /usr/local/bin/interactsh-client
+
+# Verify every required Go binary is present and on PATH; abort the build if not.
+RUN set -eux; \
+    for bin in httprobe waybackurls nuclei subfinder httpx ffuf interactsh-client; do \
+        command -v "$bin" >/dev/null 2>&1 \
+            || { echo "FATAL: required Go tool '$bin' missing after install" >&2; exit 1; }; \
+    done
 
 # ---------------------------------------------------------------------------
 # 5. Create persistent data directories
@@ -90,12 +106,17 @@ RUN mkdir -p /data/cookies /data/loot /data/scripts /data/logs \
     /data/methodologies /data/sessions /data/reports /data/oob
 
 # ---------------------------------------------------------------------------
-# 6. Install Lightpanda headless browser (AI-optimized, JS via v8)
-#    https://github.com/lightpanda-io/browser
+# 6. Install headless Chromium via Playwright (real DOM/JS + alert() capture)
+#    The browser runs INSIDE this container; tools.py drives it over docker exec.
 # ---------------------------------------------------------------------------
-RUN curl -L -o /usr/local/bin/lightpanda \
-    https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux \
-    && chmod +x /usr/local/bin/lightpanda
+RUN pip3 install --break-system-packages playwright \
+    && playwright install --with-deps chromium
+
+# Verify Playwright + Chromium are usable; abort the build loudly if not.
+RUN set -eux; \
+    python3 -c "from playwright.sync_api import sync_playwright; \
+p=sync_playwright().start(); b=p.chromium.launch(args=['--no-sandbox']); \
+b.close(); p.stop(); print('playwright chromium OK')"
 
 # ---------------------------------------------------------------------------
 # 7. Configure cookie jar for curl

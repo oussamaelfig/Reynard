@@ -986,6 +986,264 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
         ],
         "avoid": ["Do not report a jailbreak without web-app impact."],
     },
+    "network_pentest": {
+        "id": "network_pentest",
+        "vulnerability": "Network host/service compromise",
+        "primary_tools": ["nmap_scan", "metasploit_run", "run_shell", "http_request"],
+        "recon_goals": [
+            "Enumerate open ports and service versions with nmap_scan before touching anything.",
+            "Fingerprint each service (banner, version, default creds, known CVEs).",
+            "Map which service is the intended foothold for the objective.",
+        ],
+        "required_artifacts": [
+            "structured nmap service map",
+            "vulnerable service + version evidence",
+            "shell/access proof or objective flag",
+        ],
+        "exploit_strategy": [
+            "Match the service version to a specific exploit before spraying modules.",
+            "Use metasploit_run with a targeted module and explicit RHOSTS/RPORT.",
+            "Prefer a single precise exploit over broad auto-pwn.",
+        ],
+        "validation": [
+            "A service-specific exploit returns a session, command output, or the flag.",
+            "A control request to an unrelated port fails as expected.",
+        ],
+        "pivot_hints": [
+            "If the first service is patched, move to the next open service by heat.",
+            "Check default/weak credentials and misconfigurations before memory-corruption exploits.",
+        ],
+        "avoid": ["Do not scan or exploit hosts outside the authorized scope."],
+    },
+    "metasploit": {
+        "id": "metasploit",
+        "vulnerability": "Service exploitation via Metasploit",
+        "primary_tools": ["metasploit_run", "msfvenom_generate", "nmap_scan", "run_shell"],
+        "recon_goals": [
+            "Confirm the exact vulnerable service/version nmap reported.",
+            "Search Metasploit for a module matching that product and version.",
+            "Identify required options: RHOSTS, RPORT, LHOST, LPORT, PAYLOAD.",
+        ],
+        "required_artifacts": [
+            "chosen module + set options",
+            "msfvenom payload when a custom stager is needed",
+            "session, command output, or flag proving execution",
+        ],
+        "exploit_strategy": [
+            "Set every required option explicitly and run once via a resource script.",
+            "Use check actions where the module supports them before exploit.",
+            "Generate payloads with msfvenom_generate matched to the target arch/OS.",
+        ],
+        "validation": [
+            "The module opens a session or yields authenticated command output.",
+            "A control run without the exploit precondition fails.",
+        ],
+        "pivot_hints": [
+            "Try alternate payloads (staged vs stageless, TCP vs HTTP) if the handler stalls.",
+            "Verify LHOST reachability before blaming the exploit.",
+        ],
+        "avoid": ["Do not launch destructive or DoS modules against lab targets."],
+    },
+    "binary_pwn": {
+        "id": "binary_pwn",
+        "vulnerability": "Binary exploitation (memory corruption)",
+        "primary_tools": ["pwn_template", "radare2_analyze", "gdb_debug", "run_shell"],
+        "recon_goals": [
+            "Run checksec via pwn_template to learn NX, PIE, canary, RELRO.",
+            "Map dangerous calls (gets/strcpy/system/read) with radare2_analyze.",
+            "Find the overflow offset and any leak primitive with gdb_debug.",
+        ],
+        "required_artifacts": [
+            "protections summary",
+            "crash/offset proof (cyclic pattern)",
+            "working exploit script producing the flag or shell",
+        ],
+        "exploit_strategy": [
+            "Choose the technique from protections: ret2win, ret2libc, ROP, or shellcode.",
+            "Build the exploit incrementally with a pwntools template (local first, then remote).",
+            "Leak addresses before defeating ASLR; align the stack before calling libc.",
+        ],
+        "validation": [
+            "The exploit reliably returns a shell or prints the flag against the target.",
+            "The same script works against the remote service, not just locally.",
+        ],
+        "pivot_hints": [
+            "If NX blocks shellcode, pivot to ROP/ret2libc.",
+            "If a canary is present, find a leak or overwrite path that preserves it.",
+        ],
+        "avoid": ["Do not hardcode local libc offsets against a remote with a different libc."],
+    },
+    "reverse_engineering": {
+        "id": "reverse_engineering",
+        "vulnerability": "Reverse engineering / key recovery",
+        "primary_tools": ["radare2_analyze", "gdb_debug", "run_shell", "crypto_helper"],
+        "recon_goals": [
+            "Identify file type, packing, and language with rabin2/file.",
+            "Enumerate functions and strings via radare2_analyze to find the check routine.",
+            "Locate the comparison/validation that gates the flag.",
+        ],
+        "required_artifacts": [
+            "function/string map",
+            "the validation logic or key-check routine",
+            "recovered key/flag or the input that satisfies the check",
+        ],
+        "exploit_strategy": [
+            "Read the decompiled check logic instead of brute forcing.",
+            "Use gdb_debug to observe runtime values, patch branches, or dump comparisons.",
+            "Reimplement or invert the algorithm to derive the expected input.",
+        ],
+        "validation": [
+            "The recovered input passes the program's own success path.",
+            "The derived key/flag matches the objective format.",
+        ],
+        "pivot_hints": [
+            "If statically obfuscated, switch to dynamic analysis and dump the compared buffer.",
+            "If packed, unpack or dump memory at the OEP before analysis.",
+        ],
+        "avoid": ["Do not brute force when the algorithm can be read and inverted."],
+    },
+    "mobile_android": {
+        "id": "mobile_android",
+        "vulnerability": "Android application weakness",
+        "primary_tools": ["apk_decompile", "apk_analyze", "frida_hook", "run_shell"],
+        "recon_goals": [
+            "Decompile the APK with apktool (resources) and jadx (Java) via apk_decompile.",
+            "Enumerate the manifest, exported components, permissions, and dangerous sinks with apk_analyze.",
+            "Locate hardcoded secrets, endpoints, and security checks (root/SSL pinning).",
+        ],
+        "required_artifacts": [
+            "decompiled source tree",
+            "manifest + sink/secret inventory",
+            "runtime hook output or extracted secret/flag",
+        ],
+        "exploit_strategy": [
+            "Read the smali/Java for the target logic before hooking.",
+            "Use frida_hook to bypass root/pinning checks or dump values at runtime.",
+            "Chain static findings (endpoint/secret) into a concrete request or action.",
+        ],
+        "validation": [
+            "A hook changes app behavior or reveals the guarded value/flag.",
+            "The extracted secret/endpoint yields the objective.",
+        ],
+        "pivot_hints": [
+            "If a check is native, hook libc/JNI exports instead of Java methods.",
+            "If jadx fails to decompile, fall back to apktool smali reading.",
+        ],
+        "avoid": ["Do not repackage or distribute the target app outside the lab."],
+    },
+    "crypto": {
+        "id": "crypto",
+        "vulnerability": "Cryptographic weakness",
+        "primary_tools": ["crypto_helper", "hash_crack", "run_shell", "flag_hunter"],
+        "recon_goals": [
+            "Identify the scheme (classical, RSA, AES mode, ECC, hash) and given parameters.",
+            "Normalize encodings (base64/hex/binary) with crypto_helper before analysis.",
+            "Spot the introduced weakness: small e, shared modulus, ECB, nonce reuse, weak key.",
+        ],
+        "required_artifacts": [
+            "decoded ciphertext + known parameters",
+            "the exploited weakness",
+            "recovered plaintext/key/flag",
+        ],
+        "exploit_strategy": [
+            "Attack the specific weakness (e.g. RSA low-exponent, padding oracle, XOR key reuse).",
+            "Use hash_crack for weak-hash / password challenges.",
+            "Reimplement the decryption once the parameters are known.",
+        ],
+        "validation": [
+            "The recovered plaintext matches the expected flag format.",
+            "The derived key decrypts a control ciphertext correctly.",
+        ],
+        "pivot_hints": [
+            "If RSA seems hard, check factordb, common factors, and small exponents first.",
+            "For classical ciphers, run frequency analysis before assuming a keyed cipher.",
+        ],
+        "avoid": ["Do not brute force full keyspaces when a mathematical shortcut exists."],
+    },
+    "stego": {
+        "id": "stego",
+        "vulnerability": "Steganography / hidden data",
+        "primary_tools": ["stego_extract", "forensics_triage", "run_shell", "flag_hunter"],
+        "recon_goals": [
+            "Fingerprint the carrier file type and inspect metadata (exiftool/strings).",
+            "Check for appended/embedded data with binwalk before deep stego tools.",
+            "Choose the tool by carrier: steghide/zsteg for images, spectrogram for audio.",
+        ],
+        "required_artifacts": [
+            "carrier analysis (type, metadata, entropy)",
+            "extraction command that succeeds",
+            "recovered hidden payload/flag",
+        ],
+        "exploit_strategy": [
+            "Layer techniques: strings/exif, then binwalk carve, then LSB/steghide.",
+            "Try common/empty passphrases and any wordlist hint for steghide.",
+            "Pipe extracted output through flag_hunter.",
+        ],
+        "validation": [
+            "Extraction yields readable content matching the flag format.",
+        ],
+        "pivot_hints": [
+            "If steghide fails, try zsteg (PNG/BMP), outguess, or LSB planes.",
+            "For audio, inspect the spectrogram and channel data.",
+        ],
+        "avoid": ["Do not assume one tool; carriers often stack multiple layers."],
+    },
+    "forensics": {
+        "id": "forensics",
+        "vulnerability": "Digital forensics artifact recovery",
+        "primary_tools": ["forensics_triage", "stego_extract", "run_shell", "flag_hunter"],
+        "recon_goals": [
+            "Identify the artifact type: pcap, disk image, memory dump, or file blob.",
+            "For pcap, follow streams and extract objects; for images, carve files.",
+            "For memory dumps, pick the right volatility profile/plugins.",
+        ],
+        "required_artifacts": [
+            "artifact type + tooling chosen",
+            "extracted stream/file/process evidence",
+            "recovered flag or objective data",
+        ],
+        "exploit_strategy": [
+            "Use tshark/wireshark filters to isolate the relevant conversation.",
+            "Carve with binwalk/foremost, then triage recovered files with flag_hunter.",
+            "For memory, enumerate processes, then dump the relevant one.",
+        ],
+        "validation": [
+            "The recovered artifact contains the flag or the required evidence.",
+        ],
+        "pivot_hints": [
+            "If a pcap is TLS-encrypted, look for keys/SSLKEYLOGFILE in the challenge files.",
+            "If carving finds fragments, reassemble by known file signatures.",
+        ],
+        "avoid": ["Do not ignore file metadata and slack space; flags often hide there."],
+    },
+    "ctf_misc": {
+        "id": "ctf_misc",
+        "vulnerability": "Miscellaneous CTF challenge",
+        "primary_tools": ["run_shell", "flag_hunter", "crypto_helper", "web_search"],
+        "recon_goals": [
+            "Read the prompt and provided files to classify the real category.",
+            "Fingerprint every provided file (file, strings, exiftool, binwalk).",
+            "Decide whether the task is crypto, stego, forensics, binary, or web.",
+        ],
+        "required_artifacts": [
+            "file/prompt analysis",
+            "the technique that fits the actual category",
+            "recovered flag",
+        ],
+        "exploit_strategy": [
+            "Start with cheap universal probes (strings, flag_hunter, metadata).",
+            "Re-route to the specific category playbook once the type is clear.",
+            "Use web_search for unusual formats or known challenge patterns.",
+        ],
+        "validation": [
+            "Output contains a string matching the challenge flag format.",
+        ],
+        "pivot_hints": [
+            "If nothing obvious, re-read the prompt for the intended trick.",
+            "Combine techniques (decode then decrypt then flag-hunt).",
+        ],
+        "avoid": ["Do not fixate on one category before fingerprinting the files."],
+    },
     "web_cache_deception": {
         "id": "web_cache_deception",
         "vulnerability": "Web cache deception",
@@ -1088,6 +1346,35 @@ ALIASES: list[tuple[str, str]] = [
     ("llm attacks", "web_llm_attacks"),
     ("large language model", "web_llm_attacks"),
     ("ssrf", "ssrf"),
+    ("network pentest", "network_pentest"),
+    ("network penetration", "network_pentest"),
+    ("service enumeration", "network_pentest"),
+    ("metasploit", "metasploit"),
+    ("msfconsole", "metasploit"),
+    ("binary pwn", "binary_pwn"),
+    ("binary exploitation", "binary_pwn"),
+    ("buffer overflow", "binary_pwn"),
+    ("pwn", "binary_pwn"),
+    ("rop", "binary_pwn"),
+    ("reverse engineering", "reverse_engineering"),
+    ("reverse-engineering", "reverse_engineering"),
+    ("crackme", "reverse_engineering"),
+    ("mobile android", "mobile_android"),
+    ("android app", "mobile_android"),
+    ("apk", "mobile_android"),
+    ("frida", "mobile_android"),
+    ("crypto", "crypto"),
+    ("cryptography", "crypto"),
+    ("cipher", "crypto"),
+    ("rsa", "crypto"),
+    ("stego", "stego"),
+    ("steganography", "stego"),
+    ("forensics", "forensics"),
+    ("forensic", "forensics"),
+    ("pcap", "forensics"),
+    ("memory dump", "forensics"),
+    ("ctf misc", "ctf_misc"),
+    ("misc challenge", "ctf_misc"),
 ]
 
 

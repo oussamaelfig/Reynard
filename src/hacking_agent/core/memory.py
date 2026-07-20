@@ -551,6 +551,111 @@ class AgentMemory:
             return "\n".join(sections)
 
     # =====================================================================
+    # Durable persistence (SQLite, cross-run) — additive, opt-in-safe
+    # =====================================================================
+
+    def _entity_rows(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for e in self._entities.values():
+            rows.append({
+                "id": e.id,
+                "type": e.type,
+                "attrs": e.attrs,
+                "facts": {
+                    k: {"value": f.value, "confidence": f.confidence,
+                        "source": f.source, "iteration": f.iteration}
+                    for k, f in e.facts.items()
+                },
+                "pheromone_base": e.pheromone_base,
+                "half_life_sec": e.half_life_sec,
+                "created_at": e.created_at,
+            })
+        return rows
+
+    def persist(self, store: Any, target: str, lab_class: str) -> bool:
+        """Persist the KG + global facts to a DurableStore. No-op if store is
+        None; never raises (durable memory is best-effort)."""
+        if store is None:
+            return False
+        try:
+            with self._lock:
+                entity_rows = self._entity_rows()
+                rel_rows = [
+                    {"from": r.from_id, "to": r.to_id,
+                     "rel": r.rel_type, "attrs": r.attrs}
+                    for r in self._relationships
+                ]
+                fact_rows = [
+                    {"key": k, "value": f.value,
+                     "confidence": f.confidence, "source": f.source}
+                    for k, f in self.facts.items()
+                ]
+            store.save_entities(target, lab_class, entity_rows)
+            store.save_relationships(target, lab_class, rel_rows)
+            store.save_facts(target, lab_class, fact_rows)
+            return True
+        except Exception:
+            return False
+
+    def rehydrate(self, store: Any, target: str, lab_class: str) -> int:
+        """Prime the run with prior knowledge for the same target/lab-class.
+
+        Rehydrated entities are treated as WARM, not HOT: monotonic-based decay
+        timestamps cannot cross process boundaries, so we reset the clock and
+        clamp the pheromone base rather than trusting stale monotonic values.
+        Returns the number of entities rehydrated.
+        """
+        if store is None:
+            return 0
+        try:
+            from hacking_agent.core.durable import monotonic_now, warm_pheromone_base
+        except Exception:
+            return 0
+        count = 0
+        try:
+            for r in store.load_entities(target, lab_class):
+                e = self.add_entity(
+                    r["type"],
+                    attrs=dict(r.get("attrs") or {}),
+                    entity_id=r["id"],
+                    pheromone_base=warm_pheromone_base(r.get("pheromone_base", 0.5)),
+                    half_life_sec=int(r.get("half_life_sec") or 3600),
+                )
+                e._created_ts = monotonic_now()
+                for fk, fv in (r.get("facts") or {}).items():
+                    if not isinstance(fv, dict):
+                        continue
+                    e.facts[fk] = Fact(
+                        key=fk,
+                        value=fv.get("value"),
+                        confidence=fv.get("confidence", "suspected"),
+                        source=fv.get("source", "durable"),
+                        iteration=int(fv.get("iteration", 0) or 0),
+                    )
+                count += 1
+            for rel in store.load_relationships(target, lab_class):
+                if rel["from"] in self._entities and rel["to"] in self._entities:
+                    try:
+                        self.add_relationship(
+                            rel["from"], rel["rel"], rel["to"], rel.get("attrs"))
+                    except KeyError:
+                        pass
+            for fr in store.load_facts(target, lab_class):
+                self.add_fact(
+                    fr["key"], fr["value"],
+                    confidence=fr.get("confidence", "suspected"),
+                    source=f"durable:{fr.get('source', '')}",
+                    iteration=0,
+                )
+        except Exception:
+            return count
+        return count
+
+    def load_from_db(self, store: Any, target: str, lab_class: str) -> int:
+        """Alias for rehydrate(); mirrors the EvidenceStore API."""
+        return self.rehydrate(store, target, lab_class)
+
+    # =====================================================================
     # Serialization (session logs)
     # =====================================================================
 

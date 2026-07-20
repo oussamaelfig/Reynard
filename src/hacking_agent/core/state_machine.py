@@ -124,6 +124,14 @@ class StateMachineConfig:
         "nuclei_scan":             5,    # nuclei is heavy — keep tight
         "extract_js_endpoints":   10,
         "discover_apis":          10,
+        # Structured scanner wrappers (heavy — keep tight)
+        "ffuf_fuzz":              10,
+        "sqlmap_run":              8,
+        "nmap_scan":               8,
+        # Automatic tool selection (cheap advisory calls)
+        "recommend_tools":        40,
+        # Session registration (cheap bookkeeping)
+        "register_session":       30,
         # Caido Cloud API
         "caido_cloud_api":        60,
         "caido_cloud_request":    60,
@@ -138,6 +146,25 @@ class StateMachineConfig:
         "burp_get_collaborator_interactions": 60,
         "burp_create_repeater_tab": 30,
         "burp_send_to_intruder":   20,
+        "burp_get_proxy_history":  40,
+        "burp_get_proxy_history_regex": 40,
+        "burp_set_intercept":      10,
+        # Cross-domain (WS5): network / pwn — heavy/slow tools kept tight.
+        "metasploit_run":          12,
+        "msfvenom_generate":       15,
+        "radare2_analyze":         40,
+        "gdb_debug":               20,
+        "pwn_template":            20,
+        # Cross-domain (WS5): mobile — decompile is heavy, analysis lighter.
+        "apk_decompile":           10,
+        "apk_analyze":             20,
+        "frida_hook":              12,
+        # Cross-domain (WS5): CTF misc — light/repeatable helpers run higher.
+        "stego_extract":           20,
+        "hash_crack":              10,
+        "crypto_helper":           40,
+        "forensics_triage":        20,
+        "flag_hunter":             60,
     })
 
 

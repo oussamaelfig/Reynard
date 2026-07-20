@@ -134,11 +134,11 @@ CATALOG: tuple[ToolEntry, ...] = (
         "jadx -d /data/loot/app jadx-target.apk",
     ),
     ToolEntry(
-        "Lightpanda browser_*",
+        "Chromium browser_*",
         "JS-rendered web/XSS/CSRF",
-        "You need DOM execution, rendered HTML, JS redirects, or form interaction.",
+        "You need real DOM/JS execution, rendered HTML, JS return values, alert() XSS proof, or form interaction (honors auth session).",
         "curl/http_request sees the full page and no JS behavior matters.",
-        "browser_navigate(url, output_format='html')",
+        "browser_execute_js(url, script) -> value; a fired alert() proves XSS",
     ),
     ToolEntry(
         "OOB interactsh",
@@ -185,13 +185,13 @@ def render_tool_catalog(role: str = "general") -> str:
         names = {
             "http_request", "curl", "ffuf", "gobuster/dirb/wfuzz", "nuclei",
             "nmap", "whatweb/nikto", "subfinder/httpx/httprobe/waybackurls",
-            "Lightpanda browser_*", "Caido Local Bridge", "Caido Cloud API", "Burp MCP",
+            "Chromium browser_*", "Caido Local Bridge", "Caido Cloud API", "Burp MCP",
             "/opt/hackingtool/hackingtool.py",
         }
     elif role == "exploitation":
         names = {
             "http_request", "curl", "request_smuggling_probe", "sqlmap", "hydra", "john/hashcat",
-            "metasploit/searchsploit", "Lightpanda browser_*", "OOB interactsh",
+            "metasploit/searchsploit", "Chromium browser_*", "OOB interactsh",
             "adb/apktool/jadx/frida/objection", "binwalk/radare2/steghide/foremost",
             "Caido Local Bridge", "Caido Cloud API", "Burp MCP", "/opt/hackingtool/hackingtool.py",
         }
@@ -223,5 +223,5 @@ def known_command_names() -> list[str]:
         "searchsploit", "sslscan", "testssl", "interactsh-client", "binwalk", "radare2",
         "r2", "steghide", "foremost", "adb", "apktool", "jadx", "frida",
         "objection", "python3", "go", "ruby", "proxychains4", "tor",
-        "bettercap", "ettercap", "aircrack-ng", "lightpanda",
+        "bettercap", "ettercap", "aircrack-ng",
     })

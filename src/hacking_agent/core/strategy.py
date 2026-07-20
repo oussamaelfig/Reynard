@@ -21,6 +21,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from hacking_agent.core.schemas import Hypothesis
+
 
 # =============================================================================
 # Phase Definitions
@@ -443,3 +445,178 @@ class StrategyEngine:
             p for p in phase.payloads
             if p["payload"].strip().lower() not in used_payloads
         ]
+
+
+# =============================================================================
+# Phase sequencing helpers (shared by the multi-agent orchestrator)
+# =============================================================================
+
+# Canonical forced order of the 6-phase pipeline. The multi-agent orchestrator
+# advances an active hypothesis along this sequence instead of dispatching
+# specialists ad-hoc.
+PHASE_SEQUENCE: list[str] = [
+    "recon", "injection", "context", "capability", "escape", "exploit",
+]
+
+# Which specialist should own each strategy phase. RECON stays with recon;
+# everything downstream is exploitation-driven, with the terminal EXPLOIT phase
+# handing off to validation via the orchestrator's existing auto-validate hook.
+PHASE_TO_AGENT: dict[str, str] = {
+    "recon": "recon",
+    "injection": "exploitation",
+    "context": "exploitation",
+    "capability": "exploitation",
+    "escape": "exploitation",
+    "exploit": "exploitation",
+}
+
+
+def next_phase(phase: str) -> str | None:
+    """Return the phase after `phase` in the forced pipeline, or None if last."""
+    try:
+        idx = PHASE_SEQUENCE.index(phase)
+    except ValueError:
+        return None
+    return PHASE_SEQUENCE[idx + 1] if idx + 1 < len(PHASE_SEQUENCE) else None
+
+
+# =============================================================================
+# HypothesisAgenda — first-class ranked attack-vector backlog
+# =============================================================================
+
+class HypothesisAgenda:
+    """A ranked backlog of candidate attack vectors (schemas.Hypothesis).
+
+    The profiler/analyst seed it, the coordinator/orchestrator pick the hottest
+    OPEN hypothesis, and outcomes re-weight it:
+
+      * success  -> status="verified", heat boosted (kept hot for the report)
+      * failure  -> heat decays, fail_count++; once fail_count crosses
+                    MAX_VECTOR_FAILURES the vector is DEMOTED (real backtracking)
+                    and the next hottest hypothesis becomes active.
+
+    Everything is in-memory and additive; nothing here mutates AgentMemory.
+    """
+
+    MAX_VECTOR_FAILURES = 3
+    FAIL_HEAT_DECAY = 0.34
+    SUCCESS_HEAT = 1.0
+
+    def __init__(self) -> None:
+        self._items: list[Hypothesis] = []
+
+    # ---- construction ---------------------------------------------------
+
+    def add(self, text: str, *, vuln_type: str = "", vector: str = "",
+            target_entity_id: str = "", phase: str = "recon",
+            heat: float = 1.0, notes: str = "") -> Hypothesis:
+        """Add a hypothesis, de-duplicating on (vuln_type, vector, text)."""
+        key = (vuln_type.lower().strip(), vector.lower().strip(), text.lower().strip())
+        for h in self._items:
+            if (h.vuln_type.lower().strip(), h.vector.lower().strip(),
+                    h.text.lower().strip()) == key:
+                # Re-surface a previously demoted/closed duplicate.
+                if h.status in ("demoted", "closed"):
+                    h.status = "open"
+                    h.fail_count = 0
+                h.heat = max(h.heat, heat)
+                return h
+        h = Hypothesis(
+            text=text or (vuln_type or vector or "candidate vector"),
+            phase=phase if phase in PHASE_SEQUENCE else "recon",
+            vuln_type=vuln_type,
+            vector=vector,
+            target_entity_id=target_entity_id,
+            heat=heat,
+            status="open",
+            notes=notes,
+        )
+        self._items.append(h)
+        return h
+
+    # ---- selection ------------------------------------------------------
+
+    def open_hypotheses(self) -> list[Hypothesis]:
+        return [h for h in self._items if h.status in ("open", "active")]
+
+    def has_open(self) -> bool:
+        return bool(self.open_hypotheses())
+
+    def exhausted(self) -> bool:
+        return not self.has_open()
+
+    def any_verified(self) -> bool:
+        return any(h.status == "verified" for h in self._items)
+
+    def has_unattempted(self) -> bool:
+        return any(h.status in ("open", "active") and h.attempts == 0
+                   for h in self._items)
+
+    def hottest_open(self) -> Hypothesis | None:
+        """Return the hottest actionable hypothesis (heat desc, fewest fails)."""
+        candidates = self.open_hypotheses()
+        if not candidates:
+            return None
+        candidates.sort(key=lambda h: (h.heat, -h.fail_count), reverse=True)
+        top = candidates[0]
+        for h in self._items:
+            if h.status == "active" and h is not top:
+                h.status = "open"
+        top.status = "active"
+        return top
+
+    # ---- outcome bookkeeping -------------------------------------------
+
+    def record_attempt(self, h: Hypothesis) -> None:
+        h.attempts += 1
+
+    def record_success(self, h: Hypothesis) -> None:
+        h.status = "verified"
+        h.heat = self.SUCCESS_HEAT
+
+    def record_failure(self, h: Hypothesis) -> bool:
+        """Register a failed attempt. Returns True if the vector was demoted
+        (i.e. the caller should backtrack to the next hypothesis)."""
+        h.fail_count += 1
+        h.heat = max(0.05, h.heat - self.FAIL_HEAT_DECAY)
+        if h.fail_count >= self.MAX_VECTOR_FAILURES:
+            h.status = "demoted"
+            return True
+        return False
+
+    def advance_phase(self, h: Hypothesis) -> str | None:
+        """Move a hypothesis to the next forced phase. Returns the new phase."""
+        nxt = next_phase(h.phase)
+        if nxt:
+            h.phase = nxt
+        return nxt
+
+    def demote(self, h: Hypothesis) -> None:
+        h.status = "demoted"
+
+    def close(self, h: Hypothesis) -> None:
+        h.status = "closed"
+
+    # ---- rendering ------------------------------------------------------
+
+    def all(self) -> list[Hypothesis]:
+        return list(self._items)
+
+    def render(self, limit: int = 8) -> str:
+        """Compact text block for coordinator/pivot prompt injection."""
+        if not self._items:
+            return "# HYPOTHESIS AGENDA\n(empty — profiler/analyst has not seeded any)"
+        ordered = sorted(
+            self._items,
+            key=lambda h: ({"active": 3, "open": 2, "verified": 1,
+                            "demoted": 0, "closed": 0}.get(h.status, 0), h.heat),
+            reverse=True,
+        )
+        lines = ["# HYPOTHESIS AGENDA (hottest first)"]
+        for h in ordered[:limit]:
+            lines.append(
+                f"  [{h.status.upper()}] heat={h.heat:.2f} phase={h.phase} "
+                f"fails={h.fail_count} | {h.vuln_type or '?'} @ "
+                f"{h.vector or 'n/a'} — {h.text[:110]}"
+            )
+        return "\n".join(lines)

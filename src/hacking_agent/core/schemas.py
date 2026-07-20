@@ -99,9 +99,48 @@ class ToolDecision(BaseModel):
     )
 
 
+HypothesisStatus = Literal["open", "active", "verified", "closed", "demoted"]
+
+
 class Hypothesis(BaseModel):
+    """A first-class candidate attack vector on the coordinator's agenda.
+
+    Only `text` is required so any legacy construction still validates. The
+    orchestrator maintains a ranked agenda of these (see
+    strategy.HypothesisAgenda): the hottest OPEN hypothesis is pursued through
+    the 6-phase StrategyEngine, success/failure re-weights `heat`, and repeated
+    failure demotes the vector so the run backtracks to the next candidate.
+    """
     text: str
-    phase: str
+    phase: str = "recon"
+    vuln_type: str = ""
+    vector: str = Field("", description="Parameter/endpoint/technique identifier under test.")
+    target_entity_id: str = ""
+    heat: float = Field(1.0, description="Pheromone-style priority; higher = pursue first.")
+    status: HypothesisStatus = "open"
+    fail_count: int = 0
+    attempts: int = 0
+    notes: str = ""
+
+
+class PivotDecision(BaseModel):
+    """Escalation decision produced by the high-reasoning `pivot` role when the
+    run is stuck. Consumed by the orchestrator to re-seed / re-rank the agenda
+    and return to normal routing."""
+    diagnosis: str = Field(..., min_length=1, description="Why the run is stuck.")
+    new_hypothesis: Optional[str] = Field(
+        None, description="A concrete, previously-untried attack vector to add."
+    )
+    new_vuln_type: str = Field("", description="Vuln class for the new hypothesis.")
+    recommended_agent: Optional[AgentName] = Field(
+        None, description="Specialist to run next after the pivot."
+    )
+    recommended_vector: str = Field(
+        "", description="Specific parameter/endpoint/technique to focus on."
+    )
+    give_up: bool = Field(
+        False, description="True only if no actionable vector remains."
+    )
 
 
 # =============================================================================

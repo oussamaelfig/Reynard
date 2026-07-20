@@ -25,6 +25,7 @@ from urllib.parse import unquote, urljoin
 from rich.console import Console
 
 from hacking_agent.agents.base import BaseAgent
+from hacking_agent.core import context
 from hacking_agent.core.schemas import (
     AgentResult, AgentTask, FactClaim, ReconFinding, ToolDecision,
 )
@@ -113,7 +114,17 @@ class ReconAgent(BaseAgent):
     name = "recon"
     role = "reconnaissance"
 
-    MAX_INNER_ITER = 8
+    MAX_INNER_ITER = 10
+    MAX_INNER_ITER_CAP = 30
+
+    def _inner_budget(self, task: AgentTask) -> int:
+        """Adaptive inner-loop ceiling; hard/deep playbooks can request more."""
+        budget = self.MAX_INNER_ITER
+        ctx = task.context if isinstance(task.context, dict) else {}
+        hint = ctx.get("inner_budget")
+        if isinstance(hint, int) and hint > 0:
+            budget = max(budget, min(hint, self.MAX_INNER_ITER_CAP))
+        return budget
 
     def execute(self, task: AgentTask) -> AgentResult:
         target_url = (task.context.get("target_url")
@@ -137,10 +148,11 @@ class ReconAgent(BaseAgent):
 
         facts_added: list[FactClaim] = []
         last_observation = ""
+        max_inner = self._inner_budget(task)
 
-        for inner in range(self.MAX_INNER_ITER):
+        for inner in range(max_inner):
             user_prompt = self._build_prompt(
-                task, target.id, target_url, last_observation, inner
+                task, target.id, target_url, last_observation, inner, max_inner
             )
             try:
                 finding: ReconFinding = self.call_typed(
@@ -222,7 +234,7 @@ class ReconAgent(BaseAgent):
         self.memory.update_progress("recon", "skipped")
         return AgentResult(
             success=bool(facts_added),
-            summary=f"Recon hit inner iter ceiling ({self.MAX_INNER_ITER}).",
+            summary=f"Recon hit inner iter ceiling ({max_inner}).",
             facts_added=facts_added,
             next_recommendation="Coordinator: consider re-dispatch or moving on.",
         )
@@ -366,25 +378,37 @@ class ReconAgent(BaseAgent):
         return categories
 
     def _build_prompt(self, task: AgentTask, target_id: str, target_url: str,
-                       last_observation: str, inner: int) -> str:
-        lines = [
+                       last_observation: str, inner: int, max_inner=None) -> str:
+        if max_inner is None:
+            max_inner = self.MAX_INNER_ITER
+        stable = [
             f"# TARGET (id={target_id})\n{target_url}",
             f"\n# TASK\n{task.task_description}",
-            f"\n{render_tool_catalog('recon')}",
-            f"\n{self.kg_summary()}",
-            f"\n# RECON ITERATION: {inner+1}/{self.MAX_INNER_ITER}",
         ]
         expert_playbook = task.context.get("expert_playbook")
         if expert_playbook:
-            lines.insert(2, f"\n{expert_playbook}")
+            stable.append(f"\n{expert_playbook}")
+        phase_instructions = task.context.get("phase_instructions")
+        if phase_instructions:
+            stable.append(f"\n{phase_instructions}")
+        tool_recs = task.context.get("tool_recommendations")
+        if tool_recs:
+            stable.append(f"\n{tool_recs}")
+        methodology = task.context.get("methodology")
+        if methodology:
+            stable.append(f"\n{methodology}")
+        stable.append(f"\n{render_tool_catalog('recon')}")
+
+        volatile = [f"\n{self.kg_summary()}"]
         if last_observation:
-            lines.append(f"\n# LAST OBSERVATION (truncated)\n{last_observation[:6000]}")
-        lines.append(
+            volatile.append(f"\n# LAST OBSERVATION\n{last_observation}")
+        volatile.append(f"\n# RECON ITERATION: {inner+1}/{max_inner}")
+        volatile.append(
             "\n# OUTPUT\n"
             "Return a single ReconFinding. Set recon_complete=true if you have "
             "enough surface-area mapped; otherwise set next_action."
         )
-        return "\n".join(lines)
+        return context.assemble_prompt(stable, volatile)
 
     def _summarize_result(self, raw: str, signals: dict | None) -> str:
         try:
@@ -394,10 +418,4 @@ class ReconAgent(BaseAgent):
                     or parsed.get("contents") or "")
         except (json.JSONDecodeError, TypeError):
             text = raw
-        text = text[:6000]
-        if signals:
-            keep = {k: v for k, v in signals.items()
-                    if v not in (None, False, [], 0, "")}
-            if keep:
-                text += f"\n\n[ANALYZER SIGNALS]\n{json.dumps(keep, indent=2)[:1200]}"
-        return text
+        return self.compact_observation(text, signals)
