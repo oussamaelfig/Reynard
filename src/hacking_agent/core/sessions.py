@@ -63,6 +63,8 @@ class AuthSession:
     cookie_jar: str = ""           # Container path, e.g. /data/sessions/admin.cookies
     static_headers: dict[str, str] = field(default_factory=dict)
     role_hint: str = "unknown"     # "admin" | "user" | "tenant_a_user" | "unauth" | ...
+    authenticated: bool = False    # Flipped True once a login flow populates the jar
+    auth_detail: str = ""          # Human-readable note about how auth was obtained
 
     def cookie_jar_path(self) -> str:
         return self.cookie_jar or f"{SESSION_DIR}/{self.name}.cookies"
@@ -202,6 +204,43 @@ class SessionRegistry:
         with self._lock:
             return self._sessions[self._active]
 
+    def mark_authenticated(self, name: str | None = None, detail: str = "") -> str:
+        """Flag a session (default: active) as holding a real authenticated
+        cookie jar. Idempotent; used by the tool executor after a successful
+        login so validator/exploitation reuse the SAME jar instead of
+        fabricating placeholder cookies."""
+        with self._lock:
+            sess = self._sessions.get(name or self._active)
+            if not sess:
+                return f"Unknown session '{name}'"
+            sess.authenticated = True
+            if detail:
+                sess.auth_detail = detail[:300]
+            return f"Session '{sess.name}' marked authenticated."
+
+    def read_cookies(self, name: str | None = None) -> dict[str, str]:
+        """Return the cookie name->value pairs currently stored in a session's
+        Netscape jar (best-effort; empty on any failure)."""
+        with self._lock:
+            sess = self._sessions.get(name or self._active)
+            if not sess:
+                return {}
+            jar = sess.cookie_jar_path()
+        rc, out, _ = _docker_exec(f"cat {jar} 2>/dev/null", timeout=10)
+        if rc != 0 or not out:
+            return {}
+        cookies: dict[str, str] = {}
+        for line in out.splitlines():
+            raw = line.strip()
+            if raw.startswith("#HttpOnly_"):
+                raw = raw[len("#HttpOnly_"):]
+            elif raw.startswith("#") or not raw:
+                continue
+            parts = raw.split("\t")
+            if len(parts) >= 7:
+                cookies[parts[5]] = parts[6]
+        return cookies
+
     def get(self, name: str | None) -> AuthSession:
         """Resolve a session by name, falling back to the active one."""
         with self._lock:
@@ -222,6 +261,7 @@ class SessionRegistry:
                         "cookie_jar": s.cookie_jar_path(),
                         "static_headers": list(s.static_headers.keys()),
                         "description": s.description,
+                        "authenticated": s.authenticated,
                     }
                     for s in self._sessions.values()
                 ],

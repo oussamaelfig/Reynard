@@ -37,3 +37,23 @@ labs:
     creds:
       username: "${PORTSWIGGER_USERNAME}"
       password: "${PORTSWIGGER_PASSWORD}"
+
+  - name: "Reflected XSS into HTML context"
+    target: "https://0aZZZZZZZZZZZZZZZZ.web-security-academy.net/"
+    objective: >-
+      Reflected cross-site scripting in the search parameter with no encoding.
+      Inject a payload that calls alert() in the victim's browser.
+    expected_vuln: "xss"
+    max_iterations: 30
+
+  - name: "Clickjacking with a form input"
+    target: "https://0aWWWWWWWWWWWWWWWW.web-security-academy.net/"
+    objective: >-
+      The account page can be framed (no X-Frame-Options / frame-ancestors).
+      Host a decoy overlaying the framed change-email action on the exploit
+      server and deliver it to the victim.
+    expected_vuln: "clickjacking"
+    max_iterations: 30
+    creds:
+      username: "${PORTSWIGGER_USERNAME}"
+      password: "${PORTSWIGGER_PASSWORD}"

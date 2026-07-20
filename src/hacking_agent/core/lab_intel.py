@@ -241,6 +241,33 @@ def extract_target_url(text: str) -> str:
     return text.strip()
 
 
+EXPLOIT_SERVER_MARKER_RE = re.compile(
+    r"exploit[\s_-]*server[^\n]*?(https?://[^\s\"'<>)]+)",
+    re.IGNORECASE,
+)
+
+
+def extract_exploit_server_url(text: str) -> str:
+    """Return the PortSwigger exploit-server URL referenced in an objective.
+
+    Cheap models frequently hallucinate the exploit-server hostname/id, then
+    trip the scope guard. Parsing the exact URL from the mission text lets the
+    orchestrator pin the real host into scope and memory so agents reuse it
+    verbatim instead of guessing. Best-effort: empty string when none found.
+    """
+    text = text or ""
+    marker = EXPLOIT_SERVER_MARKER_RE.search(text)
+    if marker:
+        return marker.group(1).rstrip(".,;")
+    for match in URL_RE.finditer(text):
+        url = match.group(0).rstrip(".,;")
+        host = urlparse(url).hostname or ""
+        host = host.lower()
+        if host.endswith("exploit-server.net") or host.startswith("exploit-"):
+            return url
+    return ""
+
+
 def normalize_target_input(raw: str) -> tuple[str, str]:
     """Split a free-form CLI task into (target_url, original_objective)."""
     raw = (raw or "").strip()

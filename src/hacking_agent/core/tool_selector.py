@@ -185,19 +185,34 @@ def _all_known_tools() -> list[str]:
     return sorted(names)
 
 
+# Score deltas applied from durable cross-run signals. A prior success for the
+# lab class nudges a tool up; a known dead-end nudges it down (never below the
+# other signals' reach, so a strong playbook prior can still surface it).
+DURABLE_WIN_BONUS = 2.5
+DURABLE_DEADEND_PENALTY = 2.0
+
+
 def rank_tools(
     vuln_class: str | None = None,
     phase: str | None = None,
     tech: str | list[str] | None = None,
     available_tools: list[str] | None = None,
+    boost_tools: list[str] | set[str] | None = None,
+    demote_tools: list[str] | set[str] | None = None,
 ) -> list[dict[str, object]]:
     """Return tools ranked for the given (vuln_class, phase, tech) context.
 
     Each entry: {"tool", "score", "justification"}. Higher score = better fit.
     Only tools in `available_tools` (if provided) are returned.
+
+    `boost_tools` / `demote_tools` fold durable cross-run signals into the
+    ranking: tools that previously SUCCEEDED for this lab class are boosted and
+    known DEAD-END tools are demoted, so learned experience steers selection.
     """
     norm_phase = normalize_phase(phase)
     vuln_key = normalize_vuln_key(vuln_class) if vuln_class else ""
+    boost_set = {str(t) for t in (boost_tools or [])}
+    demote_set = {str(t) for t in (demote_tools or [])}
 
     if isinstance(tech, str):
         tech_tokens = {tech.lower()}
@@ -245,7 +260,14 @@ def rank_tools(
             if profile.note and not reasons:
                 reasons.append(profile.note)
 
-        if score <= 0 and tool not in primary:
+        if tool in boost_set:
+            score += DURABLE_WIN_BONUS
+            reasons.append("prior win (durable memory)")
+        if tool in demote_set:
+            score -= DURABLE_DEADEND_PENALTY
+            reasons.append("known dead-end (durable memory)")
+
+        if score <= 0 and tool not in primary and tool not in boost_set:
             continue
 
         scored.append({
@@ -265,9 +287,14 @@ def render_recommendations(
     tech: str | list[str] | None = None,
     available_tools: list[str] | None = None,
     limit: int = 6,
+    boost_tools: list[str] | set[str] | None = None,
+    demote_tools: list[str] | set[str] | None = None,
 ) -> str:
     """Compact text block for prompt/console injection."""
-    ranked = rank_tools(vuln_class, phase, tech, available_tools)[:limit]
+    ranked = rank_tools(
+        vuln_class, phase, tech, available_tools,
+        boost_tools=boost_tools, demote_tools=demote_tools,
+    )[:limit]
     if not ranked:
         return "# RECOMMENDED TOOLS\n(no deterministic recommendation)"
     lines = [
