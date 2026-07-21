@@ -1,87 +1,92 @@
 # Race Conditions Methodology
-## Expert-Level Playbook for Autonomous Bug Hunting
+## Expert-Level Playbook (limit-overrun, multi-endpoint, single-packet attack)
 
-> Exploit the window between a check and its use (TOCTOU) by firing concurrent
-> requests so a limit/uniqueness/state guard is evaluated multiple times.
-
----
-
-## Phase 1: Detection & Fingerprinting
-
-### 1.1 Find Limit-Overrun Candidates
-- Discount/gift-card/coupon redemption (apply once)
-- Withdraw/transfer funds, redeem points, rate limits
-- "One per account" actions, invite/registration bonuses
-- MFA/OTP verification attempts (anti-brute-force limits)
-
-### 1.2 Recognize Sub-States
-- A single request may transiently pass through a middle state (e.g. "coupon
-  valid" -> "coupon spent"). Concurrency lets many requests read the pre-spend
-  state before any commit.
+> 5 PortSwigger labs. Race windows let you exceed a "once only" limit or observe
+> a transient state. Send synchronized concurrent requests with `race_send`
+> (single-packet / last-byte sync) — normal sequential tooling closes the window.
 
 ---
 
-## Phase 2: Exploitation Techniques
+## Phase 1: Find the race window
 
-### 2.1 Single-Packet Attack (HTTP/2)
-- The gold standard: send 20-30 requests whose *last frame* is withheld, then
-  release all final frames at once to neutralize network jitter.
-- In Burp: send group **in parallel** using "Send group (single-packet attack)".
+Look for state transitions assumed to be atomic:
+- coupon / gift-card / discount redemption (limit overrun)
+- password reset / email change token single-use
+- account balance / purchase / withdrawal
+- MFA / OTP validation attempts
+- rate-limit / anti-brute-force counters
+- multi-step signup where a check and a use are separated in time
 
-### 2.2 Last-Byte Sync (HTTP/1.1)
-- Queue requests over multiple connections, withhold the final byte of each,
-  then flush them together.
-
-### 2.3 Limit-Overrun (Classic)
-- Redeem the same gift card / coupon N times concurrently before the balance
-  decrements.
-
-### 2.4 Multi-Endpoint / Single-Endpoint
-- **Single-endpoint**: send the same state-changing request many times at once.
-- **Multi-endpoint**: race two different requests (e.g. add-to-cart + checkout)
-  so they interleave in a profitable order.
-
-### 2.5 Partial Construction / Hidden State
-- Trigger a user object mid-creation to bypass an email-verification gate, or
-  register `carlos@target-domain` to hijack an account during a race.
+Capture the exact state-changing request (method, path, body, session cookie,
+CSRF token). One CSRF token often works for a whole burst.
 
 ---
 
-## Phase 3: PortSwigger Lab-Specific Techniques
-- **Limit overrun**: apply a discount code repeatedly in parallel.
-- **Bypassing rate limits**: race the OTP/login attempt counter.
-- **Multi-endpoint race**: add item then race checkout to buy over budget.
-- **Single-endpoint race**: race the email-change confirm to hijack an address.
-- **Partial construction**: race registration to skip email verification.
-- **Time-sensitive**: predictable tokens generated at the same second.
+## Phase 2: Attack techniques
+
+### 2.1 Single-packet attack (HTTP/2) — preferred
+Put N requests' final bytes into ONE TCP packet so the server processes them
+simultaneously, eliminating network jitter.
+```
+race_send url=https://TARGET/redeem method=POST count=30 mode=parallel \
+  headers={"Content-Type":"application/x-www-form-urlencoded"} body="coupon=PROMO"
+```
+`race_send` uses last-byte synchronization (single-packet on H2, last-byte on
+H1). Inspect the summary: multiple `200/302` where only one should succeed ⇒ win.
+
+### 2.2 Last-byte sync (HTTP/1.1)
+Withhold the last byte of each request, then release all last bytes together.
+`race_send` handles this; fall back to `burp_send_to_intruder` (turbo/racing) or
+a raw socket script if needed.
+
+### 2.3 Multi-endpoint races (collision)
+Two different endpoints touching the same object (e.g. add-to-cart + apply-credit,
+or use-token + validate). Fire them together so the second reads pre-update state.
+
+### 2.4 Multi-step sequence (single-endpoint sub-state)
+Send the same endpoint in parallel to hit a transient sub-state (e.g. partial
+construction of a user during signup enabling privilege).
 
 ---
 
-## Phase 4: Tools & Automation
-- **Burp Repeater**: add requests to a group -> "Send group in parallel
-  (single-packet attack)". This is the primary tool.
-- **Turbo Intruder**: `engine=Engine.BURP2`, `concurrentConnections`, and
-  `engine.openGate()` for last-byte sync:
-```python
-def queueRequests(target):
-    engine = RequestEngine(endpoint=target.endpoint, concurrentConnections=30,
-                           engine=Engine.BURP2)
-    for i in range(30):
-        engine.queue(target.req, gate='race1')
-    engine.openGate('race1')
+## Phase 3: Sub-variant tips
+
+| Sub-variant | Move |
+|-------------|------|
+| Limit overrun | parallel-redeem a one-time coupon/gift card N times |
+| Bypass rate limits | burst OTP/login attempts before the counter increments |
+| Multi-endpoint | collide two endpoints mutating the same balance/state |
+| Single-endpoint | parallel requests hit a transient sub-state |
+| Partial construction | race signup so a half-built account gains privilege |
+| Time-sensitive (predictable token) | race issuance+use of a predictable reset token |
+
+---
+
+## Phase 4: Tooling
+
+```
+race_send        # single-packet / last-byte synchronized concurrent sender (primary)
+burp_send_to_intruder   # turbo-intruder-style racing fallback
+http_request     # capture the exact state-changing request first
+list_sessions / swap_session   # multi-identity collisions
+# Verify final state via the UI/API AFTER the burst, not from individual responses.
 ```
 
----
+- Keep concurrency modest first (10-30); too many can crash the window.
+- Re-check lab state between runs; don't blindly re-fire state-changing races.
 
 ## Common Failure Modes & Solutions
+
 | Problem | Solution |
 |---------|----------|
-| Requests still serialize | Use single-packet (HTTP/2) attack |
-| Network jitter | Withhold final frame/byte, release together |
-| Only one succeeds | Increase concurrency; check for locking |
-| No visible effect | Race a different endpoint pair (multi-endpoint) |
+| Only one request succeeds | Increase sync precision (single-packet), reduce jitter |
+| CSRF token rejected | Reuse one token for the burst; refresh if the app rotates it |
+| No effect | Confirm the action is truly single-use and state-changing |
+| Sequential tooling misses it | Use `race_send`, never a for-loop of `http_request` |
+| Inconsistent wins | Repeat; races are probabilistic — verify final state each time |
 
-## Success Criteria
-- [ ] Guard evaluated more than once (e.g. coupon applied N times)
-- [ ] Achieved the over-limit / state-bypass outcome
-- [ ] Lab shows "solved"
+## Validation / Success Criteria
+- [ ] Final object/account/order state shows more than one accepted transition.
+- [ ] Sequential control attempts do not reproduce it.
+- [ ] The concurrent burst (not a single request) caused the effect.
+- [ ] Lab solved banner observed.

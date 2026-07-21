@@ -201,7 +201,7 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
     "jwt": {
         "id": "jwt",
         "vulnerability": "JWT authentication flaw",
-        "primary_tools": ["http_request", "run_shell", "browser_navigate"],
+        "primary_tools": ["jwt_tool", "http_request", "run_shell", "browser_navigate"],
         "recon_goals": [
             "Extract JWTs from cookies, Authorization headers, storage, or JS.",
             "Decode header/payload and identify alg, kid, jku, jwk, iss, aud, and role claims.",
@@ -259,7 +259,7 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
     "request_smuggling": {
         "id": "request_smuggling",
         "vulnerability": "HTTP request smuggling / desync",
-        "primary_tools": ["request_smuggling_probe", "run_shell", "http_request", "caido_local_api"],
+        "primary_tools": ["request_smuggling_probe", "burp_send_http1_request", "race_send", "run_shell", "http_request", "caido_local_api"],
         "recon_goals": [
             "Identify front-end/back-end clues, HTTP/1.1 support, and proxy/cache headers.",
             "Capture stable baseline timings and response queue behavior.",
@@ -317,7 +317,7 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
     "ssti": {
         "id": "ssti",
         "vulnerability": "Server-side template injection",
-        "primary_tools": ["http_request", "run_shell", "capture_baseline", "diff_against_baseline"],
+        "primary_tools": ["ssti_probe", "http_request", "run_shell", "capture_baseline", "diff_against_baseline"],
         "recon_goals": [
             "Find reflected parameters in names, messages, emails, templates, and error pages.",
             "Fingerprint template syntax with arithmetic probes.",
@@ -346,7 +346,7 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
     "deserialization": {
         "id": "deserialization",
         "vulnerability": "Insecure deserialization",
-        "primary_tools": ["http_request", "run_shell", "oob_get_domain", "oob_poll"],
+        "primary_tools": ["ysoserial_gen", "phpggc_gen", "http_request", "run_shell", "oob_get_domain", "oob_poll"],
         "recon_goals": [
             "Find cookies, hidden fields, or API values that look serialized, signed, or base64 encoded.",
             "Identify language/framework markers in data and errors.",
@@ -433,7 +433,7 @@ EXPERT_PLAYBOOKS: dict[str, Playbook] = {
     "race_condition": {
         "id": "race_condition",
         "vulnerability": "Race condition",
-        "primary_tools": ["run_shell", "http_request", "caido_local_api"],
+        "primary_tools": ["race_send", "burp_send_to_intruder", "run_shell", "http_request", "caido_local_api"],
         "recon_goals": [
             "Find single-use actions: coupon redemption, password reset, email change, purchase, or transfer.",
             "Capture the exact state-changing request and required session tokens.",

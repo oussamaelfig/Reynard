@@ -61,6 +61,7 @@ from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
+from hacking_agent.core.lab_corpus import normalize_lab_level
 from hacking_agent.core.lab_intel import (
     detect_lab_profile,
     extract_exploit_server_url,
@@ -419,6 +420,14 @@ class Orchestrator:
             or self.lab_profile.get("vulnerability")
             or "web"
         ).lower()
+        # Difficulty tier of the lab (APPRENTICE/PRACTITIONER/EXPERT), populated
+        # from the corpus/objective via the lab profile. Drives strong-tier
+        # escalation on EXPERT labs.
+        self.lab_level = normalize_lab_level(
+            self.lab_profile.get("lab_level") or self.lab_profile.get("level")
+        )
+        if self.lab_level:
+            self.lab_profile.setdefault("lab_level", self.lab_level)
 
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
@@ -496,6 +505,28 @@ class Orchestrator:
         self._needs_pivot = False
         self._pivot_used = 0
         self._self_critique_done = False
+
+        # ---- tiered model escalation (strong reasoning tier) ----
+        # Cheap default runs normally; the coordinator + exploitation dispatch
+        # swap to the `strong` provider when the run stalls / backtracks, on
+        # EXPERT-tier labs, or when forced (training-loop re-run pass). Reuses
+        # the existing pivot escalation path; no budget/metering duplication.
+        self._tier_escalation_enabled = os.getenv(
+            "REYNARD_TIER_ESCALATION", "1"
+        ).lower() not in ("0", "false", "no", "off")
+        self._escalate_on_expert = os.getenv(
+            "REYNARD_ESCALATE_ON_EXPERT", "1"
+        ).lower() not in ("0", "false", "no", "off")
+        self._force_strong_tier = os.getenv(
+            "REYNARD_FORCE_STRONG_TIER", "0"
+        ).lower() in ("1", "true", "yes", "on")
+        # Pinned = stay escalated for the whole run (EXPERT / forced) rather
+        # than reverting once unstuck.
+        self._tier_pinned_strong = self._force_strong_tier or (
+            self._escalate_on_expert and self.lab_level == "EXPERT"
+        )
+        self._tier_escalated = False
+        self._tier_escalations = 0
 
         # ---- imp-loop: anti-loop / no-progress intelligence ----
         # A stall = N consecutive outer steps with no new KG entities, no new
@@ -577,6 +608,7 @@ class Orchestrator:
         self._rehydrate_durable()
         self._run_bootstrap_subagents()
         self._seed_hypotheses()
+        self._maybe_start_escalated()
 
         final_result: AgentResult | None = None
 
@@ -897,6 +929,9 @@ class Orchestrator:
                 f"last_failed={self.sm.last_failed_agent}"
             )
             self.sm.transition(Event.PIVOT_REQUESTED, reason)
+            # Tier escalation: swap coordinator+exploitation to the strong model
+            # while stuck (stall / agenda backtrack), then run the pivot.
+            self._escalate_tier(reason)
             # High-reasoning escalation: only when stuck, then back to routing.
             self._run_pivot(reason)
             # Reset failure counter and re-route
@@ -1296,6 +1331,9 @@ class Orchestrator:
         self.agenda.record_attempt(h)
         self._record_incremental_technique(h, result)
         if result.success:
+            # Progress = "unstuck": drop back to the cheap default tier (unless
+            # pinned strong for an EXPERT-tier / forced run).
+            self._revert_tier("progress after success")
             if h.phase == "exploit" or self._hypothesis_has_verified_evidence(h):
                 self.agenda.record_success(h)
                 self.logger.log(f"[AGENDA] hypothesis VERIFIED: {h.vuln_type}@{h.vector}")
@@ -1442,6 +1480,63 @@ class Orchestrator:
         except Exception:
             pass
         return bool(self.memory.get_fact("lab_solved"))
+
+    # ---- tiered model escalation (strong reasoning tier) ----------------
+
+    def _escalate_tier(self, reason: str) -> None:
+        """Swap the coordinator + exploitation dispatch to the strong provider.
+
+        Idempotent and best-effort: disabled via REYNARD_TIER_ESCALATION, and a
+        provider-build failure degrades silently to the cheap default. The
+        budget/metering is unchanged — only the model binding is swapped.
+        """
+        if not self._tier_escalation_enabled or self._tier_escalated:
+            return
+        try:
+            strong = self.registry.get("strong")
+        except Exception as e:  # noqa: BLE001 - degrade to cheap default
+            self.logger.log(f"[TIER] strong provider unavailable: {e}")
+            return
+        self.coordinator.provider = strong
+        self.specialists["exploitation"].provider = strong
+        self._tier_escalated = True
+        self._tier_escalations += 1
+        self.logger.log(
+            f"[TIER] escalated coordinator+exploitation to strong tier "
+            f"(reason={reason}, count={self._tier_escalations})"
+        )
+        emit("tier_escalated", {
+            "reason": reason,
+            "count": self._tier_escalations,
+            "model": getattr(getattr(strong, "config", None), "model", ""),
+        })
+        console.print(f"[magenta]⬆ Tier escalation → strong model ({reason}).[/]")
+
+    def _revert_tier(self, reason: str) -> None:
+        """Revert the coordinator + exploitation dispatch to the cheap default.
+
+        No-op when not escalated or when the strong tier is pinned for the whole
+        run (EXPERT-tier / forced training re-run)."""
+        if not self._tier_escalated or self._tier_pinned_strong:
+            return
+        try:
+            self.coordinator.provider = self.registry.get("coordinator")
+            self.specialists["exploitation"].provider = self.registry.get("exploitation")
+        except Exception as e:  # noqa: BLE001 - keep strong binding on failure
+            self.logger.log(f"[TIER] revert failed (staying on strong): {e}")
+            return
+        self._tier_escalated = False
+        self.logger.log(f"[TIER] reverted to cheap default tier (reason={reason})")
+        emit("tier_reverted", {"reason": reason})
+        console.print(f"[cyan]⬇ Tier reverted → default model ({reason}).[/]")
+
+    def _maybe_start_escalated(self) -> None:
+        """Escalate from the first step for EXPERT-tier / forced runs."""
+        if self._tier_pinned_strong:
+            reason = "forced strong tier" if self._force_strong_tier else (
+                f"EXPERT-tier lab ({self.lab_class})"
+            )
+            self._escalate_tier(reason)
 
     # ---- WS2: pivot escalation (high reasoning, only when stuck) ---------
 

@@ -149,6 +149,19 @@ class StateMachineConfig:
         "burp_get_proxy_history":  40,
         "burp_get_proxy_history_regex": 40,
         "burp_set_intercept":      10,
+        # Racing / batch sender — each call fans out to many requests; keep tight.
+        "race_send":               15,
+        # OSINT / external recon (prod). Shodan search burns query credits.
+        "shodan_host_lookup":      30,
+        "shodan_search":           15,
+        "censys_host":             30,
+        "dns_recon":               20,
+        "tls_info":                10,
+        # Class-specific OSS tools — payload gen is cheap; probes are heavier.
+        "jwt_tool":                20,
+        "ysoserial_gen":           20,
+        "phpggc_gen":              20,
+        "ssti_probe":               8,
         # Cross-domain (WS5): network / pwn — heavy/slow tools kept tight.
         "metasploit_run":          12,
         "msfvenom_generate":       15,

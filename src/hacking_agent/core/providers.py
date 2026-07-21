@@ -957,7 +957,7 @@ class ProviderRegistry:
     Backward compat: also reads legacy DEEPSEEK_API_KEY / API_BASE_URL / MODEL_NAME.
     """
 
-    AGENT_ROLES = ("default", "coordinator", "recon", "analyst", "exploitation", "reporter", "validator", "pivot")
+    AGENT_ROLES = ("default", "coordinator", "recon", "analyst", "exploitation", "reporter", "validator", "pivot", "strong")
     PROVIDER_PROFILES: dict[str, dict[str, Any]] = {
         "openai-compatible": {
             "kind": "openai-compatible",
@@ -1036,6 +1036,10 @@ class ProviderRegistry:
         "reporter":     "low",
         "validator":    "high",
         "pivot":        "xhigh",
+        # The `strong` tier is the auto-escalation model: cheap default runs
+        # normally, and the coordinator/exploitation dispatch swap to `strong`
+        # when stuck or on EXPERT-tier labs (see cli/orchestrator.py).
+        "strong":       "xhigh",
     }
 
     def __init__(self, configs: dict[str, ProviderConfig]):
@@ -1127,7 +1131,9 @@ class ProviderRegistry:
 
         # Per-role overrides
         for role in cls.AGENT_ROLES:
-            if role == "default":
+            # `strong` is resolved separately below (it falls back through the
+            # pivot config), so it is not built by the generic override loop.
+            if role in ("default", "strong"):
                 continue
             prefix = f"LLM_{role.upper()}"
             # Build the role config if ANY override is set, OR if we have a
@@ -1189,6 +1195,44 @@ class ProviderRegistry:
                 thinking_budget_tokens=thinking_budget,
                 enable_thinking_param=enable_thinking_param,
             )
+
+        # ---- strong-reasoning tier (LLM_STRONG_* -> LLM_PIVOT_* -> default) --
+        # The escalation model. Each field prefers LLM_STRONG_*, then the pivot
+        # override LLM_PIVOT_*, then the default configuration, so a single
+        # strong model can be declared once and reused for both stuck-pivots
+        # and tier escalation without duplicating env vars.
+        def _strong_env(suffix: str) -> str | None:
+            return os.getenv(f"LLM_STRONG_{suffix}") or os.getenv(f"LLM_PIVOT_{suffix}")
+
+        strong_provider = _strong_env("PROVIDER") or default_provider
+        strong_profile = cls._profile(strong_provider)
+        strong_kind = strong_profile["kind"]
+        strong_base = (
+            _strong_env("BASE_URL")
+            or (default_base if strong_provider == default_provider else strong_profile.get("base_url"))
+            or default_base
+        )
+        strong_effort = _strong_env("REASONING_EFFORT")
+        if strong_effort is None:
+            strong_effort = cls.DEFAULT_REASONING_EFFORT.get("strong")
+        elif strong_effort == "":
+            strong_effort = None
+        configs["strong"] = ProviderConfig(
+            role="strong",
+            kind=strong_kind,
+            model=_strong_env("MODEL") or (
+                default_model if strong_provider == default_provider else strong_profile["model"]
+            ),
+            api_key=_strong_env("API_KEY") or cls._provider_key(strong_provider) or default_key,
+            base_url=strong_base if strong_kind == "openai-compatible" else _strong_env("BASE_URL"),
+            supports_json_mode=default_json,
+            temperature=default_temperature,
+            max_tokens=default_max_tokens,
+            reasoning_effort=strong_effort,
+            thinking_enabled=default_thinking,
+            thinking_budget_tokens=default_thinking_budget,
+            enable_thinking_param=default_enable_thinking_param,
+        )
 
         return cls(configs)
 

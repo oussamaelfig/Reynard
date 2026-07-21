@@ -1,0 +1,1493 @@
+[
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection attack, querying the database type and version on Oracle",
+    "url": "https://portswigger.net/web-security/sql-injection/examining-the-database/lab-querying-database-version-oracle",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. You can use a UNION attack to retrieve the results from an injected query. To solve the lab, display the database version string.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection attack, querying the database type and version on MySQL and Microsoft",
+    "url": "https://portswigger.net/web-security/sql-injection/examining-the-database/lab-querying-database-version-mysql-microsoft",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. You can use a UNION attack to retrieve the results from an injected query. To solve the lab, display the database version string.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection attack, listing the database contents on non-Oracle databases",
+    "url": "https://portswigger.net/web-security/sql-injection/examining-the-database/lab-listing-database-contents-non-oracle",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response so you can use a UNION attack to retrieve data from other tables. The application has a login function, and the database contains a table that holds usernames and passwords. You need to determine the name of this table and the columns it contains, then retrieve the contents of the table to obtain the username and password of all users. To solve the lab, log in as the 'administrator' user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection attack, listing the database contents on Oracle",
+    "url": "https://portswigger.net/web-security/sql-injection/examining-the-database/lab-listing-database-contents-oracle",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response so you can use a UNION attack to retrieve data from other tables. The application has a login function, and the database contains a table that holds usernames and passwords. You need to determine the name of this table and the columns it contains, then retrieve the contents of the table to obtain the username and password of all users. To solve the lab, log in as the 'administrator' user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection UNION attack, determining the number of columns returned by the query",
+    "url": "https://portswigger.net/web-security/sql-injection/union-attacks/lab-determine-number-of-columns",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response, so you can use a UNION attack to retrieve data from other tables. The first step of such an attack is to determine the number of columns that are being returned by the query. You will then use this technique in subsequent labs to construct the full attack. To solve the lab, determine the number of columns returned by the query by performing a SQL injection UNION attack that returns an additional row containing null values.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection UNION attack, finding a column containing text",
+    "url": "https://portswigger.net/web-security/sql-injection/union-attacks/lab-find-column-containing-text",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response, so you can use a UNION attack to retrieve data from other tables. To construct such an attack, you first need to determine the number of columns returned by the query. You can do this using a technique you learned in a previous lab. The next step is to identify a column that is compatible with string data. The lab will provide a random value that you need to make appear within the query results. To solve the lab, perform a SQL injection UNION attack that returns an additional row containing the value provided. This technique helps you determine which columns are compatible with string data.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection UNION attack, retrieving data from other tables",
+    "url": "https://portswigger.net/web-security/sql-injection/union-attacks/lab-retrieve-data-from-other-tables",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response, so you can use a UNION attack to retrieve data from other tables. To construct such an attack, you need to combine some of the techniques you learned in previous labs. The database contains a different table called users, with columns called username and password. To solve the lab, perform a SQL injection UNION attack that retrieves all usernames and passwords, and use the information to log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection UNION attack, retrieving multiple values in a single column",
+    "url": "https://portswigger.net/web-security/sql-injection/union-attacks/lab-retrieve-multiple-values-in-single-column",
+    "description": "This lab contains a SQL injection vulnerability in the product category filter. The results from the query are returned in the application's response so you can use a UNION attack to retrieve data from other tables. The database contains a different table called users, with columns called username and password. To solve the lab, perform a SQL injection UNION attack that retrieves all usernames and passwords, and use the information to log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with conditional responses",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-conditional-responses",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The results of the SQL query are not returned, and no error messages are displayed. But the application includes a Welcome back message in the page if the query returns any rows. The database contains a different table called users, with columns called username and password. You need to exploit the blind SQL injection vulnerability to find out the password of the administrator user. To solve the lab, log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with conditional errors",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-conditional-errors",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The results of the SQL query are not returned, and the application does not respond any differently based on whether the query returns any rows. If the SQL query causes an error, then the application returns a custom error message. The database contains a different table called users, with columns called username and password. You need to exploit the blind SQL injection vulnerability to find out the password of the administrator user. To solve the lab, log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Visible error-based SQL injection",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-sql-injection-visible-error-based",
+    "description": "This lab contains a SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The results of the SQL query are not returned. The database contains a different table called users, with columns called username and password. To solve the lab, find a way to leak the password for the administrator user, then log in to their account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with time delays",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-time-delays",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The results of the SQL query are not returned, and the application does not respond any differently based on whether the query returns any rows or causes an error. However, since the query is executed synchronously, it is possible to trigger conditional time delays to infer information. To solve the lab, exploit the SQL injection vulnerability to cause a 10 second delay.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with time delays and information retrieval",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-time-delays-info-retrieval",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The results of the SQL query are not returned, and the application does not respond any differently based on whether the query returns any rows or causes an error. However, since the query is executed synchronously, it is possible to trigger conditional time delays to infer information. The database contains a different table called users, with columns called username and password. You need to exploit the blind SQL injection vulnerability to find out the password of the administrator user. To solve the lab, log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with out-of-band interaction",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-out-of-band",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The SQL query is executed asynchronously and has no effect on the application's response. However, you can trigger out-of-band interactions with an external domain. To solve the lab, exploit the SQL injection vulnerability to cause a DNS lookup to Burp Collaborator.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SQL injection with out-of-band data exfiltration",
+    "url": "https://portswigger.net/web-security/sql-injection/blind/lab-out-of-band-data-exfiltration",
+    "description": "This lab contains a blind SQL injection vulnerability. The application uses a tracking cookie for analytics, and performs a SQL query containing the value of the submitted cookie. The SQL query is executed asynchronously and has no effect on the application's response. However, you can trigger out-of-band interactions with an external domain. The database contains a different table called users, with columns called username and password. You need to exploit the blind SQL injection vulnerability to find out the password of the administrator user. To solve the lab, log in as the administrator user.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SQL injection with filter bypass via XML encoding",
+    "url": "https://portswigger.net/web-security/sql-injection/lab-sql-injection-with-filter-bypass-via-xml-encoding",
+    "description": "This lab contains a SQL injection vulnerability in its stock check feature. The results from the query are returned in the application's response, so you can use a UNION attack to retrieve data from other tables. The database contains a users table, which contains the usernames and passwords of registered users. To solve the lab, perform a SQL injection attack to retrieve the admin user's credentials, then log in to their account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS in document.write sink using source location.search inside a select element",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/dom-based/lab-document-write-sink-inside-select-element",
+    "description": "This lab contains a DOM-based cross-site scripting vulnerability in the stock checker functionality. It uses the JavaScript document.write function, which writes data out to the page. The document.write function is called with data from location.search which you can control using the website URL. The data is enclosed within a select element. To solve this lab, perform a cross-site scripting attack that breaks out of the select element and calls the alert function. Change the URL to include a suitable XSS payload inside the storeId parameter as follows:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS in AngularJS expression with angle brackets and double quotes HTML-encoded",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/dom-based/lab-angularjs-expression",
+    "description": "This lab contains a DOM-based cross-site scripting vulnerability in a AngularJS expression within the search functionality. AngularJS is a popular JavaScript library, which scans the contents of HTML nodes containing the ng-app attribute (also known as an AngularJS directive). When a directive is added to the HTML code, you can execute JavaScript expressions within double curly braces. This technique is useful when angle brackets are being encoded. To solve this lab, perform a cross-site scripting attack that executes an AngularJS expression and calls the alert function. Enter the following AngularJS expression in the search box:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected DOM XSS",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/dom-based/lab-dom-xss-reflected",
+    "description": "This lab demonstrates a reflected DOM vulnerability. Reflected DOM vulnerabilities occur when the server-side application processes data from a request and echoes the data in the response. A script on the page then processes the reflected data in an unsafe way, ultimately writing it to a dangerous sink. To solve this lab, create an injection that calls the alert() function. To solve this lab, enter the following search term: As you have injected a backslash and the site isn't escaping them, when the JSON response attempts to escape the opening double-quotes character, it adds a second backslash. The resulting double-backslash causes the escaping to be effectively canceled out. This means that the double-quotes are processed unescaped, which closes the string that should contain the search term.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Stored DOM XSS",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/dom-based/lab-dom-xss-stored",
+    "description": "This lab demonstrates a stored DOM vulnerability in the blog comment functionality. To solve this lab, exploit this vulnerability to call the alert() function. Post a comment containing the following vector: In an attempt to prevent XSS, the website uses the JavaScript replace() function to encode angle brackets. However, when the first argument is a string, the function only replaces the first occurrence. We exploit this vulnerability by simply including an extra set of angle brackets at the beginning of the comment. These angle brackets will be encoded, but any subsequent angle brackets will be unaffected, enabling us to effectively bypass the filter and inject HTML.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS into HTML context with most tags and attributes blocked",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-html-context-with-most-tags-and-attributes-blocked",
+    "description": "This lab contains a reflected XSS vulnerability in the search functionality but uses a web application firewall (WAF) to protect against common XSS vectors. To solve the lab, perform a cross-site scripting attack that bypasses the WAF and calls the print() function.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS into HTML context with all tags blocked except custom ones",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-html-context-with-all-standard-tags-blocked",
+    "description": "This lab blocks all HTML tags except custom ones. To solve the lab, perform a cross-site scripting attack that injects a custom tag and automatically alerts document.cookie.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS with some SVG markup allowed",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-some-svg-markup-allowed",
+    "description": "This lab has a simple reflected XSS vulnerability. The site is blocking common tags but misses some SVG tags and events. To solve the lab, perform a cross-site scripting attack that calls the alert() function.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS in canonical link tag",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-canonical-link-tag",
+    "description": "This lab reflects user input in a canonical link tag and escapes angle brackets. To solve the lab, perform a cross-site scripting attack on the home page that injects an attribute that calls the alert function.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS into a JavaScript string with single quote and backslash escaped",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-javascript-string-single-quote-backslash-escaped",
+    "description": "This lab contains a reflected cross-site scripting vulnerability in the search query tracking functionality. The reflection occurs inside a JavaScript string with single quotes and backslashes escaped. To solve this lab, perform a cross-site scripting attack that breaks out of the JavaScript string and calls the alert function. Replace your input with the following payload to break out of the script block and inject a new script:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS into a JavaScript string with angle brackets and double quotes HTML-encoded and single quotes escaped",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-javascript-string-angle-brackets-double-quotes-encoded-single-quotes-escaped",
+    "description": "This lab contains a reflected cross-site scripting vulnerability in the search query tracking functionality where angle brackets and double are HTML encoded and single quotes are escaped. To solve this lab, perform a cross-site scripting attack that breaks out of the JavaScript string and calls the alert function. Replace your input with the following payload to break out of the JavaScript string and inject an alert:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Stored XSS into onclick event with angle brackets and double quotes HTML-encoded and single quotes and backslash escaped",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-onclick-event-angle-brackets-double-quotes-html-encoded-single-quotes-backslash-escaped",
+    "description": "This lab contains a stored cross-site scripting vulnerability in the comment functionality. To solve this lab, submit a comment that calls the alert function when the comment author name is clicked. Repeat the process again but this time modify your input to inject a JavaScript URL that calls alert, using the following payload:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS into a template literal with angle brackets, single, double quotes, backslash and backticks Unicode-escaped",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-javascript-template-literal-angle-brackets-single-double-quotes-backslash-backticks-escaped",
+    "description": "This lab contains a reflected cross-site scripting vulnerability in the search blog functionality. The reflection occurs inside a template string with angle brackets, single, and double quotes HTML encoded, and backticks escaped. To solve this lab, perform a cross-site scripting attack that calls the alert function inside the template string.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting cross-site scripting to steal cookies",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-stealing-cookies",
+    "description": "This lab contains a stored XSS vulnerability in the blog comments function. A simulated victim user views all comments after they are posted. To solve the lab, exploit the vulnerability to exfiltrate the victim's session cookie, then use this cookie to impersonate the victim.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting cross-site scripting to capture passwords",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-capturing-passwords",
+    "description": "This lab contains a stored XSS vulnerability in the blog comments function. A simulated victim user views all comments after they are posted. To solve the lab, exploit the vulnerability to exfiltrate the victim's username and password then use these credentials to log in to the victim's account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting XSS to bypass CSRF defenses",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-perform-csrf",
+    "description": "This lab contains a stored XSS vulnerability in the blog comments function. To solve the lab, exploit the vulnerability to steal a CSRF token, which you can then use to change the email address of someone who views the blog post comments.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Reflected XSS with AngularJS sandbox escape without strings",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/client-side-template-injection/lab-angular-sandbox-escape-without-strings",
+    "description": "This lab uses AngularJS in an unusual way where the $eval function is not available and you will be unable to use any strings in AngularJS. To solve the lab, perform a cross-site scripting attack that escapes the sandbox and executes the alert function without using the $eval function.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Reflected XSS with AngularJS sandbox escape and CSP",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/client-side-template-injection/lab-angular-sandbox-escape-and-csp",
+    "description": "This lab uses CSP and AngularJS. To solve the lab, perform a cross-site scripting attack that bypasses CSP, escapes the AngularJS sandbox, and alerts document.cookie.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Reflected XSS with event handlers and href attributes blocked",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-event-handlers-and-href-attributes-blocked",
+    "description": "This lab contains a reflected XSS vulnerability with some whitelisted tags, but all events and anchor href attributes are blocked. To solve the lab, perform a cross-site scripting attack that injects a vector that, when clicked, calls the alert function.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Reflected XSS in a JavaScript URL with some characters blocked",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/contexts/lab-javascript-url-some-characters-blocked",
+    "description": "This lab reflects your input in a JavaScript URL, but all is not as it seems. This initially seems like a trivial challenge; however, the application is blocking some characters in an attempt to prevent XSS attacks. To solve the lab, perform a cross-site scripting attack that calls the alert function with the string 1337 contained somewhere in the alert message.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Reflected XSS protected by very strict CSP, with dangling markup attack",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/content-security-policy/lab-very-strict-csp-with-dangling-markup-attack",
+    "description": "This lab uses a strict CSP that prevents the browser from loading subresources from external domains. To solve the lab, perform a form hijacking attack that bypasses the CSP, exfiltrates the simulated victim user's CSRF token, and uses it to authorize changing the email to hacker@evil-user.net.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Reflected XSS protected by CSP, with CSP bypass",
+    "url": "https://portswigger.net/web-security/cross-site-scripting/content-security-policy/lab-csp-bypass",
+    "description": "This lab uses CSP and contains a reflected XSS vulnerability. To solve the lab, perform a cross-site scripting attack that bypasses the CSP and calls the alert function.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where token validation depends on request method",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-token-validation/lab-token-validation-depends-on-request-method",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It attempts to block CSRF attacks, but only applies defenses to certain types of requests. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where token validation depends on token being present",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-token-validation/lab-token-validation-depends-on-token-being-present",
+    "description": "This lab's email change functionality is vulnerable to CSRF. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where token is not tied to user session",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-token-validation/lab-token-not-tied-to-user-session",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It uses tokens to try to prevent CSRF attacks, but they aren't integrated into the site's session handling system. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where token is tied to non-session cookie",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-token-validation/lab-token-tied-to-non-session-cookie",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It uses tokens to try to prevent CSRF attacks, but they aren't fully integrated into the site's session handling system. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where token is duplicated in cookie",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-token-validation/lab-token-duplicated-in-cookie",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It attempts to use the insecure \"double submit\" CSRF prevention technique. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SameSite Lax bypass via method override",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-samesite-restrictions/lab-samesite-lax-bypass-via-method-override",
+    "description": "This lab's change email function is vulnerable to CSRF. To solve the lab, perform a CSRF attack that changes the victim's email address. You should use the provided exploit server to host your attack.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SameSite Strict bypass via client-side redirect",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-samesite-restrictions/lab-samesite-strict-bypass-via-client-side-redirect",
+    "description": "This lab's change email function is vulnerable to CSRF. To solve the lab, perform a CSRF attack that changes the victim's email address. You should use the provided exploit server to host your attack.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SameSite Strict bypass via sibling domain",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-samesite-restrictions/lab-samesite-strict-bypass-via-sibling-domain",
+    "description": "This lab's live chat feature is vulnerable to cross-site WebSocket hijacking (CSWSH). To solve the lab, log in to the victim's account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SameSite Lax bypass via cookie refresh",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-samesite-restrictions/lab-samesite-strict-bypass-via-cookie-refresh",
+    "description": "This lab's change email function is vulnerable to CSRF. To solve the lab, perform a CSRF attack that changes the victim's email address. You should use the provided exploit server to host your attack.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF where Referer validation depends on header being present",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-referer-based-defenses/lab-referer-validation-depends-on-header-being-present",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It attempts to block cross domain requests but has an insecure fallback. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CSRF with broken Referer validation",
+    "url": "https://portswigger.net/web-security/csrf/bypassing-referer-based-defenses/lab-referer-validation-broken",
+    "description": "This lab's email change functionality is vulnerable to CSRF. It attempts to detect and block cross domain requests, but the detection mechanism can be bypassed. To solve the lab, use your exploit server to host an HTML page that uses a CSRF attack to change the viewer's email address.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting clickjacking vulnerability to trigger DOM-based XSS",
+    "url": "https://portswigger.net/web-security/clickjacking/lab-exploiting-to-trigger-dom-based-xss",
+    "description": "This lab contains an XSS vulnerability that is triggered by a click. Construct a clickjacking attack that fools the user into clicking the \"Click me\" button to call the print() function. The victim will be using Chrome so test your exploit on that browser. Go to the exploit server and paste the following HTML template into the Body section:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Multistep clickjacking",
+    "url": "https://portswigger.net/web-security/clickjacking/lab-multistep",
+    "description": "This lab has some account functionality that is protected by a CSRF token and also has a confirmation dialog to protect against Clickjacking. To solve this lab construct an attack that fools the user into clicking the delete account button and the confirmation dialog by clicking on \"Click me first\" and \"Click me next\" decoy actions. You will need to use two elements for this lab. You can log in to the account yourself using the following credentials: wiener:peter The victim will be using Chrome so test your exploit on that browser. Go to the exploit server and paste the following HTML template into the \"Body\" section:",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS using web messages",
+    "url": "https://portswigger.net/web-security/dom-based/controlling-the-web-message-source/lab-dom-xss-using-web-messages",
+    "description": "This lab demonstrates a simple web message vulnerability. To solve this lab, use the exploit server to post a message to the target site that causes the print() function to be called. Go to the exploit server and add the following iframe to the body. Remember to add your own lab ID: When the iframe loads, the postMessage() method sends a web message to the home page. The event listener, which is intended to serve ads, takes the content of the web message and inserts it into the div with the ID ads. However, in this case it inserts our img tag, which contains an invalid src attribute. This throws an error, which causes the onerror event handler to execute our payload.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS using web messages and a JavaScript URL",
+    "url": "https://portswigger.net/web-security/dom-based/controlling-the-web-message-source/lab-dom-xss-using-web-messages-and-a-javascript-url",
+    "description": "This lab demonstrates a DOM-based redirection vulnerability that is triggered by web messaging. To solve this lab, construct an HTML page on the exploit server that exploits this vulnerability and calls the print() function. Go to the exploit server and add the following iframe to the body, remembering to replace YOUR-LAB-ID with your lab ID: This script sends a web message containing an arbitrary JavaScript payload, along with the string \"http:\". The second argument specifies that any targetOrigin is allowed for the web message. When the iframe loads, the postMessage() method sends the JavaScript payload to the main page. The event listener spots the \"http:\" string and proceeds to send the payload to the location.href sink, where the print() function is called.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS using web messages and JSON.parse",
+    "url": "https://portswigger.net/web-security/dom-based/controlling-the-web-message-source/lab-dom-xss-using-web-messages-and-json-parse",
+    "description": "This lab uses web messaging and parses the message as JSON. To solve the lab, construct an HTML page on the exploit server that exploits this vulnerability and calls the print() function.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM-based open redirection",
+    "url": "https://portswigger.net/web-security/dom-based/open-redirection/lab-dom-open-redirection",
+    "description": "This lab contains a DOM-based open-redirection vulnerability. To solve this lab, exploit this vulnerability and redirect the victim to the exploit server. The blog post page contains the following link, which returns to the home page of the blog: The url parameter contains an open redirection vulnerability that allows you to change where the \"Back to Blog\" link takes the user. To solve the lab, construct and visit the following URL, remembering to change the URL to contain your lab ID and your exploit server ID:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM-based cookie manipulation",
+    "url": "https://portswigger.net/web-security/dom-based/cookie-manipulation/lab-dom-cookie-manipulation",
+    "description": "This lab demonstrates DOM-based client-side cookie manipulation. To solve this lab, inject a cookie that will cause XSS on a different page and call the print() function. You will need to use the exploit server to direct the victim to the correct pages. Go to the exploit server and add the following iframe to the body, remembering to replace YOUR-LAB-ID with your lab ID: The original source of the iframe matches the URL of one of the product pages, except there is a JavaScript payload added to the end. When the iframe loads for the first time, the browser temporarily opens the malicious URL, which is then saved as the value of the lastViewedProduct cookie. The onload event handler ensures that the victim is then immediately redirected to the home page, unaware that this manipulation ever took place. While the victim's browser has the poisoned cookie saved, loading the home page will cause the payload to execute.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting DOM clobbering to enable XSS",
+    "url": "https://portswigger.net/web-security/dom-based/dom-clobbering/lab-dom-xss-exploiting-dom-clobbering",
+    "description": "This lab contains a DOM-clobbering vulnerability. The comment functionality allows \"safe\" HTML. To solve this lab, construct an HTML injection that clobbers a variable and uses XSS to call the alert() function. Please note that the intended solution to this lab will only work in Chrome. Go to one of the blog posts and create a comment containing the following anchors: The page for a specific blog post imports the JavaScript file loadCommentsWithDomClobbering.js, which contains the following code:",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Clobbering DOM attributes to bypass HTML filters",
+    "url": "https://portswigger.net/web-security/dom-based/dom-clobbering/lab-dom-clobbering-attributes-to-bypass-html-filters",
+    "description": "This lab uses the HTMLJanitor library, which is vulnerable to DOM clobbering. To solve this lab, construct a vector that bypasses the filter and uses DOM clobbering to inject a vector that calls the print() function. You may need to use the exploit server in order to make your vector auto-execute in the victim's browser. The intended solution to this lab will not work in Firefox. We recommend using Chrome to complete this lab. Go to one of the blog posts and create a comment containing the following HTML: Go to the exploit server and add the following iframe to the body:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CORS vulnerability with trusted insecure protocols",
+    "url": "https://portswigger.net/web-security/cors/lab-breaking-https-attack",
+    "description": "This website has an insecure CORS configuration in that it trusts all subdomains regardless of the protocol. To solve the lab, craft some JavaScript that uses CORS to retrieve the administrator's API key and upload the code to your exploit server. The lab is solved when you successfully submit the administrator's API key.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind XXE with out-of-band interaction",
+    "url": "https://portswigger.net/web-security/xxe/blind/lab-xxe-with-out-of-band-interaction",
+    "description": "This lab has a \"Check stock\" feature that parses XML input but does not display the result. You can detect the blind XXE vulnerability by triggering out-of-band interactions with an external domain. To solve the lab, use an external entity to make the XML parser issue a DNS lookup and HTTP request to Burp Collaborator.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind XXE with out-of-band interaction via XML parameter entities",
+    "url": "https://portswigger.net/web-security/xxe/blind/lab-xxe-with-out-of-band-interaction-using-parameter-entities",
+    "description": "This lab has a \"Check stock\" feature that parses XML input, but does not display any unexpected values, and blocks requests containing regular external entities. To solve the lab, use a parameter entity to make the XML parser issue a DNS lookup and HTTP request to Burp Collaborator.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting blind XXE to exfiltrate data using a malicious external DTD",
+    "url": "https://portswigger.net/web-security/xxe/blind/lab-xxe-with-out-of-band-exfiltration",
+    "description": "This lab has a \"Check stock\" feature that parses XML input but does not display the result. To solve the lab, exfiltrate the contents of the /etc/hostname file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting blind XXE to retrieve data via error messages",
+    "url": "https://portswigger.net/web-security/xxe/blind/lab-xxe-with-data-retrieval-via-error-messages",
+    "description": "This lab has a \"Check stock\" feature that parses XML input but does not display the result. To solve the lab, use an external DTD to trigger an error message that displays the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting XInclude to retrieve files",
+    "url": "https://portswigger.net/web-security/xxe/lab-xinclude-attack",
+    "description": "This lab has a \"Check stock\" feature that embeds the user input inside a server-side XML document that is subsequently parsed. Because you don't control the entire XML document you can't define a DTD to launch a classic XXE attack. To solve the lab, inject an XInclude statement to retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting XXE via image file upload",
+    "url": "https://portswigger.net/web-security/xxe/lab-xxe-via-file-upload",
+    "description": "This lab lets users attach avatars to comments and uses the Apache Batik library to process avatar image files. To solve the lab, upload an image that displays the contents of the /etc/hostname file after processing. Then use the \"Submit solution\" button to submit the value of the server hostname.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting XXE to retrieve data by repurposing a local DTD",
+    "url": "https://portswigger.net/web-security/xxe/blind/lab-xxe-trigger-error-message-by-repurposing-local-dtd",
+    "description": "This lab has a \"Check stock\" feature that parses XML input but does not display the result. To solve the lab, trigger an error message containing the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind SSRF with out-of-band detection",
+    "url": "https://portswigger.net/web-security/ssrf/blind/lab-out-of-band-detection",
+    "description": "This site uses analytics software which fetches the URL specified in the Referer header when a product page is loaded. To solve the lab, use this functionality to cause an HTTP request to the public Burp Collaborator server.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SSRF with blacklist-based input filter",
+    "url": "https://portswigger.net/web-security/ssrf/lab-ssrf-with-blacklist-filter",
+    "description": "This lab has a stock check feature which fetches data from an internal system. To solve the lab, change the stock check URL to access the admin interface at http://localhost/admin and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SSRF with filter bypass via open redirection vulnerability",
+    "url": "https://portswigger.net/web-security/ssrf/lab-ssrf-filter-bypass-via-open-redirection",
+    "description": "This lab has a stock check feature which fetches data from an internal system. To solve the lab, change the stock check URL to access the admin interface at http://192.168.0.12:8080/admin and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Blind SSRF with Shellshock exploitation",
+    "url": "https://portswigger.net/web-security/ssrf/blind/lab-shellshock-exploitation",
+    "description": "This site uses analytics software which fetches the URL specified in the Referer header when a product page is loaded. To solve the lab, use this functionality to perform a blind SSRF attack against an internal server in the 192.168.0.X range on port 8080. In the blind attack, use a Shellshock payload against the internal server to exfiltrate the name of the OS user.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "SSRF with whitelist-based input filter",
+    "url": "https://portswigger.net/web-security/ssrf/lab-ssrf-with-whitelist-filter",
+    "description": "This lab has a stock check feature which fetches data from an internal system. To solve the lab, change the stock check URL to access the admin interface at http://localhost/admin and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP request smuggling, confirming a CL.TE vulnerability via differential responses",
+    "url": "https://portswigger.net/web-security/request-smuggling/finding/lab-confirming-cl-te-via-differential-responses",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. To solve the lab, smuggle a request to the back-end server, so that a subsequent request for / (the web root) triggers a 404 Not Found response.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP request smuggling, confirming a TE.CL vulnerability via differential responses",
+    "url": "https://portswigger.net/web-security/request-smuggling/finding/lab-confirming-te-cl-via-differential-responses",
+    "description": "This lab involves a front-end and back-end server, and the back-end server doesn't support chunked encoding. To solve the lab, smuggle a request to the back-end server, so that a subsequent request for / (the web root) triggers a 404 Not Found response.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting HTTP request smuggling to bypass front-end security controls, CL.TE vulnerability",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-bypass-front-end-controls-cl-te",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. There's an admin panel at /admin, but the front-end server blocks access to it. To solve the lab, smuggle a request to the back-end server that accesses the admin panel and deletes the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting HTTP request smuggling to bypass front-end security controls, TE.CL vulnerability",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-bypass-front-end-controls-te-cl",
+    "description": "This lab involves a front-end and back-end server, and the back-end server doesn't support chunked encoding. There's an admin panel at /admin, but the front-end server blocks access to it. To solve the lab, smuggle a request to the back-end server that accesses the admin panel and deletes the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting HTTP request smuggling to reveal front-end request rewriting",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-reveal-front-end-request-rewriting",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. There's an admin panel at /admin, but it's only accessible to people with the IP address 127.0.0.1. The front-end server adds an HTTP header to incoming requests containing their IP address. It's similar to the X-Forwarded-For header but has a different name. To solve the lab, smuggle a request to the back-end server that reveals the header that is added by the front-end server. Then smuggle a request to the back-end server that includes the added header, accesses the admin panel, and deletes the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting HTTP request smuggling to capture other users' requests",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-capture-other-users-requests",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. To solve the lab, smuggle a request to the back-end server that causes the next user's request to be stored in the application. Then retrieve the next user's request and use the victim user's cookies to access their account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting HTTP request smuggling to deliver reflected XSS",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-deliver-reflected-xss",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. The application is also vulnerable to reflected XSS via the User-Agent header. To solve the lab, smuggle a request to the back-end server that causes the next user's request to receive a response containing an XSS exploit that executes alert(1).",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Response queue poisoning via H2.TE request smuggling",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/response-queue-poisoning/lab-request-smuggling-h2-response-queue-poisoning-via-te-request-smuggling",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests even if they have an ambiguous length. To solve the lab, delete the user carlos by using response queue poisoning to break into the admin panel at /admin. An admin user will log in approximately every 15 seconds.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "H2.CL request smuggling",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/lab-request-smuggling-h2-cl-request-smuggling",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests even if they have an ambiguous length. To solve the lab, perform a request smuggling attack that causes the victim's browser to load and execute a malicious JavaScript file from the exploit server, calling alert(document.cookie). The victim user accesses the home page every 10 seconds.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP/2 request smuggling via CRLF injection",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/lab-request-smuggling-h2-request-smuggling-via-crlf-injection",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests and fails to adequately sanitize incoming headers. To solve the lab, use an HTTP/2-exclusive request smuggling vector to gain access to another user's account. The victim accesses the home page every 15 seconds.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP/2 request splitting via CRLF injection",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/lab-request-smuggling-h2-request-splitting-via-crlf-injection",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests and fails to adequately sanitize incoming headers. To solve the lab, delete the user carlos by using response queue poisoning to break into the admin panel at /admin. An admin user will log in approximately every 10 seconds.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "0.CL request smuggling",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/lab-request-smuggling-0cl-request-smuggling",
+    "description": "This lab is vulnerable to 0.CL request smuggling. Carlos visits the homepage every five seconds. To solve the lab, exploit the vulnerability to execute alert() in his browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "CL.0 request smuggling",
+    "url": "https://portswigger.net/web-security/request-smuggling/browser/cl-0/lab-cl-0-request-smuggling",
+    "description": "This lab is vulnerable to CL.0 request smuggling attacks. The back-end server ignores the Content-Length header on requests to some endpoints. To solve the lab, identify a vulnerable endpoint, smuggle a request to the back-end to access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP request smuggling, basic CL.TE vulnerability",
+    "url": "https://portswigger.net/web-security/request-smuggling/lab-basic-cl-te",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. The front-end server rejects requests that aren't using the GET or POST method. To solve the lab, smuggle a request to the back-end server, so that the next request processed by the back-end server appears to use the method GPOST.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP request smuggling, basic TE.CL vulnerability",
+    "url": "https://portswigger.net/web-security/request-smuggling/lab-basic-te-cl",
+    "description": "This lab involves a front-end and back-end server, and the back-end server doesn't support chunked encoding. The front-end server rejects requests that aren't using the GET or POST method. To solve the lab, smuggle a request to the back-end server, so that the next request processed by the back-end server appears to use the method GPOST.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "HTTP request smuggling, obfuscating the TE header",
+    "url": "https://portswigger.net/web-security/request-smuggling/lab-obfuscating-te-header",
+    "description": "This lab involves a front-end and back-end server, and the two servers handle duplicate HTTP request headers in different ways. The front-end server rejects requests that aren't using the GET or POST method. To solve the lab, smuggle a request to the back-end server, so that the next request processed by the back-end server appears to use the method GPOST.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting HTTP request smuggling to perform web cache poisoning",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-perform-web-cache-poisoning",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. The front-end server is configured to cache certain responses. To solve the lab, perform a request smuggling attack that causes the cache to be poisoned, such that a subsequent request for a JavaScript file receives a redirection to the exploit server. The poisoned cache should alert document.cookie.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting HTTP request smuggling to perform web cache deception",
+    "url": "https://portswigger.net/web-security/request-smuggling/exploiting/lab-perform-web-cache-deception",
+    "description": "This lab involves a front-end and back-end server, and the front-end server doesn't support chunked encoding. The front-end server is caching static resources. To solve the lab, perform a request smuggling attack such that the next user's request causes their API key to be saved in the cache. Then retrieve the victim user's API key from the cache and submit it as the lab solution. You will need to wait for 30 seconds from accessing the lab before attempting to trick the victim into caching their API key.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Bypassing access controls via HTTP/2 request tunnelling",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/request-tunnelling/lab-request-smuggling-h2-bypass-access-controls-via-request-tunnelling",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests and fails to adequately sanitize incoming header names. To solve the lab, access the admin panel at /admin as the administrator user and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Web cache poisoning via HTTP/2 request tunnelling",
+    "url": "https://portswigger.net/web-security/request-smuggling/advanced/request-tunnelling/lab-request-smuggling-h2-web-cache-poisoning-via-request-tunnelling",
+    "description": "This lab is vulnerable to request smuggling because the front-end server downgrades HTTP/2 requests and doesn't consistently sanitize incoming headers. To solve the lab, poison the cache in such a way that when the victim visits the home page, their browser executes alert(1). A victim user will visit the home page every 15 seconds.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Client-side desync",
+    "url": "https://portswigger.net/web-security/request-smuggling/browser/client-side-desync/lab-client-side-desync",
+    "description": "This lab is vulnerable to client-side desync attacks because the server ignores the Content-Length header on requests to some endpoints. You can exploit this to induce a victim's browser to disclose its session cookie. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Server-side pause-based request smuggling",
+    "url": "https://portswigger.net/web-security/request-smuggling/browser/pause-based-desync/lab-server-side-pause-based-request-smuggling",
+    "description": "This lab is vulnerable to pause-based server-side request smuggling. The front-end server streams requests to the back-end, and the back-end server does not close the connection after a timeout on some endpoints. To solve the lab, identify a pause-based CL.0 desync vector, smuggle a request to the back-end to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind OS command injection with time delays",
+    "url": "https://portswigger.net/web-security/os-command-injection/lab-blind-time-delays",
+    "description": "This lab contains a blind OS command injection vulnerability in the feedback function. The application executes a shell command containing the user-supplied details. The output from the command is not returned in the response. To solve the lab, exploit the blind OS command injection vulnerability to cause a 10 second delay.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind OS command injection with output redirection",
+    "url": "https://portswigger.net/web-security/os-command-injection/lab-blind-output-redirection",
+    "description": "This lab contains a blind OS command injection vulnerability in the feedback function. The application executes a shell command containing the user-supplied details. The output from the command is not returned in the response. However, you can use output redirection to capture the output from the command. There is a writable folder at: The application serves the images for the product catalog from this location. You can redirect the output from the injected command to a file in this folder, and then use the image loading URL to retrieve the contents of the file. To solve the lab, execute the whoami command and retrieve the output.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind OS command injection with out-of-band interaction",
+    "url": "https://portswigger.net/web-security/os-command-injection/lab-blind-out-of-band",
+    "description": "This lab contains a blind OS command injection vulnerability in the feedback function. The application executes a shell command containing the user-supplied details. The command is executed asynchronously and has no effect on the application's response. It is not possible to redirect output into a location that you can access. However, you can trigger out-of-band interactions with an external domain. To solve the lab, exploit the blind OS command injection vulnerability to issue a DNS lookup to Burp Collaborator.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Blind OS command injection with out-of-band data exfiltration",
+    "url": "https://portswigger.net/web-security/os-command-injection/lab-blind-out-of-band-data-exfiltration",
+    "description": "This lab contains a blind OS command injection vulnerability in the feedback function. The application executes a shell command containing the user-supplied details. The command is executed asynchronously and has no effect on the application's response. It is not possible to redirect output into a location that you can access. However, you can trigger out-of-band interactions with an external domain. To solve the lab, execute the whoami command and exfiltrate the output via a DNS query to Burp Collaborator. You will need to enter the name of the current user to complete the lab.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Basic server-side template injection",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-basic",
+    "description": "This lab is vulnerable to server-side template injection due to the unsafe construction of an ERB template. To solve the lab, review the ERB documentation to find out how to execute arbitrary code, then delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Basic server-side template injection (code context)",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-basic-code-context",
+    "description": "This lab is vulnerable to server-side template injection due to the way it unsafely uses a Tornado template. To solve the lab, review the Tornado documentation to discover how to execute arbitrary code, then delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Server-side template injection using documentation",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-using-documentation",
+    "description": "This lab is vulnerable to server-side template injection. To solve the lab, identify the template engine and use the documentation to work out how to execute arbitrary code, then delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Server-side template injection in an unknown language with a documented exploit",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-in-an-unknown-language-with-a-documented-exploit",
+    "description": "This lab is vulnerable to server-side template injection. To solve the lab, identify the template engine and find a documented exploit online that you can use to execute arbitrary code, then delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Server-side template injection with information disclosure via user-supplied objects",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-with-information-disclosure-via-user-supplied-objects",
+    "description": "This lab is vulnerable to server-side template injection due to the way an object is being passed into the template. This vulnerability can be exploited to access sensitive data. To solve the lab, steal and submit the framework's secret key.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Server-side template injection in a sandboxed environment",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-in-a-sandboxed-environment",
+    "description": "This lab uses the Freemarker template engine. It is vulnerable to server-side template injection due to its poorly implemented sandbox. To solve the lab, break out of the sandbox to read the file my_password.txt from Carlos's home directory. Then submit the contents of the file.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Server-side template injection with a custom exploit",
+    "url": "https://portswigger.net/web-security/server-side-template-injection/exploiting/lab-server-side-template-injection-with-a-custom-exploit",
+    "description": "This lab is vulnerable to server-side template injection. To solve the lab, create a custom exploit to delete the file /.ssh/id_rsa from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "File path traversal, traversal sequences blocked with absolute path bypass",
+    "url": "https://portswigger.net/web-security/file-path-traversal/lab-absolute-path-bypass",
+    "description": "This lab contains a path traversal vulnerability in the display of product images. The application blocks traversal sequences but treats the supplied filename as being relative to a default working directory. To solve the lab, retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "File path traversal, traversal sequences stripped non-recursively",
+    "url": "https://portswigger.net/web-security/file-path-traversal/lab-sequences-stripped-non-recursively",
+    "description": "This lab contains a path traversal vulnerability in the display of product images. The application strips path traversal sequences from the user-supplied filename before using it. To solve the lab, retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "File path traversal, traversal sequences stripped with superfluous URL-decode",
+    "url": "https://portswigger.net/web-security/file-path-traversal/lab-superfluous-url-decode",
+    "description": "This lab contains a path traversal vulnerability in the display of product images. The application blocks input containing path traversal sequences. It then performs a URL-decode of the input before using it. To solve the lab, retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "File path traversal, validation of start of path",
+    "url": "https://portswigger.net/web-security/file-path-traversal/lab-validate-start-of-path",
+    "description": "This lab contains a path traversal vulnerability in the display of product images. The application transmits the full file path via a request parameter, and validates that the supplied path starts with the expected folder. To solve the lab, retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "File path traversal, validation of file extension with null byte bypass",
+    "url": "https://portswigger.net/web-security/file-path-traversal/lab-validate-file-extension-null-byte-bypass",
+    "description": "This lab contains a path traversal vulnerability in the display of product images. The application validates that the supplied filename ends with the expected file extension. To solve the lab, retrieve the contents of the /etc/passwd file.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "URL-based access control can be circumvented",
+    "url": "https://portswigger.net/web-security/access-control/lab-url-based-access-control-can-be-circumvented",
+    "description": "This website has an unauthenticated admin panel at /admin, but a front-end system has been configured to block external access to that path. However, the back-end application is built on a framework that supports the X-Original-URL header. To solve the lab, access the admin panel and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Method-based access control can be circumvented",
+    "url": "https://portswigger.net/web-security/access-control/lab-method-based-access-control-can-be-circumvented",
+    "description": "This lab implements access controls based partly on the HTTP method of requests. You can familiarize yourself with the admin panel by logging in using the credentials administrator:admin. To solve the lab, log in using the credentials wiener:peter and exploit the flawed access controls to promote yourself to become an administrator.",
+    "credentials": "administrator:admin, wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Multi-step process with no access control on one step",
+    "url": "https://portswigger.net/web-security/access-control/lab-multi-step-process-with-no-access-control-on-one-step",
+    "description": "This lab has an admin panel with a flawed multi-step process for changing a user's role. You can familiarize yourself with the admin panel by logging in using the credentials administrator:admin. To solve the lab, log in using the credentials wiener:peter and exploit the flawed access controls to promote yourself to become an administrator.",
+    "credentials": "administrator:admin, wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Referer-based access control",
+    "url": "https://portswigger.net/web-security/access-control/lab-referer-based-access-control",
+    "description": "This lab controls access to certain admin functionality based on the Referer header. You can familiarize yourself with the admin panel by logging in using the credentials administrator:admin. To solve the lab, log in using the credentials wiener:peter and exploit the flawed access controls to promote yourself to become an administrator.",
+    "credentials": "administrator:admin, wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Username enumeration via subtly different responses",
+    "url": "https://portswigger.net/web-security/authentication/password-based/lab-username-enumeration-via-subtly-different-responses",
+    "description": "This lab is subtly vulnerable to username enumeration and password brute-force attacks. It has an account with a predictable username and password, which can be found in the following wordlists: To solve the lab, enumerate a valid username, brute-force this user's password, then access their account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Username enumeration via response timing",
+    "url": "https://portswigger.net/web-security/authentication/password-based/lab-username-enumeration-via-response-timing",
+    "description": "This lab is vulnerable to username enumeration using its response times. To solve the lab, enumerate a valid username, brute-force this user's password, then access their account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Broken brute-force protection, IP block",
+    "url": "https://portswigger.net/web-security/authentication/password-based/lab-broken-bruteforce-protection-ip-block",
+    "description": "This lab is vulnerable due to a logic flaw in its password brute-force protection. To solve the lab, brute-force the victim's password, then log in and access their account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Username enumeration via account lock",
+    "url": "https://portswigger.net/web-security/authentication/password-based/lab-username-enumeration-via-account-lock",
+    "description": "This lab is vulnerable to username enumeration. It uses account locking, but this contains a logic flaw. To solve the lab, enumerate a valid username, brute-force this user's password, then access their account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "2FA broken logic",
+    "url": "https://portswigger.net/web-security/authentication/multi-factor/lab-2fa-broken-logic",
+    "description": "This lab's two-factor authentication is vulnerable due to its flawed logic. To solve the lab, access Carlos's account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Brute-forcing a stay-logged-in cookie",
+    "url": "https://portswigger.net/web-security/authentication/other-mechanisms/lab-brute-forcing-a-stay-logged-in-cookie",
+    "description": "This lab allows users to stay logged in even after they close their browser session. The cookie used to provide this functionality is vulnerable to brute-forcing. To solve the lab, brute-force Carlos's cookie to gain access to his My account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Offline password cracking",
+    "url": "https://portswigger.net/web-security/authentication/other-mechanisms/lab-offline-password-cracking",
+    "description": "This lab stores the user's password hash in a cookie. The lab also contains an XSS vulnerability in the comment functionality. To solve the lab, obtain Carlos's stay-logged-in cookie and use it to crack his password. Then, log in as carlos and delete his account from the \"My account\" page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Password reset poisoning via middleware",
+    "url": "https://portswigger.net/web-security/authentication/other-mechanisms/lab-password-reset-poisoning-via-middleware",
+    "description": "This lab is vulnerable to password reset poisoning. The user carlos will carelessly click on any links in emails that he receives. To solve the lab, log in to Carlos's account. You can log in to your own account using the following credentials: wiener:peter. Any emails sent to this account can be read via the email client on the exploit server.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Password brute-force via password change",
+    "url": "https://portswigger.net/web-security/authentication/other-mechanisms/lab-password-brute-force-via-password-change",
+    "description": "This lab's password change functionality makes it vulnerable to brute-force attacks. To solve the lab, use the list of candidate passwords to brute-force Carlos's account and access his \"My account\" page.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Broken brute-force protection, multiple credentials per request",
+    "url": "https://portswigger.net/web-security/authentication/password-based/lab-broken-brute-force-protection-multiple-credentials-per-request",
+    "description": "This lab is vulnerable due to a logic flaw in its brute-force protection. To solve the lab, brute-force Carlos's password, then access his account page.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "2FA bypass using a brute-force attack",
+    "url": "https://portswigger.net/web-security/authentication/multi-factor/lab-2fa-bypass-using-a-brute-force-attack",
+    "description": "This lab's two-factor authentication is vulnerable to brute-forcing. You have already obtained a valid username and password, but do not have access to the user's 2FA verification code. To solve the lab, brute-force the 2FA code and access Carlos's account page.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Cross-site WebSocket hijacking",
+    "url": "https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking/lab",
+    "description": "This online shop has a live chat feature implemented using WebSockets. To solve the lab, use the exploit server to host an HTML/JavaScript payload that uses a cross-site WebSocket hijacking attack to exfiltrate the victim's chat history, then use this gain access to their account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Manipulating the WebSocket handshake to exploit vulnerabilities",
+    "url": "https://portswigger.net/web-security/websockets/lab-manipulating-handshake-to-exploit-vulnerabilities",
+    "description": "This online shop has a live chat feature implemented using WebSockets. It has an aggressive but flawed XSS filter. To solve the lab, use a WebSocket message to trigger an alert() popup in the support agent's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning with an unkeyed header",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-with-an-unkeyed-header",
+    "description": "This lab is vulnerable to web cache poisoning because it handles input from an unkeyed header in an unsafe way. An unsuspecting user regularly visits the site's home page. To solve this lab, poison the cache with a response that executes alert(document.cookie) in the visitor's browser. This lab supports the X-Forwarded-Host header. Go to the exploit server and change the file name to match the path used by the vulnerable response: Add the following header, remembering to enter your own exploit server ID:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning with an unkeyed cookie",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-with-an-unkeyed-cookie",
+    "description": "This lab is vulnerable to web cache poisoning because cookies aren't included in the cache key. An unsuspecting user regularly visits the site's home page. To solve this lab, poison the cache with a response that executes alert(1) in the visitor's browser. Place a suitable XSS payload in the fehost cookie, for example:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning with multiple headers",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-with-multiple-headers",
+    "description": "This lab contains a web cache poisoning vulnerability that is only exploitable when you use multiple headers to craft a malicious request. A user visits the home page roughly once a minute. To solve this lab, poison the cache with a response that executes alert(document.cookie) in the visitor's browser. This lab supports both the X-Forwarded-Host and X-Forwarded-Scheme headers. Go to the exploit server and change the file name to match the path used by the vulnerable response: Go back to the request in Burp Repeater and set the X-Forwarded-Host header as follows, remembering to enter your own exploit server ID:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Targeted web cache poisoning using an unknown header",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-targeted-using-an-unknown-header",
+    "description": "This lab is vulnerable to web cache poisoning. A victim user will view any comments that you post. To solve this lab, you need to poison the cache with a response that executes alert(document.cookie) in the visitor's browser. However, you also need to make sure that the response is served to the specific subset of users to which the intended victim belongs. Solving this lab requires multiple steps. First, you need to identify where the vulnerability is and study how the cache behaves. You then need to find a way of targeting the right subset of users before finally poisoning the cache accordingly. Go to the exploit server and change the file name to match the path used by the vulnerable response: Go back to the request in Burp Repeater and set the X-Host header as follows, remembering to add your own exploit server ID:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning via an unkeyed query string",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-unkeyed-query",
+    "description": "This lab is vulnerable to web cache poisoning because the query string is unkeyed. A user regularly visits this site's home page using Chrome. To solve the lab, poison the home page with a response that executes alert(1) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning via an unkeyed query parameter",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-unkeyed-param",
+    "description": "This lab is vulnerable to web cache poisoning because it excludes a certain parameter from the cache key. A user regularly visits this site's home page using Chrome. To solve the lab, poison the cache with a response that executes alert(1) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Parameter cloaking",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-param-cloaking",
+    "description": "This lab is vulnerable to web cache poisoning because it excludes a certain parameter from the cache key. There is also inconsistent parameter parsing between the cache and the back-end. A user regularly visits this site's home page using Chrome. To solve the lab, use the parameter cloaking technique to poison the cache with a response that executes alert(1) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning via a fat GET request",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-fat-get",
+    "description": "This lab is vulnerable to web cache poisoning. It accepts GET requests that have a body, but does not include the body in the cache key. A user regularly visits this site's home page using Chrome. To solve the lab, poison the cache with a response that executes alert(1) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "URL normalization",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-normalization",
+    "description": "This lab contains an XSS vulnerability that is not directly exploitable due to browser URL-encoding. To solve the lab, take advantage of the cache's normalization process to exploit this vulnerability. Find the XSS vulnerability and inject a payload that will execute alert(1) in the victim's browser. Then, deliver the malicious URL to the victim.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Web cache poisoning to exploit a DOM vulnerability via a cache with strict cacheability criteria",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-to-exploit-a-dom-vulnerability-via-a-cache-with-strict-cacheability-criteria",
+    "description": "This lab contains a DOM-based vulnerability that can be exploited as part of a web cache poisoning attack. A user visits the home page roughly once a minute. Note that the cache used by this lab has stricter criteria for deciding which responses are cacheable, so you will need to study the cache behavior closely. To solve the lab, poison the cache with a response that executes alert(document.cookie) in the visitor's browser.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Combining web cache poisoning vulnerabilities",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-design-flaws/lab-web-cache-poisoning-combining-vulnerabilities",
+    "description": "This lab is susceptible to web cache poisoning, but only if you construct a complex exploit chain. A user visits the home page roughly once a minute and their language is set to English. To solve this lab, poison the cache with a response that executes alert(document.cookie) in the visitor's browser. This lab requires you to poison the cache with multiple malicious responses simultaneously and coordinate this with the victim's browsing behavior. Go to the exploit server and edit the file name to match the path used by the vulnerable website:",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Cache key injection",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-cache-key-injection",
+    "description": "This lab contains multiple independent vulnerabilities, including cache key injection. A user regularly visits this site's home page using Chrome. To solve the lab, combine the vulnerabilities to execute alert(1) in the victim's browser. Note that you will need to make use of the Pragma: x-get-cache-key header in order to solve this lab.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Internal cache poisoning",
+    "url": "https://portswigger.net/web-security/web-cache-poisoning/exploiting-implementation-flaws/lab-web-cache-poisoning-internal",
+    "description": "This lab is vulnerable to web cache poisoning. It uses multiple layers of caching. A user regularly visits this site's home page using Chrome. To solve the lab, poison the internal cache so that the home page executes alert(document.cookie) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Modifying serialized data types",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-modifying-serialized-data-types",
+    "description": "This lab uses a serialization-based session mechanism and is vulnerable to authentication bypass as a result. To solve the lab, edit the serialized object in the session cookie to access the administrator account. Then, delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Using application functionality to exploit insecure deserialization",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-using-application-functionality-to-exploit-insecure-deserialization",
+    "description": "This lab uses a serialization-based session mechanism. A certain feature invokes a dangerous method on data provided in a serialized object. To solve the lab, edit the serialized object in the session cookie and use it to delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Arbitrary object injection in PHP",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-arbitrary-object-injection-in-php",
+    "description": "This lab uses a serialization-based session mechanism and is vulnerable to arbitrary object injection as a result. To solve the lab, create and inject a malicious serialized object to delete the morale.txt file from Carlos's home directory. You will need to obtain source code access to solve this lab.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting Java deserialization with Apache Commons",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-exploiting-java-deserialization-with-apache-commons",
+    "description": "This lab uses a serialization-based session mechanism and loads the Apache Commons Collections library. Although you don't have source code access, you can still exploit this lab using pre-built gadget chains. To solve the lab, use a third-party tool to generate a malicious serialized object containing a remote code execution payload. Then, pass this object into the website to delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting PHP deserialization with a pre-built gadget chain",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-exploiting-php-deserialization-with-a-pre-built-gadget-chain",
+    "description": "This lab has a serialization-based session mechanism that uses a signed cookie. It also uses a common PHP framework. Although you don't have source code access, you can still exploit this lab's insecure deserialization using pre-built gadget chains. To solve the lab, identify the target framework then use a third-party tool to generate a malicious serialized object containing a remote code execution payload. Then, work out how to generate a valid signed cookie containing your malicious object. Finally, pass this into the website to delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting Ruby deserialization using a documented gadget chain",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-exploiting-ruby-deserialization-using-a-documented-gadget-chain",
+    "description": "This lab uses a serialization-based session mechanism and the Ruby on Rails framework. There are documented exploits that enable remote code execution via a gadget chain in this framework. To solve the lab, find a documented exploit and adapt it to create a malicious serialized object containing a remote code execution payload. Then, pass this object into the website to delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Developing a custom gadget chain for Java deserialization",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-developing-a-custom-gadget-chain-for-java-deserialization",
+    "description": "This lab uses a serialization-based session mechanism. If you can construct a suitable gadget chain, you can exploit this lab's insecure deserialization to obtain the administrator's password. To solve the lab, gain access to the source code and use it to construct a gadget chain to obtain the administrator's password. Then, log in as the administrator and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Developing a custom gadget chain for PHP deserialization",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-developing-a-custom-gadget-chain-for-php-deserialization",
+    "description": "This lab uses a serialization-based session mechanism. By deploying a custom gadget chain, you can exploit its insecure deserialization to achieve remote code execution. To solve the lab, delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Using PHAR deserialization to deploy a custom gadget chain",
+    "url": "https://portswigger.net/web-security/deserialization/exploiting/lab-deserialization-using-phar-deserialization-to-deploy-a-custom-gadget-chain",
+    "description": "This lab does not explicitly use deserialization. However, if you combine PHAR deserialization with other advanced hacking techniques, you can still achieve remote code execution via a custom gadget chain. To solve the lab, delete the morale.txt file from Carlos's home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Information disclosure in version control history",
+    "url": "https://portswigger.net/web-security/information-disclosure/exploiting/lab-infoleak-in-version-control-history",
+    "description": "This lab discloses sensitive information via its version control history. To solve the lab, obtain the password for the administrator user then log in and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Low-level logic flaw",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-low-level",
+    "description": "This lab doesn't adequately validate user input. You can exploit a logic flaw in its purchasing workflow to buy items for an unintended price. To solve the lab, buy a \"Lightweight l33t leather jacket\".",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Inconsistent handling of exceptional input",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-inconsistent-handling-of-exceptional-input",
+    "description": "This lab doesn't adequately validate user input. You can exploit a logic flaw in its account registration process to gain access to administrative functionality. To solve the lab, access the admin panel and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Weak isolation on dual-use endpoint",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-weak-isolation-on-dual-use-endpoint",
+    "description": "This lab makes a flawed assumption about the user's privilege level based on their input. As a result, you can exploit the logic of its account management features to gain access to arbitrary users' accounts. To solve the lab, access the administrator account and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Insufficient workflow validation",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-insufficient-workflow-validation",
+    "description": "This lab makes flawed assumptions about the sequence of events in the purchasing workflow. To solve the lab, exploit this flaw to buy a \"Lightweight l33t leather jacket\".",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Authentication bypass via flawed state machine",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-authentication-bypass-via-flawed-state-machine",
+    "description": "This lab makes flawed assumptions about the sequence of events in the login process. To solve the lab, exploit this flaw to bypass the lab's authentication, access the admin interface, and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Infinite money logic flaw",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-infinite-money",
+    "description": "This lab has a logic flaw in its purchasing workflow. To solve the lab, exploit this flaw to buy a \"Lightweight l33t leather jacket\".",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Authentication bypass via encryption oracle",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-authentication-bypass-via-encryption-oracle",
+    "description": "This lab contains a logic flaw that exposes an encryption oracle to users. To solve the lab, exploit this flaw to gain access to the admin panel and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Bypassing access controls using email address parsing discrepancies",
+    "url": "https://portswigger.net/web-security/logic-flaws/examples/lab-logic-flaws-bypassing-access-controls-using-email-address-parsing-discrepancies",
+    "description": "This lab validates email addresses to prevent attackers from registering addresses from unauthorized domains. There is a parser discrepancy in the validation logic and library used to parse email addresses. To solve the lab, exploit this flaw to register an account and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web cache poisoning via ambiguous requests",
+    "url": "https://portswigger.net/web-security/host-header/exploiting/lab-host-header-web-cache-poisoning-via-ambiguous-requests",
+    "description": "This lab is vulnerable to web cache poisoning due to discrepancies in how the cache and the back-end application handle ambiguous requests. An unsuspecting user regularly visits the site's home page. To solve the lab, poison the cache so the home page executes alert(document.cookie) in the victim's browser.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Routing-based SSRF",
+    "url": "https://portswigger.net/web-security/host-header/exploiting/lab-host-header-routing-based-ssrf",
+    "description": "This lab is vulnerable to routing-based SSRF via the Host header. You can exploit this to access an insecure intranet admin panel located on an internal IP address. To solve the lab, access the internal admin panel located in the 192.168.0.0/24 range, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SSRF via flawed request parsing",
+    "url": "https://portswigger.net/web-security/host-header/exploiting/lab-host-header-ssrf-via-flawed-request-parsing",
+    "description": "This lab is vulnerable to routing-based SSRF due to its flawed parsing of the request's intended host. You can exploit this to access an insecure intranet admin panel located at an internal IP address. To solve the lab, access the internal admin panel located in the 192.168.0.0/24 range, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Host validation bypass via connection state attack",
+    "url": "https://portswigger.net/web-security/host-header/exploiting/lab-host-header-host-validation-bypass-via-connection-state-attack",
+    "description": "This lab is vulnerable to routing-based SSRF via the Host header. Although the front-end server may initially appear to perform robust validation of the Host header, it makes assumptions about all requests on a connection based on the first request it receives. To solve the lab, exploit this behavior to access an internal admin panel located at 192.168.0.1/admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Password reset poisoning via dangling markup",
+    "url": "https://portswigger.net/web-security/host-header/exploiting/password-reset-poisoning/lab-host-header-password-reset-poisoning-via-dangling-markup",
+    "description": "This lab is vulnerable to password reset poisoning via dangling markup. To solve the lab, log in to Carlos's account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "SSRF via OpenID dynamic client registration",
+    "url": "https://portswigger.net/web-security/oauth/openid/lab-oauth-ssrf-via-openid-dynamic-client-registration",
+    "description": "This lab allows client applications to dynamically register themselves with the OAuth service via a dedicated registration endpoint. Some client-specific data is used in an unsafe way by the OAuth service, which exposes a potential vector for SSRF. To solve the lab, craft an SSRF attack to access http://169.254.169.254/latest/meta-data/iam/security-credentials/admin/ and steal the secret access key for the OAuth provider's cloud environment.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Forced OAuth profile linking",
+    "url": "https://portswigger.net/web-security/oauth/lab-oauth-forced-oauth-profile-linking",
+    "description": "This lab gives you the option to attach a social media profile to your account so that you can log in via OAuth instead of using the normal username and password. Due to the insecure implementation of the OAuth flow by the client application, an attacker can manipulate this functionality to obtain access to other users' accounts. To solve the lab, use a CSRF attack to attach your own social media profile to the admin user's account on the blog website, then access the admin panel and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "OAuth account hijacking via redirect_uri",
+    "url": "https://portswigger.net/web-security/oauth/lab-oauth-account-hijacking-via-redirect-uri",
+    "description": "This lab uses an OAuth service to allow users to log in with their social media account. A misconfiguration by the OAuth provider makes it possible for an attacker to steal authorization codes associated with other users' accounts. To solve the lab, steal an authorization code associated with the admin user, then use it to access their account and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Stealing OAuth access tokens via an open redirect",
+    "url": "https://portswigger.net/web-security/oauth/lab-oauth-stealing-oauth-access-tokens-via-an-open-redirect",
+    "description": "This lab uses an OAuth service to allow users to log in with their social media account. Flawed validation by the OAuth service makes it possible for an attacker to leak access tokens to arbitrary pages on the client application. To solve the lab, identify an open redirect on the blog website and use this to steal an access token for the admin user's account. Use the access token to obtain the admin's API key and submit the solution using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Stealing OAuth access tokens via a proxy page",
+    "url": "https://portswigger.net/web-security/oauth/lab-oauth-stealing-oauth-access-tokens-via-a-proxy-page",
+    "description": "This lab uses an OAuth service to allow users to log in with their social media account. Flawed validation by the OAuth service makes it possible for an attacker to leak access tokens to arbitrary pages on the client application. To solve the lab, identify a secondary vulnerability in the client application and use this as a proxy to steal an access token for the admin user's account. Use the access token to obtain the admin's API key and submit the solution using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web shell upload via path traversal",
+    "url": "https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-path-traversal",
+    "description": "This lab contains a vulnerable image upload function. The server is configured to prevent execution of user-supplied files, but this restriction can be bypassed by exploiting a secondary vulnerability. To solve the lab, upload a basic PHP web shell and use it to exfiltrate the contents of the file /home/carlos/secret. Submit this secret using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web shell upload via extension blacklist bypass",
+    "url": "https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-extension-blacklist-bypass",
+    "description": "This lab contains a vulnerable image upload function. Certain file extensions are blacklisted, but this defense can be bypassed due to a fundamental flaw in the configuration of this blacklist. To solve the lab, upload a basic PHP web shell, then use it to exfiltrate the contents of the file /home/carlos/secret. Submit this secret using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Web shell upload via obfuscated file extension",
+    "url": "https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-obfuscated-file-extension",
+    "description": "This lab contains a vulnerable image upload function. Certain file extensions are blacklisted, but this defense can be bypassed using a classic obfuscation technique. To solve the lab, upload a basic PHP web shell, then use it to exfiltrate the contents of the file /home/carlos/secret. Submit this secret using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Remote code execution via polyglot web shell upload",
+    "url": "https://portswigger.net/web-security/file-upload/lab-file-upload-remote-code-execution-via-polyglot-web-shell-upload",
+    "description": "This lab contains a vulnerable image upload function. Although it checks the contents of the file to verify that it is a genuine image, it is still possible to upload and execute server-side code. To solve the lab, upload a basic PHP web shell, then use it to exfiltrate the contents of the file /home/carlos/secret. Submit this secret using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Web shell upload via race condition",
+    "url": "https://portswigger.net/web-security/file-upload/lab-file-upload-web-shell-upload-via-race-condition",
+    "description": "This lab contains a vulnerable image upload function. Although it performs robust validation on any files that are uploaded, it is possible to bypass this validation entirely by exploiting a race condition in the way it processes them. To solve the lab, upload a basic PHP web shell, then use it to exfiltrate the contents of the file /home/carlos/secret. Submit this secret using the button provided in the lab banner.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "JWT authentication bypass via weak signing key",
+    "url": "https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-weak-signing-key",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. It uses an extremely weak secret key to both sign and verify tokens. This can be easily brute-forced using a wordlist of common secrets. To solve the lab, first brute-force the website's secret key. Once you've obtained this, use it to sign a modified session token that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "JWT authentication bypass via jwk header injection",
+    "url": "https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-jwk-header-injection",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. The server supports the jwk parameter in the JWT header. This is sometimes used to embed the correct verification key directly in the token. However, it fails to check whether the provided key came from a trusted source. To solve the lab, modify and sign a JWT that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "JWT authentication bypass via jku header injection",
+    "url": "https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-jku-header-injection",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. The server supports the jku parameter in the JWT header. However, it fails to check whether the provided URL belongs to a trusted domain before fetching the key. To solve the lab, forge a JWT that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "JWT authentication bypass via kid header path traversal",
+    "url": "https://portswigger.net/web-security/jwt/lab-jwt-authentication-bypass-via-kid-header-path-traversal",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. In order to verify the signature, the server uses the kid parameter in JWT header to fetch the relevant key from its filesystem. To solve the lab, forge a JWT that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "JWT authentication bypass via algorithm confusion",
+    "url": "https://portswigger.net/web-security/jwt/algorithm-confusion/lab-jwt-authentication-bypass-via-algorithm-confusion",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. It uses a robust RSA key pair to sign and verify tokens. However, due to implementation flaws, this mechanism is vulnerable to algorithm confusion attacks. To solve the lab, first obtain the server's public key. This is exposed via a standard endpoint. Use this key to sign a modified session token that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "JWT authentication bypass via algorithm confusion with no exposed key",
+    "url": "https://portswigger.net/web-security/jwt/algorithm-confusion/lab-jwt-authentication-bypass-via-algorithm-confusion-with-no-exposed-key",
+    "description": "This lab uses a JWT-based mechanism for handling sessions. It uses a robust RSA key pair to sign and verify tokens. However, due to implementation flaws, this mechanism is vulnerable to algorithm confusion attacks. To solve the lab, first obtain the server's public key. Use this key to sign a modified session token that gives you access to the admin panel at /admin, then delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Discovering vulnerabilities quickly with targeted scanning",
+    "url": "https://portswigger.net/web-security/essential-skills/using-burp-scanner-during-manual-testing/lab-discovering-vulnerabilities-quickly-with-targeted-scanning",
+    "description": "This lab contains a vulnerability that enables you to read arbitrary files from the server. To solve the lab, retrieve the contents of /etc/passwd within 10 minutes.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Scanning non-standard data structures",
+    "url": "https://portswigger.net/web-security/essential-skills/using-burp-scanner-during-manual-testing/lab-scanning-non-standard-data-structures",
+    "description": "This lab contains a vulnerability that is difficult to find manually. It is located in a non-standard data structure. To solve the lab, use Burp Scanner's Scan selected insertion point feature to identify the vulnerability, then manually exploit it and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Client-side prototype pollution via browser APIs",
+    "url": "https://portswigger.net/web-security/prototype-pollution/client-side/browser-apis/lab-prototype-pollution-client-side-prototype-pollution-via-browser-apis",
+    "description": "This lab is vulnerable to DOM XSS via client-side prototype pollution. The website's developers have noticed a potential gadget and attempted to patch it. However, you can bypass the measures they've taken. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS via client-side prototype pollution",
+    "url": "https://portswigger.net/web-security/prototype-pollution/client-side/lab-prototype-pollution-dom-xss-via-client-side-prototype-pollution",
+    "description": "This lab is vulnerable to DOM XSS via client-side prototype pollution. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "DOM XSS via an alternative prototype pollution vector",
+    "url": "https://portswigger.net/web-security/prototype-pollution/client-side/lab-prototype-pollution-dom-xss-via-an-alternative-prototype-pollution-vector",
+    "description": "This lab is vulnerable to DOM XSS via client-side prototype pollution. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Client-side prototype pollution via flawed sanitization",
+    "url": "https://portswigger.net/web-security/prototype-pollution/client-side/lab-prototype-pollution-client-side-prototype-pollution-via-flawed-sanitization",
+    "description": "This lab is vulnerable to DOM XSS via client-side prototype pollution. Although the developers have implemented measures to prevent prototype pollution, these can be easily bypassed. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Client-side prototype pollution in third-party libraries",
+    "url": "https://portswigger.net/web-security/prototype-pollution/client-side/lab-prototype-pollution-client-side-prototype-pollution-in-third-party-libraries",
+    "description": "This lab is vulnerable to DOM XSS via client-side prototype pollution. This is due to a gadget in a third-party library, which is easy to miss due to the minified source code. Although it's technically possible to solve this lab manually, we recommend using DOM Invader as this will save you a considerable amount of time and effort. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Privilege escalation via server-side prototype pollution",
+    "url": "https://portswigger.net/web-security/prototype-pollution/server-side/lab-privilege-escalation-via-server-side-prototype-pollution",
+    "description": "This lab is built on Node.js and the Express framework. It is vulnerable to server-side prototype pollution because it unsafely merges user-controllable input into a server-side JavaScript object. This is simple to detect because any polluted properties inherited via the prototype chain are visible in an HTTP response. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Detecting server-side prototype pollution without polluted property reflection",
+    "url": "https://portswigger.net/web-security/prototype-pollution/server-side/lab-detecting-server-side-prototype-pollution-without-polluted-property-reflection",
+    "description": "This lab is built on Node.js and the Express framework. It is vulnerable to server-side prototype pollution because it unsafely merges user-controllable input into a server-side JavaScript object. To solve the lab, confirm the vulnerability by polluting Object.prototype in a way that triggers a noticeable but non-destructive change in the server's behavior. As this lab is designed to help you practice non-destructive detection techniques, you don't need to progress to exploitation.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Bypassing flawed input filters for server-side prototype pollution",
+    "url": "https://portswigger.net/web-security/prototype-pollution/server-side/lab-bypassing-flawed-input-filters-for-server-side-prototype-pollution",
+    "description": "This lab is built on Node.js and the Express framework. It is vulnerable to server-side prototype pollution because it unsafely merges user-controllable input into a server-side JavaScript object. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Remote code execution via server-side prototype pollution",
+    "url": "https://portswigger.net/web-security/prototype-pollution/server-side/lab-remote-code-execution-via-server-side-prototype-pollution",
+    "description": "This lab is built on Node.js and the Express framework. It is vulnerable to server-side prototype pollution because it unsafely merges user-controllable input into a server-side JavaScript object. Due to the configuration of the server, it's possible to pollute Object.prototype in such a way that you can inject arbitrary system commands that are subsequently executed on the server. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exfiltrating sensitive data via server-side prototype pollution",
+    "url": "https://portswigger.net/web-security/prototype-pollution/server-side/lab-exfiltrating-sensitive-data-via-server-side-prototype-pollution",
+    "description": "This lab is built on Node.js and the Express framework. It is vulnerable to server-side prototype pollution because it unsafely merges user-controllable input into a server-side JavaScript object. Due to the configuration of the server, it's possible to pollute Object.prototype in such a way that you can inject arbitrary system commands that are subsequently executed on the server. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Accidental exposure of private GraphQL fields",
+    "url": "https://portswigger.net/web-security/graphql/lab-graphql-accidental-field-exposure",
+    "description": "The user management functions for this lab are powered by a GraphQL endpoint. The lab contains an access control vulnerability whereby you can induce the API to reveal user credential fields. To solve the lab, sign in as the administrator and delete the username carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Finding a hidden GraphQL endpoint",
+    "url": "https://portswigger.net/web-security/graphql/lab-graphql-find-the-endpoint",
+    "description": "The user management functions for this lab are powered by a hidden GraphQL endpoint. You won't be able to find this endpoint by simply clicking pages in the site. The endpoint also has some defenses against introspection. To solve the lab, find the hidden endpoint and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Bypassing GraphQL brute force protections",
+    "url": "https://portswigger.net/web-security/graphql/lab-graphql-brute-force-protection-bypass",
+    "description": "The user login mechanism for this lab is powered by a GraphQL API. The API endpoint has a rate limiter that returns an error if it receives too many requests from the same origin in a short space of time. To solve the lab, brute force the login mechanism to sign in as carlos. Use the list of authentication lab passwords as your password source.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Performing CSRF exploits over GraphQL",
+    "url": "https://portswigger.net/web-security/graphql/lab-graphql-csrf-via-graphql-api",
+    "description": "The user management functions for this lab are powered by a GraphQL endpoint. The endpoint accepts requests with a content-type of x-www-form-urlencoded and is therefore vulnerable to cross-site request forgery (CSRF) attacks. To solve the lab, craft some HTML that uses a CSRF attack to change the viewer's email address, then upload it to your exploit server.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Bypassing rate limits via race conditions",
+    "url": "https://portswigger.net/web-security/race-conditions/lab-race-conditions-bypassing-rate-limits",
+    "description": "This lab's login mechanism uses rate limiting to defend against brute-force attacks. However, this can be bypassed due to a race condition. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Multi-endpoint race conditions",
+    "url": "https://portswigger.net/web-security/race-conditions/lab-race-conditions-multi-endpoint",
+    "description": "This lab's purchasing flow contains a race condition that enables you to purchase items for an unintended price. To solve the lab, successfully purchase a Lightweight L33t Leather Jacket.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Single-endpoint race conditions",
+    "url": "https://portswigger.net/web-security/race-conditions/lab-race-conditions-single-endpoint",
+    "description": "This lab's email change feature contains a race condition that enables you to associate an arbitrary email address with your account. Someone with the address carlos@ginandjuice.shop has a pending invite to be an administrator for the site, but they have not yet created an account. Therefore, any user who successfully claims this address will automatically inherit admin privileges. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting time-sensitive vulnerabilities",
+    "url": "https://portswigger.net/web-security/race-conditions/lab-race-conditions-exploiting-time-sensitive-vulnerabilities",
+    "description": "This lab contains a password reset mechanism. Although it doesn't contain a race condition, you can exploit the mechanism's broken cryptography by sending carefully timed requests. To solve the lab:",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Partial construction race conditions",
+    "url": "https://portswigger.net/web-security/race-conditions/lab-race-conditions-partial-construction",
+    "description": "This lab contains a user registration mechanism. A race condition enables you to bypass email verification and register with an arbitrary email address that you do not own. To solve the lab, exploit this race condition to create an account, then log in and delete the user carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting NoSQL injection to extract data",
+    "url": "https://portswigger.net/web-security/nosql-injection/lab-nosql-injection-extract-data",
+    "description": "The user lookup functionality for this lab is powered by a MongoDB NoSQL database. It is vulnerable to NoSQL injection. To solve the lab, extract the password for the administrator user, then log in to their account.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting NoSQL operator injection to extract unknown fields",
+    "url": "https://portswigger.net/web-security/nosql-injection/lab-nosql-injection-extract-unknown-fields",
+    "description": "The user lookup functionality for this lab is powered by a MongoDB NoSQL database. It is vulnerable to NoSQL injection. To solve the lab, log in as carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting server-side parameter pollution in a query string",
+    "url": "https://portswigger.net/web-security/api-testing/server-side-parameter-pollution/lab-exploiting-server-side-parameter-pollution-in-query-string",
+    "description": "To solve the lab, log in as the administrator and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Finding and exploiting an unused API endpoint",
+    "url": "https://portswigger.net/web-security/api-testing/lab-exploiting-unused-api-endpoint",
+    "description": "To solve the lab, exploit a hidden API endpoint to buy a Lightweight l33t Leather Jacket. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting a mass assignment vulnerability",
+    "url": "https://portswigger.net/web-security/api-testing/lab-exploiting-mass-assignment-vulnerability",
+    "description": "To solve the lab, find and exploit a mass assignment vulnerability to buy a Lightweight l33t Leather Jacket. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting server-side parameter pollution in a REST URL",
+    "url": "https://portswigger.net/web-security/api-testing/server-side-parameter-pollution/lab-exploiting-server-side-parameter-pollution-in-rest-url",
+    "description": "To solve the lab, log in as the administrator and delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting vulnerabilities in LLM APIs",
+    "url": "https://portswigger.net/web-security/llm-attacks/lab-exploiting-vulnerabilities-in-llm-apis",
+    "description": "This lab contains an OS command injection vulnerability that can be exploited via its APIs. You can call these APIs via the LLM. To solve the lab, delete the morale.txt file from Carlos' home directory.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Indirect prompt injection",
+    "url": "https://portswigger.net/web-security/llm-attacks/lab-indirect-prompt-injection",
+    "description": "This lab is vulnerable to indirect prompt injection. The user carlos frequently uses the live chat to ask about the Lightweight \"l33t\" Leather Jacket product. To solve the lab, delete carlos.",
+    "credentials": null
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting insecure output handling in LLMs",
+    "url": "https://portswigger.net/web-security/llm-attacks/lab-exploiting-insecure-output-handling-in-llms",
+    "description": "This lab handles LLM output insecurely, leaving it vulnerable to XSS. The user carlos frequently uses the live chat to ask about the Lightweight \"l33t\" Leather Jacket product. To solve the lab, use indirect prompt injection to perform an XSS attack that deletes carlos.",
+    "credentials": null
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting AI agents to trigger secondary vulnerabilities",
+    "url": "https://portswigger.net/web-security/llm-attacks/ai-powered-scanner-vulnerabilities/lab-exploiting-target-website-vulnerabilities-to-bypass-restrictions",
+    "description": "This lab is vulnerable to indirect prompt injection. The application features an AI-powered scanner that can be manipulated into exploiting a routing-based SSRF vulnerability on the internal network. You can log in to your own account using the following credentials: wiener:peter. To solve the lab, delete carlos.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Bypassing AI scanner defenses to exfiltrate sensitive information",
+    "url": "https://portswigger.net/web-security/llm-attacks/ai-powered-scanner-vulnerabilities/lab-bypassing-ai-scanner-defenses-to-exfiltrate-sensitive-information",
+    "description": "This lab features an AI-powered scanner that has access to sensitive user data, including API keys, while performing site audits. The scanner has been given the login credentials for carlos so it can explore authenticated areas of the site. The scanner has some built-in defenses against indirect prompt injection. You can log in to your own account using the following credentials: wiener:peter. To solve the lab, exfiltrate and submit the API key for the user carlos.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting path delimiters for web cache deception",
+    "url": "https://portswigger.net/web-security/web-cache-deception/lab-wcd-exploiting-path-delimiters",
+    "description": "To solve the lab, find the API key for the user carlos. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting origin server normalization for web cache deception",
+    "url": "https://portswigger.net/web-security/web-cache-deception/lab-wcd-exploiting-origin-server-normalization",
+    "description": "To solve the lab, find the API key for the user carlos. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "PRACTITIONER",
+    "title": "Exploiting cache server normalization for web cache deception",
+    "url": "https://portswigger.net/web-security/web-cache-deception/lab-wcd-exploiting-cache-server-normalization",
+    "description": "To solve the lab, find the API key for the user carlos. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  },
+  {
+    "level": "EXPERT",
+    "title": "Exploiting exact-match cache rules for web cache deception",
+    "url": "https://portswigger.net/web-security/web-cache-deception/lab-wcd-exploiting-exact-match-cache-rules",
+    "description": "To solve the lab, change the email address for the user administrator. You can log in to your own account using the following credentials: wiener:peter.",
+    "credentials": "wiener:peter"
+  }
+]

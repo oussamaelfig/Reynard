@@ -26,6 +26,10 @@ EXPECTED_KALI_TOOLS = [
     "whatweb", "nikto", "python3", "interactsh-client",
 ]
 
+# Class-specific OSS tools installed by the Dockerfile (Phase 2 tooling layer).
+# ysoserial is verified separately via its jar path (needs java to run).
+EXPECTED_CLASS_TOOLS = ["jwt_tool", "phpggc", "sstimap", "java"]
+
 
 def package_version(name: str) -> str:
     try:
@@ -78,6 +82,54 @@ def check_kali_tools() -> dict[str, str]:
     return results
 
 
+def _file_in_container(path: str) -> bool:
+    proc = _run(["docker", "exec", CONTAINER_NAME, "test", "-s", path], timeout=6)
+    return bool(proc and proc.returncode == 0)
+
+
+def check_class_tools() -> dict[str, str]:
+    """Return {tool: 'ok'|'missing'|'unknown'} for class-specific OSS tools.
+
+    Mirrors check_kali_tools() but also validates the ysoserial jar (which is
+    invoked via java rather than being on PATH).
+    """
+    results: dict[str, str] = {}
+    container_up = _docker_available() and _container_running(CONTAINER_NAME)
+    for tool in EXPECTED_CLASS_TOOLS:
+        if container_up:
+            results[tool] = "ok" if _tool_in_container(tool) else "missing"
+        elif shutil.which(tool):
+            results[tool] = "ok"
+        else:
+            results[tool] = "unknown"
+    if container_up:
+        results["ysoserial.jar"] = (
+            "ok" if _file_in_container("/opt/ysoserial/ysoserial.jar") else "missing"
+        )
+    else:
+        results["ysoserial.jar"] = "unknown"
+    return results
+
+
+def check_shodan() -> tuple[str, str]:
+    """Return (status, message) for Shodan OSINT readiness.
+
+    'ok' when a key is set and the API answers; 'warn' when no key is set
+    (Shodan is optional, only needed for prod assessments); 'error' otherwise.
+    """
+    try:
+        from hacking_agent.integrations import shodan as shodan_mod
+        client = shodan_mod.get_shodan_client()
+        if not client.is_configured():
+            return "warn", "SHODAN_API_KEY not set (optional; prod recon only)"
+        info = client.api_info()
+        if info.get("error"):
+            return "error", f"Shodan configured but unreachable: {info['error']}"
+        return "ok", "Shodan API key configured and reachable"
+    except Exception as exc:  # noqa: BLE001
+        return "unknown", f"Shodan check failed: {exc}"
+
+
 def check_playwright_chromium() -> tuple[str, str]:
     """Return (status, message) for Chromium/Playwright readiness.
 
@@ -114,20 +166,28 @@ def check_caido_bridge() -> tuple[str, str]:
 def run_self_check() -> dict:
     """Aggregate readiness checks and compute a 0-100 readiness score."""
     tools = check_kali_tools()
+    class_tools = check_class_tools()
     pw_status, pw_msg = check_playwright_chromium()
     caido_status, caido_msg = check_caido_bridge()
+    shodan_status, shodan_msg = check_shodan()
 
-    # Score: Kali tools 70%, Playwright 20%, Caido 10% (Caido optional -> warn ok).
+    # Score: Kali tools 55%, class tools 15%, Playwright 20%, Caido 5%, Shodan 5%.
+    # Caido + Shodan are optional (prod-only), so 'warn' still earns their share.
     tool_ok = sum(1 for v in tools.values() if v == "ok")
-    tool_score = (tool_ok / len(tools)) * 70 if tools else 0
+    tool_score = (tool_ok / len(tools)) * 55 if tools else 0
+    class_ok = sum(1 for v in class_tools.values() if v == "ok")
+    class_score = (class_ok / len(class_tools)) * 15 if class_tools else 0
     pw_score = 20 if pw_status == "ok" else (10 if pw_status == "unknown" else 0)
-    caido_score = 10 if caido_status in ("ok", "warn") else 0
-    score = round(tool_score + pw_score + caido_score)
+    caido_score = 5 if caido_status in ("ok", "warn") else 0
+    shodan_score = 5 if shodan_status in ("ok", "warn") else 0
+    score = round(tool_score + class_score + pw_score + caido_score + shodan_score)
 
     return {
         "kali_tools": tools,
+        "class_tools": class_tools,
         "playwright": {"status": pw_status, "message": pw_msg},
         "caido_bridge": {"status": caido_status, "message": caido_msg},
+        "shodan": {"status": shodan_status, "message": shodan_msg},
         "readiness_score": score,
     }
 
@@ -139,10 +199,15 @@ def print_self_check(report: dict | None = None) -> int:
     for tool, status in tools.items():
         mark = {"ok": "OK", "missing": "MISSING", "unknown": "UNKNOWN"}.get(status, status)
         print(f"  kali:{tool}: {mark}")
+    for tool, status in report.get("class_tools", {}).items():
+        mark = {"ok": "OK", "missing": "MISSING", "unknown": "UNKNOWN"}.get(status, status)
+        print(f"  classtool:{tool}: {mark}")
     pw = report["playwright"]
     print(f"  chromium/playwright: {pw['status'].upper()} — {pw['message']}")
     cd = report["caido_bridge"]
     print(f"  caido_bridge: {cd['status'].upper()} — {cd['message']}")
+    sh = report["shodan"]
+    print(f"  shodan: {sh['status'].upper()} — {sh['message']}")
     print(f"  readiness_score: {report['readiness_score']}/100")
     print()
     return report["readiness_score"]
@@ -152,7 +217,7 @@ def env_value(name: str) -> str:
     value = os.getenv(name)
     if value is None:
         return "<unset>"
-    if "KEY" in name or "TOKEN" in name or "PAT" in name:
+    if any(s in name for s in ("KEY", "TOKEN", "PAT", "SECRET")):
         return "<set>" if value else "<empty>"
     return value
 
@@ -192,6 +257,9 @@ def main() -> None:
         "LLM_REPORTER_REASONING_EFFORT",
         "LLM_VALIDATOR_REASONING_EFFORT",
         "LLM_PIVOT_REASONING_EFFORT",
+        "SHODAN_API_KEY",
+        "CENSYS_API_ID",
+        "CENSYS_API_SECRET",
     ):
         print(f"  {name}: {env_value(name)}")
     print()

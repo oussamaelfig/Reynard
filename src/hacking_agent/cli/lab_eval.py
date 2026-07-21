@@ -20,6 +20,12 @@ from typing import Any
 from rich.console import Console
 
 from hacking_agent.core.expert_playbooks import get_playbook, render_playbook_context
+from hacking_agent.core.lab_corpus import (
+    class_to_playbook,
+    classify_url,
+    is_placeholder_target,
+    normalize_lab_level,
+)
 from hacking_agent.core.lab_intel import detect_lab_profile, normalize_target_input
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
 
@@ -364,16 +370,41 @@ def load_live_config(path: str) -> list[dict[str, Any]]:
     return [dict(lab) for lab in labs]
 
 
+def _scoring_class(lab: dict[str, Any], detected_playbook: str) -> str:
+    """Resolve the coverage class (internal playbook_id) used for scoring.
+
+    Prefers the config's expected_vuln, then the detected playbook, then the
+    class derived from the documentation lab_url via the corpus classifier.
+    """
+    expected = str(lab.get("expected_vuln") or lab.get("expected_playbook") or "")
+    if expected:
+        return expected
+    if detected_playbook:
+        return detected_playbook
+    lab_url = str(lab.get("lab_url") or "")
+    if lab_url:
+        vuln_class, _ = classify_url(lab_url)
+        return class_to_playbook(vuln_class) or vuln_class
+    return ""
+
+
 def run_live_lab(
     lab: dict[str, Any],
     per_lab_timeout: float,
     default_max_iterations: int,
+    *,
+    force_strong: bool = False,
+    capture_transcript: bool = False,
 ) -> dict[str, Any]:
     """Run the Orchestrator against a single lab and return a scorecard row.
 
     Reuses the orchestrator entry point programmatically. The run executes in a
     daemon thread so a per-lab wall-clock timeout can be enforced; the shared
     token meter is reset before the run so tokens are attributed per lab.
+
+    When ``force_strong`` is set the strong tier is pinned for the whole run
+    (used by the training re-run pass); when ``capture_transcript`` is set an
+    unsolved run writes a compact failure transcript under ``logs/``.
     """
     # Imported lazily: the offline readiness path must not require the full
     # orchestrator/agent stack (and its optional runtime deps) to be importable.
@@ -392,6 +423,11 @@ def run_live_lab(
     playbook = get_playbook(lab_profile) if lab_profile else None
     playbook_id = playbook.get("id") if playbook else ""
     expected_vuln = lab.get("expected_vuln") or lab.get("expected_playbook") or ""
+
+    lab_level = normalize_lab_level(lab.get("level") or lab.get("lab_level"))
+    if lab_level and isinstance(lab_profile, dict):
+        lab_profile["lab_level"] = lab_level
+    scoring_class = _scoring_class(lab, playbook_id)
 
     creds = lab.get("creds") or {}
     username = _expand_env(creds.get("username"))
@@ -431,12 +467,25 @@ def run_live_lab(
         except Exception as exc:  # noqa: BLE001 - surfaced in verdict
             holder["error"] = exc
 
+    # Pin the strong tier for the whole run during the escalated re-run pass.
+    # The Orchestrator reads this env flag at construction (inside the thread),
+    # so it must be set before the thread starts and restored afterwards.
+    prev_force_strong = os.environ.get("REYNARD_FORCE_STRONG_TIER")
+    if force_strong:
+        os.environ["REYNARD_FORCE_STRONG_TIER"] = "1"
+
     thread = threading.Thread(target=_run, daemon=True)
     started = time.time()
     thread.start()
     thread.join(per_lab_timeout if per_lab_timeout > 0 else None)
     elapsed = round(time.time() - started, 1)
     timed_out = thread.is_alive()
+
+    if force_strong:
+        if prev_force_strong is None:
+            os.environ.pop("REYNARD_FORCE_STRONG_TIER", None)
+        else:
+            os.environ["REYNARD_FORCE_STRONG_TIER"] = prev_force_strong
 
     orch = holder.get("orch")
     result = holder.get("result")
@@ -465,15 +514,24 @@ def run_live_lab(
     else:
         verdict = "no_report"
 
+    transcript_path = ""
+    if capture_transcript and not solved and orch is not None:
+        transcript_path = _write_failure_transcript(
+            name, orch, scoring_class, lab_level, verdict, force_strong
+        )
+
     tokens = meter.totals()
     return {
         "name": name,
         "target_url": target_url,
         "objective": objective_final,
         "playbook_id": playbook_id,
+        "class": scoring_class,
+        "level": lab_level,
         "expected_vuln": expected_vuln,
         "expected_match": (not expected_vuln) or (playbook_id == expected_vuln),
         "solved": solved,
+        "escalated": force_strong,
         "verified_pocs": verified_pocs,
         "iterations": iterations,
         "prompt_tokens": tokens["prompt_tokens"],
@@ -483,6 +541,7 @@ def run_live_lab(
         "estimated_cost_usd": meter.estimated_cost(),
         "wall_clock_seconds": elapsed,
         "timed_out": timed_out,
+        "transcript_path": transcript_path,
         "verdict": verdict,
     }
 
@@ -546,6 +605,309 @@ def write_live_scorecard(results: list[dict[str, Any]]) -> tuple[Path, Path]:
     md_path = LOG_DIR / f"live_scorecard_{ts}.md"
     md_path.write_text("\n".join(md), encoding="utf-8")
     return json_path, md_path
+
+
+def _write_failure_transcript(
+    name: str,
+    orch: Any,
+    lab_class: str,
+    lab_level: str,
+    verdict: str,
+    escalated: bool,
+) -> str:
+    """Write a compact failure transcript (hypotheses / failed attempts /
+    final summary) for an unsolved lab. Best-effort; returns "" on failure."""
+    try:
+        ensure_runtime_dirs()
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:48] or "lab"
+        path = LOG_DIR / f"failure_{slug}_{ts}.md"
+
+        hypotheses: list[str] = []
+        try:
+            for h in orch.agenda.all()[:12]:
+                hypotheses.append(
+                    f"- [{h.status}] {h.vuln_type or '?'}@{h.vector or '?'} "
+                    f"(phase={h.phase}, heat={h.heat:.2f}, fails={h.fail_count}): "
+                    f"{(h.text or '')[:160]}"
+                )
+        except Exception:  # noqa: BLE001 - transcript is best-effort
+            pass
+
+        failures: list[str] = []
+        try:
+            for f in orch.memory.get_recent_failures(12):
+                failures.append(
+                    f"- [{f.get('phase')}/{f.get('tool')}] {f.get('reason')} "
+                    f"-> {f.get('lesson')}"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        lines = [
+            f"# Failure transcript: {name}",
+            "",
+            f"- Class: `{lab_class or 'unknown'}`",
+            f"- Level: {lab_level or 'unknown'}",
+            f"- Tier: {'strong (escalated re-run)' if escalated else 'default'}",
+            f"- Target: {orch.target_url}",
+            f"- Iterations: {getattr(orch.sm, 'iteration', 0)}",
+            f"- Final verdict: {verdict}",
+            "",
+            "## Hypothesis agenda (last state)",
+            *(hypotheses or ["- (none recorded)"]),
+            "",
+            "## Failed attempts",
+            *(failures or ["- (none recorded)"]),
+            "",
+        ]
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return str(path)
+    except Exception:  # noqa: BLE001 - never let transcript IO break a run
+        return ""
+
+
+def _record_solved_technique(lab_class: str, name: str) -> None:
+    """Belt-and-suspenders durable write: record a solved technique for the
+    class so later runs surface it as a primed win (durable.py feed-back)."""
+    if not lab_class:
+        return
+    try:
+        from hacking_agent.core.durable import open_durable_store
+
+        store = open_durable_store()
+        if store is None:
+            return
+        try:
+            store.record_technique(
+                lab_class,
+                technique=lab_class,
+                tool="training_loop",
+                outcome="success",
+                detail=f"solved: {name}"[:200],
+            )
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 - durable memory is opt-in-safe
+        pass
+
+
+def _not_run_row(lab: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Scorecard row for a lab that was intentionally not run (placeholder
+    target / total-budget exhausted). Counted separately, not as a failure."""
+    playbook_id = ""
+    lab_url = str(lab.get("lab_url") or "")
+    if lab_url:
+        vuln_class, _ = classify_url(lab_url)
+        playbook_id = class_to_playbook(vuln_class) or vuln_class
+    return {
+        "name": str(lab.get("name") or lab.get("target") or "lab"),
+        "target_url": str(lab.get("target") or lab.get("target_url") or ""),
+        "objective": str(lab.get("objective") or ""),
+        "playbook_id": playbook_id,
+        "class": _scoring_class(lab, playbook_id),
+        "level": normalize_lab_level(lab.get("level") or lab.get("lab_level")),
+        "expected_vuln": lab.get("expected_vuln") or "",
+        "expected_match": True,
+        "solved": False,
+        "escalated": False,
+        "not_run": True,
+        "verified_pocs": 0,
+        "iterations": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "llm_calls": 0,
+        "estimated_cost_usd": 0.0,
+        "wall_clock_seconds": 0.0,
+        "timed_out": False,
+        "transcript_path": "",
+        "verdict": reason,
+    }
+
+
+def _aggregate(results: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    """Aggregate solve stats by a row key (``class`` or ``level``)."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in results:
+        bucket = str(r.get(key) or "unknown")
+        row = out.setdefault(bucket, {"labs": 0, "run": 0, "solved": 0})
+        row["labs"] += 1
+        if r.get("not_run"):
+            continue
+        row["run"] += 1
+        if r.get("solved"):
+            row["solved"] += 1
+    for row in out.values():
+        row["solve_rate"] = round(row["solved"] / row["run"], 3) if row["run"] else 0.0
+    return out
+
+
+def write_training_scorecard(
+    results: list[dict[str, Any]],
+) -> tuple[Path, Path]:
+    """Write the training scorecard (JSON + markdown) with per-class and
+    per-level breakdowns, plus a stable ``training_scorecard_latest.json`` that
+    the coverage-matrix generator reads."""
+    ensure_runtime_dirs()
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_rows = [r for r in results if not r.get("not_run")]
+    solved = sum(1 for r in run_rows if r["solved"])
+    total = len(results)
+    run = len(run_rows)
+    skipped = total - run
+    by_class = _aggregate(results, "class")
+    by_level = _aggregate(results, "level")
+    summary = {
+        "labs": total,
+        "run": run,
+        "skipped": skipped,
+        "solved": solved,
+        "solve_rate": round(solved / run, 3) if run else 0.0,
+        "escalated_reruns": sum(1 for r in run_rows if r.get("escalated")),
+        "total_tokens": sum(r["total_tokens"] for r in results),
+        "estimated_cost_usd": round(sum(r["estimated_cost_usd"] for r in results), 6),
+        "wall_clock_seconds": round(sum(r["wall_clock_seconds"] for r in results), 1),
+    }
+    payload = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "summary": summary,
+        "by_class": by_class,
+        "by_level": by_level,
+        "results": results,
+    }
+
+    json_path = LOG_DIR / f"training_scorecard_{ts}.json"
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (LOG_DIR / "training_scorecard_latest.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+
+    md = [
+        "# Reynard Training Scorecard",
+        "",
+        f"- Generated: {payload['generated_at']}",
+        f"- Labs: {summary['labs']} (run {summary['run']}, skipped {summary['skipped']})",
+        f"- Solved: {summary['solved']} ({summary['solve_rate'] * 100:.1f}% of run)",
+        f"- Escalated re-runs: {summary['escalated_reruns']}",
+        f"- Total tokens: {summary['total_tokens']}",
+        f"- Estimated cost: ${summary['estimated_cost_usd']}",
+        f"- Wall-clock: {summary['wall_clock_seconds']}s",
+        "",
+        "## Solve-rate by class",
+        "",
+        "| Class | Labs | Run | Solved | Solve-rate |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for cls in sorted(by_class, key=lambda k: (-by_class[k]["solved"], k)):
+        row = by_class[cls]
+        md.append(
+            f"| `{cls}` | {row['labs']} | {row['run']} | {row['solved']} | "
+            f"{row['solve_rate'] * 100:.0f}% |"
+        )
+    md += [
+        "",
+        "## Solve-rate by level",
+        "",
+        "| Level | Labs | Run | Solved | Solve-rate |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for lvl in sorted(by_level):
+        row = by_level[lvl]
+        md.append(
+            f"| {lvl} | {row['labs']} | {row['run']} | {row['solved']} | "
+            f"{row['solve_rate'] * 100:.0f}% |"
+        )
+    md += ["", _md_table(results), ""]
+    md_path = LOG_DIR / f"training_scorecard_{ts}.md"
+    md_path.write_text("\n".join(md), encoding="utf-8")
+    return json_path, md_path
+
+
+def run_train(args: argparse.Namespace) -> None:
+    """Batch training/eval loop: run every lab, record techniques + failure
+    transcripts, auto-re-run unsolved labs once at the escalated (strong) tier,
+    emit per-class/per-level scorecards, and refresh the coverage matrix."""
+    config_path = args.config or args.suite
+    if not config_path:
+        console.print(
+            "[red]--train requires --config PATH (JSON/YAML list of labs).[/]"
+        )
+        raise SystemExit(2)
+
+    rerun_strong = os.getenv(
+        "REYNARD_TRAIN_RERUN_STRONG", "1"
+    ).lower() not in ("0", "false", "no", "off")
+    refresh_matrix = os.getenv(
+        "REYNARD_TRAIN_REFRESH_MATRIX", "1"
+    ).lower() not in ("0", "false", "no", "off")
+
+    labs = load_live_config(config_path)
+    results: list[dict[str, Any]] = []
+    started = time.time()
+
+    def _budget_left() -> bool:
+        return (not args.max_total_seconds) or (
+            (time.time() - started) < args.max_total_seconds
+        )
+
+    # ---- pass 1: run every lab at the default (cheap) tier ----
+    for lab in labs:
+        target = str(lab.get("target") or lab.get("target_url") or "")
+        if is_placeholder_target(target):
+            results.append(_not_run_row(lab, "not-run: target is a placeholder"))
+            continue
+        if not _budget_left():
+            results.append(_not_run_row(lab, "not-run: total budget exhausted"))
+            continue
+        row = run_live_lab(
+            lab, args.per_lab_timeout, args.max_iterations,
+            capture_transcript=True,
+        )
+        if row["solved"]:
+            _record_solved_technique(row.get("class", ""), row["name"])
+        results.append(row)
+
+    # ---- pass 2: re-run unsolved (that actually ran) once at strong tier ----
+    if rerun_strong:
+        by_name = {r["name"]: i for i, r in enumerate(results)}
+        for lab in labs:
+            name = str(lab.get("name") or lab.get("objective") or lab.get("target") or "lab")
+            idx = by_name.get(name)
+            if idx is None:
+                continue
+            prev = results[idx]
+            if prev.get("not_run") or prev.get("solved"):
+                continue
+            if not _budget_left():
+                break
+            console.print(f"[magenta]↻ Escalated re-run (strong tier): {name}[/]")
+            row = run_live_lab(
+                lab, args.per_lab_timeout, args.max_iterations,
+                force_strong=True, capture_transcript=True,
+            )
+            if row["solved"]:
+                _record_solved_technique(row.get("class", ""), row["name"])
+                results[idx] = row  # promote the successful escalated result
+
+    json_path, md_path = write_training_scorecard(results)
+    solved = sum(1 for r in results if r.get("solved"))
+    run = sum(1 for r in results if not r.get("not_run"))
+    console.print(
+        f"[bold green]Training complete:[/] {solved}/{run} solved "
+        f"({len(results) - run} not-run)"
+    )
+    console.print(f"[green]Scorecard JSON:[/] {json_path}")
+    console.print(f"[green]Scorecard MD:[/]   {md_path}")
+
+    if refresh_matrix:
+        try:
+            from hacking_agent.core.coverage import generate_coverage_matrix
+
+            matrix_path = generate_coverage_matrix()
+            console.print(f"[green]Coverage matrix:[/] {matrix_path}")
+        except Exception as exc:  # noqa: BLE001 - matrix refresh is best-effort
+            console.print(f"[yellow]Coverage matrix refresh failed: {exc}[/]")
 
 
 def run_live(args: argparse.Namespace) -> None:
@@ -618,6 +980,15 @@ def parse_args() -> argparse.Namespace:
         help="Run the real Orchestrator against labs in --config and score solves.",
     )
     parser.add_argument(
+        "--train",
+        action="store_true",
+        help=(
+            "Batch training/eval loop: run all labs, record techniques + failure "
+            "transcripts, auto-re-run unsolved labs once at the strong tier, and "
+            "emit per-class/per-level scorecards + refresh the coverage matrix."
+        ),
+    )
+    parser.add_argument(
         "--config",
         help="Live-mode lab config file (JSON or YAML). See eval/labs.sample.yaml.",
     )
@@ -644,13 +1015,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.live:
+    if args.live or args.train:
         from dotenv import load_dotenv
 
         from hacking_agent.core.paths import ENV_FILE
         if ENV_FILE.exists():
             load_dotenv(ENV_FILE)
-        run_live(args)
+        if args.train:
+            run_train(args)
+        else:
+            run_live(args)
         return
     if args.case_text or args.case:
         cases: list[str | dict[str, Any]] = [args.case_text or args.case]

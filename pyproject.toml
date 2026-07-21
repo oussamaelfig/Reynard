@@ -31,6 +31,7 @@ rag = [
 reynard = "hacking_agent.cli.agent:main"
 reynard-orchestrator = "hacking_agent.cli.orchestrator:main"
 reynard-lab-eval = "hacking_agent.cli.lab_eval:main"
+reynard-assess = "hacking_agent.cli.assess:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

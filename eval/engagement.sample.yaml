@@ -1,0 +1,65 @@
+# =============================================================================
+# Reynard — Engagement / Rules-of-Engagement config (sample)
+# =============================================================================
+# Drives an authorized client assessment:
+#   reynard-assess --engagement eval/engagement.sample.yaml
+#   reynard-assess --engagement eval/engagement.sample.yaml --out reports/acme
+#   reynard-assess --engagement eval/engagement.sample.yaml --target https://app.example.com/
+#
+# This file IS the authorization boundary. The assessment refuses to run unless
+# an authorized scope (authorized_domains / authorized_cidrs) is declared, and
+# every tool call is gated against these rules of engagement:
+#   - authorized_domains / authorized_cidrs : what is IN scope (subdomains incl.)
+#   - out_of_scope                          : NEVER touch, overrides the allowlist
+#   - max_requests_per_second               : global min-interval rate limit
+#   - max_total_requests                    : hard cap on scoped requests
+#   - allow_destructive                     : block rm -rf / DROP TABLE / etc.
+#   - testing_window                        : refuse to run outside this window
+# =============================================================================
+
+engagement:
+  # ---- metadata (report header identity) ----
+  engagement_name: "Acme Corp Web App Assessment"
+  client: "Acme Corporation"
+  tester: "Reynard / Authorized Security Team"
+
+  # ---- scope (REQUIRED: at least one domain or CIDR) ----
+  authorized_domains:
+    - "example.com"          # includes app.example.com, api.example.com, ...
+    - "staging.example.net"
+  authorized_cidrs:
+    - "10.20.0.0/24"
+
+  # Hard denylist. These are NEVER in scope even though they sit under an
+  # authorized domain (e.g. a shared payment provider or a prod DB host).
+  out_of_scope:
+    - "payments.example.com"
+    - "mail.example.com"
+
+  # ---- rules of engagement ----
+  # Global request rate limit (requests/second). 0 = unlimited.
+  max_requests_per_second: 5
+  # Hard cap on total in-scope requests for the whole assessment. 0 = unlimited.
+  max_total_requests: 5000
+  # When false, obviously destructive actions (rm -rf, DROP TABLE, shutdown,
+  # DELETE FROM, ...) are blocked at the ScopeGuard.
+  allow_destructive: false
+  # Free-form list of permitted test categories (documentation / operator note).
+  allowed_test_types:
+    - "web-application"
+    - "api"
+    - "authenticated"
+
+  # Optional testing window. The assessment refuses to start outside it.
+  # Omit or leave blank for an open-ended window.
+  testing_window:
+    start: "2026-01-01T00:00:00"
+    end: "2026-12-31T23:59:59"
+
+  # How long collected evidence may be retained, per the engagement contract.
+  evidence_retention_days: 90
+
+  notes: >-
+    Authorized assessment per signed statement of work SOW-2026-014. Test only
+    the in-scope assets above; stop and report immediately on discovery of any
+    sensitive data exposure.

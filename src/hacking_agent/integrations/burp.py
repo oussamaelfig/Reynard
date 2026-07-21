@@ -135,11 +135,15 @@ class BurpMCPClient:
                 "available": False,
             }
 
+        # Strip None-valued arguments: the Burp MCP server rejects null fields
+        # (e.g. an unset tabName), so only send keys the caller supplied.
+        clean_args = {k: v for k, v in (arguments or {}).items() if v is not None}
+
         payload = _jsonrpc_request(
             method="tools/call",
             params={
                 "name": tool_name,
-                "arguments": arguments or {},
+                "arguments": clean_args,
             },
         )
 

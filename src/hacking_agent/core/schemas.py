@@ -70,6 +70,27 @@ ToolName = Literal[
     "burp_send_http1_request", "burp_get_scanner_issues",
     "burp_generate_collaborator_payload", "burp_get_collaborator_interactions",
     "burp_create_repeater_tab", "burp_send_to_intruder",
+    # Burp proxy history / intercept (Phase-2 hardening)
+    "burp_get_proxy_history", "burp_get_proxy_history_regex", "burp_set_intercept",
+    # Racing / batch sender (smuggling / desync / race conditions / brute force)
+    "race_send",
+    # OSINT / external recon (Phase-2)
+    "shodan_host_lookup", "shodan_search", "censys_host",
+    "dns_recon", "tls_info",
+    # Class-specific OSS tools (Phase-2)
+    "jwt_tool", "ysoserial_gen", "phpggc_gen", "ssti_probe",
+    # Automatic tool selection + structured scanner wrappers
+    "recommend_tools", "ffuf_fuzz", "sqlmap_run", "nmap_scan",
+    # Session registration
+    "register_session",
+    # Cross-domain: network / pwn / reversing
+    "metasploit_run", "msfvenom_generate", "radare2_analyze",
+    "gdb_debug", "pwn_template",
+    # Cross-domain: mobile (Android)
+    "apk_decompile", "apk_analyze", "frida_hook",
+    # Cross-domain: CTF misc (crypto / stego / forensics / flags)
+    "stego_extract", "hash_crack", "crypto_helper",
+    "forensics_triage", "flag_hunter",
 ]
 
 

@@ -33,6 +33,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     # Languages & runtimes
     python3 python3-pip python3-venv python3-dev \
     golang ruby ruby-dev \
+    # JRE for ysoserial (Java deserialization) + PHP CLI for phpggc gadget chains
+    default-jre-headless php-cli \
     # Build tools
     build-essential cmake pkg-config libssl-dev libffi-dev \
     # Web testing
@@ -98,6 +100,46 @@ RUN set -eux; \
         command -v "$bin" >/dev/null 2>&1 \
             || { echo "FATAL: required Go tool '$bin' missing after install" >&2; exit 1; }; \
     done
+
+# ---------------------------------------------------------------------------
+# 4b. Class-specific OSS tools (JWT / deserialization / SSTI)
+#     Each is verified below; a missing REQUIRED tool aborts the build.
+# ---------------------------------------------------------------------------
+# jwt_tool (ticarpi) — JWT analysis / cracking / alg-confusion exploitation.
+RUN git clone --depth 1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool \
+    && pip3 install --break-system-packages termcolor cryptography pycryptodomex requests \
+    && chmod +x /opt/jwt_tool/jwt_tool.py \
+    && printf '#!/bin/sh\nexec python3 /opt/jwt_tool/jwt_tool.py "$@"\n' > /usr/local/bin/jwt_tool \
+    && chmod +x /usr/local/bin/jwt_tool
+
+# phpggc (ambionics) — PHP object-injection / deserialization gadget chains.
+RUN git clone --depth 1 https://github.com/ambionics/phpggc.git /opt/phpggc \
+    && ln -sf /opt/phpggc/phpggc /usr/local/bin/phpggc
+
+# SSTImap (vladko312) — maintained Python 3 fork of tplmap for SSTI detection.
+RUN git clone --depth 1 https://github.com/vladko312/SSTImap.git /opt/sstimap \
+    && pip3 install --break-system-packages -r /opt/sstimap/requirements.txt 2>/dev/null || true \
+    && printf '#!/bin/sh\nexec python3 /opt/sstimap/sstimap.py "$@"\n' > /usr/local/bin/sstimap \
+    && chmod +x /usr/local/bin/sstimap
+
+# ysoserial (frohoff) — Java deserialization payload generator (large; pinned).
+# NOTE: this is a ~1MB fat JAR pulled from a pinned release; if the release URL
+# changes, update YSOSERIAL_VERSION. Marked required — the build fails if absent.
+ENV YSOSERIAL_VERSION=0.0.6
+RUN mkdir -p /opt/ysoserial \
+    && wget -q -O /opt/ysoserial/ysoserial.jar \
+        "https://github.com/frohoff/ysoserial/releases/download/v${YSOSERIAL_VERSION}/ysoserial-all.jar" \
+    && test -s /opt/ysoserial/ysoserial.jar
+
+# Verify every REQUIRED class-specific tool is present; abort the build if not.
+RUN set -eux; \
+    command -v jwt_tool >/dev/null 2>&1 || { echo "FATAL: jwt_tool missing" >&2; exit 1; }; \
+    command -v phpggc >/dev/null 2>&1 || { echo "FATAL: phpggc missing" >&2; exit 1; }; \
+    command -v sstimap >/dev/null 2>&1 || { echo "FATAL: sstimap (tplmap) missing" >&2; exit 1; }; \
+    command -v java >/dev/null 2>&1 || { echo "FATAL: java (ysoserial runtime) missing" >&2; exit 1; }; \
+    test -s /opt/ysoserial/ysoserial.jar || { echo "FATAL: ysoserial.jar missing" >&2; exit 1; }; \
+    command -v sqlmap >/dev/null 2>&1 || { echo "FATAL: sqlmap missing" >&2; exit 1; }; \
+    command -v interactsh-client >/dev/null 2>&1 || { echo "FATAL: interactsh-client missing" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 # 5. Create persistent data directories

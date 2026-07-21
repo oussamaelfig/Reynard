@@ -10,7 +10,19 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from hacking_agent.core.expert_playbooks import enrich_lab_profile
+from hacking_agent.core.expert_playbooks import (
+    EXPERT_PLAYBOOKS,
+    enrich_lab_profile,
+    get_playbook,
+    normalize_vuln_key,
+)
+from hacking_agent.core.lab_corpus import (
+    LabEntry,
+    class_to_playbook,
+    classify_url,
+    load_corpus,
+    normalize_lab_level,
+)
 
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+", re.IGNORECASE)
 TARGET_URL_RE = re.compile(
@@ -448,3 +460,199 @@ def detect_lab_profile(raw: str, target_url: str) -> dict:
         })
 
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Deterministic lab profiler (routing) — maps a PortSwigger lab (by URL, title,
+# and/or objective) to its exact playbook, level, entry phase, and tools. Used
+# by the per-family waves to route into the right fast-path deterministically.
+# ---------------------------------------------------------------------------
+
+# playbook_id -> recommended entry phase for the coordinator/agenda.
+_ENTRY_PHASE: dict[str, str] = {
+    "sqli": "injection",
+    "nosql_injection": "injection",
+    "os_command_injection": "injection",
+    "ssti": "injection",
+    "xxe": "injection",
+    "path_traversal": "injection",
+    "file_upload": "exploitation",
+    "ssrf": "injection",
+    "xss": "injection",
+    "dom_xss": "injection",
+    "dom_based": "recon",
+    "csrf": "delivery",
+    "clickjacking": "delivery",
+    "cors": "delivery",
+    "prototype_pollution": "injection",
+    "request_smuggling": "exploitation",
+    "web_cache_poisoning": "exploitation",
+    "web_cache_deception": "exploitation",
+    "host_header": "injection",
+    "websocket": "exploitation",
+    "jwt": "exploitation",
+    "oauth": "exploitation",
+    "authentication": "exploitation",
+    "access_control_idor": "exploitation",
+    "business_logic": "exploitation",
+    "information_disclosure": "recon",
+    "deserialization": "exploitation",
+    "graphql_api": "recon",
+    "race_condition": "exploitation",
+    "api_testing": "recon",
+    "web_llm_attacks": "exploitation",
+    "essential_skills": "recon",
+}
+
+# Playbooks whose exploitation is delivered client-side via the exploit server
+# (the family waves reach for core/exploit_primitives + exploit_server here).
+_CLIENT_SIDE_PLAYBOOKS: frozenset[str] = frozenset({
+    "xss", "dom_xss", "dom_based", "csrf", "clickjacking", "cors",
+    "prototype_pollution", "web_cache_deception",
+})
+
+# Sub-variant keyword -> extra tool hints layered onto the playbook prior.
+_SUBVARIANT_TOOLS: list[tuple[str, tuple[str, ...]]] = [
+    ("cl-te", ("request_smuggling_probe", "burp_send_http1_request")),
+    ("te-cl", ("request_smuggling_probe", "burp_send_http1_request")),
+    ("cl.0", ("request_smuggling_probe", "burp_send_http1_request")),
+    ("h2", ("burp_send_http1_request", "request_smuggling_probe")),
+    ("http-2", ("burp_send_http1_request", "request_smuggling_probe")),
+    ("response-queue", ("request_smuggling_probe", "burp_send_http1_request")),
+    ("single-endpoint", ("race_send",)),
+    ("multi-endpoint", ("race_send",)),
+    ("limit-overrun", ("race_send",)),
+    ("partial-construction", ("race_send",)),
+    ("union", ("sqlmap_run", "http_request")),
+    ("blind", ("sqlmap_run", "oob_get_domain", "oob_poll")),
+    ("oob", ("oob_get_domain", "oob_poll")),
+    ("out-of-band", ("oob_get_domain", "oob_poll")),
+    ("alg", ("jwt_tool",)),
+    ("jwk", ("jwt_tool",)),
+    ("jku", ("jwt_tool",)),
+    ("kid", ("jwt_tool",)),
+    ("gadget", ("ysoserial_gen", "phpggc_gen")),
+    ("phar", ("phpggc_gen",)),
+]
+
+_CORPUS_CACHE: list[LabEntry] | None = None
+_URL_INDEX: dict[str, LabEntry] | None = None
+_TITLE_INDEX: dict[str, LabEntry] | None = None
+
+
+def _norm_title(title: str) -> str:
+    return re.sub(r"\s+", " ", (title or "").strip().lower())
+
+
+def _corpus() -> list[LabEntry]:
+    global _CORPUS_CACHE, _URL_INDEX, _TITLE_INDEX
+    if _CORPUS_CACHE is None:
+        _CORPUS_CACHE = load_corpus()
+        _URL_INDEX = {}
+        _TITLE_INDEX = {}
+        for entry in _CORPUS_CACHE:
+            path = urlparse(entry.url).path.rstrip("/").lower()
+            if path:
+                _URL_INDEX[path] = entry
+            title = _norm_title(entry.title)
+            if title:
+                _TITLE_INDEX[title] = entry
+    return _CORPUS_CACHE
+
+
+def corpus_lookup(url: str = "", title: str = "") -> LabEntry | None:
+    """Find the corpus ``LabEntry`` for a canonical PortSwigger URL or title."""
+    _corpus()
+    if url and _URL_INDEX is not None:
+        path = urlparse(url).path.rstrip("/").lower()
+        entry = _URL_INDEX.get(path)
+        if entry:
+            return entry
+    if title and _TITLE_INDEX is not None:
+        entry = _TITLE_INDEX.get(_norm_title(title))
+        if entry:
+            return entry
+    return None
+
+
+def _recommended_tools(
+    playbook_id: str, subvariant: str, primary_tools: list[str], objective: str = "",
+) -> list[str]:
+    tools = list(primary_tools)
+    haystack = (
+        f"{subvariant} {objective}".lower()
+        .replace("_", "-").replace(" ", "-").replace(".", "-")
+    )
+    for needle, extras in _SUBVARIANT_TOOLS:
+        if needle in haystack:
+            for tool in extras:
+                if tool not in tools:
+                    tools.append(tool)
+    return tools
+
+
+def route_lab(
+    url: str = "",
+    title: str = "",
+    objective: str = "",
+    level: str = "",
+) -> dict:
+    """Resolve a lab to its exact playbook + entry plan (deterministic router).
+
+    Resolution order:
+      1. exact corpus match by canonical URL path, then by title;
+      2. raw URL class-slug classification (``lab_corpus.classify_url``);
+      3. free-text topic detection from title/objective.
+
+    Always returns a dict with ``playbook_id``, ``vuln_type``, ``vuln_class``,
+    ``subvariant``, ``lab_level``, ``entry_phase``, ``primary_tools``,
+    ``recommended_tools``, ``is_client_side``, ``expert_playbook`` and
+    ``routing_source``. For every lab in the authoritative corpus this yields a
+    real playbook, so the family waves can dispatch without an LLM round-trip.
+    """
+    vuln_class = ""
+    subvariant = ""
+    playbook_id = ""
+    source = ""
+
+    entry = corpus_lookup(url=url, title=title)
+    if entry is not None:
+        vuln_class = entry.vuln_class
+        subvariant = entry.subvariant
+        playbook_id = entry.playbook_id
+        level = level or entry.level
+        source = "corpus"
+
+    if not playbook_id and url:
+        vc, sv = classify_url(url)
+        if vc:
+            vuln_class, subvariant = vc, sv
+            playbook_id = class_to_playbook(vc)
+            if playbook_id:
+                source = "url"
+
+    if not playbook_id:
+        key = normalize_vuln_key(f"{title} {objective}")
+        if key in EXPERT_PLAYBOOKS:
+            playbook_id = key
+            source = "text"
+
+    playbook = get_playbook(playbook_id) if playbook_id else None
+    primary_tools = list(playbook.get("primary_tools", [])) if playbook else []
+    vuln_type = (playbook.get("vulnerability") if playbook else "") or playbook_id
+
+    return {
+        "playbook_id": playbook_id,
+        "vuln_type": vuln_type,
+        "vuln_class": vuln_class,
+        "subvariant": subvariant,
+        "lab_level": normalize_lab_level(level) or "",
+        "entry_phase": _ENTRY_PHASE.get(playbook_id, "recon"),
+        "primary_tools": primary_tools,
+        "recommended_tools": _recommended_tools(
+            playbook_id, subvariant, primary_tools, objective
+        ),
+        "is_client_side": playbook_id in _CLIENT_SIDE_PLAYBOOKS,
+        "expert_playbook": playbook,
+        "routing_source": source,
+    }

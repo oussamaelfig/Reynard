@@ -42,6 +42,8 @@ from hacking_agent.core import web_research as web_research_mod
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.integrations import caido_local as caido_local_mod
+from hacking_agent.integrations import race as race_mod
+from hacking_agent.integrations import shodan as shodan_mod
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -1116,6 +1118,275 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["enabled"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "race_send",
+            "description": (
+                "Turbo-Intruder-style batch/racing HTTP sender over raw sockets "
+                "(no curl/browser normalization). Fires N copies of one request "
+                "with controlled concurrency and returns per-request status/timing "
+                "plus a status distribution. Use for race conditions (limit-"
+                "overrun/TOCTOU), HTTP request-smuggling follow-ups, and fast "
+                "brute-force. mode='single_packet' opens all connections and "
+                "releases the final byte together for the tightest race window; "
+                "mode='parallel' fires full requests in concurrency-sized waves."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target URL including path/query, e.g. https://LAB/my-account.",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of requests to send (default 20, max 200).",
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "description": "Max in-flight requests per wave for 'parallel' (default = count).",
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method (default GET). Use POST for form/JSON bodies.",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "Header name->value map (e.g. Cookie, Content-Type).",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Request body for POST/PUT (Content-Length is auto-added).",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["parallel", "single_packet"],
+                        "description": "Timing strategy (default parallel).",
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Per-request socket timeout in seconds (default 10).",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    # =========================================================================
+    # OSINT / external recon (prod assessments; optional API keys)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "shodan_host_lookup",
+            "description": (
+                "Look up an IP address in Shodan and return open ports, detected "
+                "products/versions, hostnames, and known CVEs (vulns). External "
+                "recon for real engagements — NOT needed for isolated labs. "
+                "Degrades gracefully with a clear message when SHODAN_API_KEY is unset."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ip": {"type": "string", "description": "IP address to look up."},
+                    "history": {"type": "boolean", "description": "Include historical banners (default false)."},
+                    "minify": {"type": "boolean", "description": "Return a minified record (default false)."},
+                },
+                "required": ["ip"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shodan_search",
+            "description": (
+                "Search the Shodan index with a query (e.g. 'org:\"Acme\" http', "
+                "'ssl.cert.subject.cn:example.com') and return matching hosts. Uses "
+                "Shodan query credits. Degrades gracefully when SHODAN_API_KEY is unset."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Shodan search query."},
+                    "page": {"type": "integer", "description": "Result page (default 1)."},
+                    "facets": {"type": "string", "description": "Optional comma-separated facets."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "censys_host",
+            "description": (
+                "Look up an IP address in Censys (Hosts API v2) and return services, "
+                "autonomous system, and location. Optional alternative to Shodan. "
+                "Degrades gracefully when CENSYS_API_ID/CENSYS_API_SECRET are unset."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ip": {"type": "string", "description": "IP address to look up."},
+                },
+                "required": ["ip"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dns_recon",
+            "description": (
+                "Resolve DNS records for a domain inside the container (uses dnsx if "
+                "present, else host/dig). Returns A/AAAA/CNAME/MX/NS/TXT records as "
+                "STRUCTURED data. Dependency-light external recon for prod assessments."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain to resolve, e.g. example.com."},
+                    "record_types": {
+                        "type": "string",
+                        "description": "Comma-separated record types (default a,aaaa,cname,mx,ns,txt).",
+                    },
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 60)."},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tls_info",
+            "description": (
+                "Enumerate a host's TLS/SSL configuration (protocols, ciphers, cert) "
+                "inside the container using sslscan (fallback testssl.sh). Returns "
+                "structured protocol/cipher/certificate findings for prod recon."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "host or host:port (default port 443)."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 120)."},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    # =========================================================================
+    # Class-specific OSS tools (run in-container via docker exec)
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "jwt_tool",
+            "description": (
+                "Analyze/tamper/attack a JSON Web Token with jwt_tool inside the "
+                "container. Modes: 'scan' (playbook checks incl. alg:none, key "
+                "confusion), 'tamper' hints, 'crack' the HMAC secret against a "
+                "wordlist, 'exploit' a known attack (e.g. a=alg-none, k=key-"
+                "confusion). Returns structured findings under 'kg_records' when a "
+                "vulnerability/forged token is produced."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string", "description": "The JWT to operate on."},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["scan", "crack", "exploit", "tamper"],
+                        "description": "Operation (default scan).",
+                    },
+                    "exploit": {
+                        "type": "string",
+                        "description": "jwt_tool -X exploit code for mode=exploit (e.g. a, n, s, k, i).",
+                    },
+                    "wordlist": {
+                        "type": "string",
+                        "description": "Container wordlist path for mode=crack (default rockyou.txt).",
+                    },
+                    "extra_args": {"type": "string", "description": "Extra jwt_tool flags (e.g. '-I -pc name -pv admin')."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 180)."},
+                },
+                "required": ["token"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ysoserial_gen",
+            "description": (
+                "Generate a Java insecure-deserialization payload with ysoserial "
+                "inside the container. Pick a gadget chain (e.g. CommonsCollections6, "
+                "URLDNS) and a command; returns the base64 payload ready to inject. "
+                "Requires java + ysoserial in the image (payload gen only; no network)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gadget": {"type": "string", "description": "Gadget chain, e.g. CommonsCollections6, URLDNS."},
+                    "command": {"type": "string", "description": "Command/argument for the gadget (e.g. 'curl OOB', 'id')."},
+                    "encode": {"type": "boolean", "description": "Base64-encode the raw payload (default true)."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 120)."},
+                },
+                "required": ["gadget", "command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phpggc_gen",
+            "description": (
+                "Generate a PHP object-injection / deserialization gadget chain with "
+                "phpggc inside the container (e.g. Monolog/RCE1, Laravel, Symfony, "
+                "Guzzle/FW1). Returns the serialized payload; optionally base64/url "
+                "encoded. Payload generation only; no network."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chain": {"type": "string", "description": "phpggc chain, e.g. Monolog/RCE1."},
+                    "command": {"type": "string", "description": "Command/parameters passed to the chain."},
+                    "encoding": {
+                        "type": "string",
+                        "enum": ["none", "base64", "url", "urlencode"],
+                        "description": "Output encoding (default none). phpggc -b / -u.",
+                    },
+                    "extra_args": {"type": "string", "description": "Extra phpggc flags (e.g. '-f', '-p phar')."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 120)."},
+                },
+                "required": ["chain", "command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ssti_probe",
+            "description": (
+                "Probe a URL for server-side template injection with tplmap "
+                "(fallback sstimap) inside the container. Detects the engine and, "
+                "when possible, confirms code/command execution. Returns the detected "
+                "engine and structured findings under 'kg_records'. Scope-guarded."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Target URL with the injectable parameter."},
+                    "data": {"type": "string", "description": "POST body for body parameters (optional)."},
+                    "extra_args": {"type": "string", "description": "Extra flags (e.g. '-e jinja2', '--os-cmd id')."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 300)."},
+                },
+                "required": ["url"],
             },
         },
     },
@@ -2730,6 +3001,260 @@ def nmap_scan(target: str, ports: str = "", extra_args: str = "",
 
 
 # =============================================================================
+# OSINT / external recon (Shodan/Censys clients live in integrations/shodan.py;
+# dns_recon + tls_info run dependency-light tools inside the container)
+# =============================================================================
+
+def dns_recon(domain: str, record_types: str = "", timeout: int = 60) -> str:
+    """Resolve DNS records for a domain (dnsx preferred, else host/dig)."""
+    types = [t.strip().lower() for t in (record_types or "a,aaaa,cname,mx,ns,txt").split(",") if t.strip()]
+    host = urlparse(domain if "://" in domain else f"http://{domain}").hostname or domain
+    have_dnsx = _docker_exec("command -v dnsx", timeout=5).get("exit_code", -1) == 0
+    have_host = _docker_exec("command -v host", timeout=5).get("exit_code", -1) == 0
+    have_dig = _docker_exec("command -v dig", timeout=5).get("exit_code", -1) == 0
+    if not (have_dnsx or have_host or have_dig):
+        return json.dumps({"error": "no DNS tool (dnsx/host/dig) available in container"})
+
+    records: dict[str, list[str]] = {}
+    for rtype in types:
+        if have_dnsx:
+            cmd = f"dnsx -silent -{rtype} -resp-only -d {shlex.quote(host)} 2>/dev/null"
+        elif have_host:
+            cmd = f"host -t {shlex.quote(rtype)} {shlex.quote(host)} 2>/dev/null"
+        else:
+            cmd = f"dig +short {shlex.quote(rtype)} {shlex.quote(host)} 2>/dev/null"
+        out = _docker_exec(cmd, timeout=timeout).get("stdout", "")
+        values = [line.strip() for line in out.splitlines() if line.strip()]
+        if values:
+            records[rtype] = values
+
+    kg = {
+        "source": "dns_recon",
+        "endpoints": [], "parameters": [], "services": [],
+        "findings": [],
+        "summary": f"dns_recon {host}: {sum(len(v) for v in records.values())} record(s)",
+    }
+    return json.dumps({
+        "domain": host,
+        "records": records,
+        "summary": kg["summary"],
+        "kg_records": kg,
+    }, indent=2, default=str)
+
+
+def tls_info(target: str, timeout: int = 120) -> str:
+    """Enumerate TLS/SSL config for a host using sslscan (fallback testssl.sh)."""
+    host = target
+    if "://" in target:
+        parsed = urlparse(target)
+        host = parsed.hostname or target
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+    have_sslscan = _docker_exec("command -v sslscan", timeout=5).get("exit_code", -1) == 0
+    have_testssl = _docker_exec("command -v testssl.sh", timeout=5).get("exit_code", -1) == 0
+    if have_sslscan:
+        tool = "sslscan"
+        cmd = f"sslscan --no-colour {shlex.quote(host)} 2>&1"
+    elif have_testssl:
+        tool = "testssl.sh"
+        cmd = f"testssl.sh --color 0 --quiet {shlex.quote(host)} 2>&1"
+    else:
+        return json.dumps({"error": "neither sslscan nor testssl.sh available in container"})
+    result = _docker_exec(cmd, timeout=timeout)
+    return json.dumps({
+        "target": host,
+        "tool": tool,
+        "output": result.get("stdout", ""),
+        "exit_code": result.get("exit_code"),
+        "summary": f"tls_info {host}: scanned with {tool}",
+    }, indent=2, default=str)
+
+
+# =============================================================================
+# Class-specific OSS tools (JWT / deserialization / SSTI) — run in-container
+# =============================================================================
+
+def _resolve_jwt_tool() -> str | None:
+    """Return an invokable jwt_tool command, or None if not installed."""
+    if _docker_exec("command -v jwt_tool", timeout=5).get("exit_code", -1) == 0:
+        return "jwt_tool"
+    for path in ("/opt/jwt_tool/jwt_tool.py", "/usr/share/jwt_tool/jwt_tool.py"):
+        if _docker_exec(f"test -f {shlex.quote(path)}", timeout=5).get("exit_code", -1) == 0:
+            return f"python3 {path}"
+    return None
+
+
+def jwt_tool(token: str, mode: str = "scan", exploit: str = "",
+             wordlist: str = "", extra_args: str = "", timeout: int = 180) -> str:
+    """Run jwt_tool against a JWT for analysis/cracking/exploitation."""
+    binary = _resolve_jwt_tool()
+    if not binary:
+        return json.dumps({"error": "jwt_tool not installed in container",
+                           "hint": "add jwt_tool to the Dockerfile"})
+    base = f"{binary} {shlex.quote(token)}"
+    if mode == "crack":
+        wl = wordlist or "/usr/share/wordlists/rockyou.txt"
+        cmd = f"{base} -C -d {shlex.quote(wl)}"
+    elif mode == "exploit":
+        code = exploit or "a"
+        cmd = f"{base} -X {shlex.quote(code)}"
+    elif mode == "tamper":
+        cmd = f"{base} -T"
+    else:
+        cmd = base
+    if extra_args:
+        cmd += f" {extra_args}"
+    cmd += " 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    stdout = result.get("stdout", "")
+    findings: list[dict[str, Any]] = []
+    lowered = stdout.lower()
+    if mode == "crack" and ("found" in lowered and "secret" in lowered):
+        findings.append({
+            "type": "JWT weak secret", "severity": "high",
+            "name": "jwt_tool cracked HMAC secret", "matched_at": "",
+            "detail": stdout[-400:],
+        })
+    if any(sig in lowered for sig in ("alg:none", "alg-none", "successfully", "forged")):
+        findings.append({
+            "type": "JWT tampering", "severity": "high",
+            "name": f"jwt_tool {mode} produced a candidate forged token",
+            "matched_at": "", "detail": stdout[-400:],
+        })
+    kg = {
+        "source": "jwt_tool", "endpoints": [], "parameters": [],
+        "services": [], "findings": findings,
+        "summary": f"jwt_tool {mode}: {len(findings)} finding(s)",
+    }
+    return json.dumps({
+        "mode": mode,
+        "output": stdout,
+        "exit_code": result.get("exit_code"),
+        "summary": kg["summary"],
+        "kg_records": kg,
+    }, indent=2, default=str)
+
+
+def ysoserial_gen(gadget: str, command: str, encode: bool = True,
+                  timeout: int = 120) -> str:
+    """Generate a Java deserialization payload with ysoserial."""
+    have_java = _docker_exec("command -v java", timeout=5).get("exit_code", -1) == 0
+    jar = ""
+    for path in ("/opt/ysoserial/ysoserial.jar", "/usr/share/ysoserial/ysoserial.jar",
+                 "/opt/ysoserial.jar"):
+        if _docker_exec(f"test -f {shlex.quote(path)}", timeout=5).get("exit_code", -1) == 0:
+            jar = path
+            break
+    if not have_java:
+        return json.dumps({"error": "java not installed in container (ysoserial needs a JRE)"})
+    if not jar:
+        return json.dumps({"error": "ysoserial.jar not found in container",
+                           "hint": "add ysoserial to the Dockerfile"})
+    gen = f"java -jar {shlex.quote(jar)} {shlex.quote(gadget)} {shlex.quote(command)}"
+    if encode:
+        cmd = f"{gen} 2>/dev/null | base64 -w0"
+    else:
+        cmd = f"{gen} 2>/dev/null | xxd -p | tr -d '\\n'"
+    result = _docker_exec(cmd, timeout=timeout)
+    payload = result.get("stdout", "").strip()
+    ok = bool(payload) and result.get("exit_code") == 0
+    return json.dumps({
+        "gadget": gadget,
+        "command": command,
+        "encoding": "base64" if encode else "hex",
+        "payload": payload,
+        "exit_code": result.get("exit_code"),
+        "summary": (f"ysoserial {gadget}: generated {len(payload)} char payload"
+                    if ok else f"ysoserial {gadget}: generation failed"),
+    }, indent=2, default=str)
+
+
+def phpggc_gen(chain: str, command: str, encoding: str = "none",
+               extra_args: str = "", timeout: int = 120) -> str:
+    """Generate a PHP gadget-chain payload with phpggc."""
+    binary = ""
+    if _docker_exec("command -v phpggc", timeout=5).get("exit_code", -1) == 0:
+        binary = "phpggc"
+    elif _docker_exec("test -f /opt/phpggc/phpggc", timeout=5).get("exit_code", -1) == 0:
+        binary = "/opt/phpggc/phpggc"
+    if not binary:
+        return json.dumps({"error": "phpggc not installed in container",
+                           "hint": "add phpggc to the Dockerfile"})
+    enc_flag = {"base64": "-b", "url": "-u", "urlencode": "-u"}.get(encoding, "")
+    parts = [binary]
+    if enc_flag:
+        parts.append(enc_flag)
+    if extra_args:
+        parts.append(extra_args)
+    parts += [shlex.quote(chain), shlex.quote(command)]
+    cmd = " ".join(parts) + " 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    payload = result.get("stdout", "").strip()
+    ok = bool(payload) and result.get("exit_code") == 0
+    return json.dumps({
+        "chain": chain,
+        "command": command,
+        "encoding": encoding,
+        "payload": payload,
+        "exit_code": result.get("exit_code"),
+        "summary": (f"phpggc {chain}: generated {len(payload)} char payload"
+                    if ok else f"phpggc {chain}: generation failed"),
+    }, indent=2, default=str)
+
+
+def ssti_probe(url: str, data: str = "", extra_args: str = "",
+               timeout: int = 300) -> str:
+    """Probe for server-side template injection with tplmap (fallback sstimap)."""
+    if _docker_exec("command -v tplmap", timeout=5).get("exit_code", -1) == 0:
+        tool = "tplmap"
+        base = f"tplmap -u {shlex.quote(url)}"
+    elif _docker_exec("test -f /opt/tplmap/tplmap.py", timeout=5).get("exit_code", -1) == 0:
+        tool = "tplmap"
+        base = f"python3 /opt/tplmap/tplmap.py -u {shlex.quote(url)}"
+    elif _docker_exec("command -v sstimap", timeout=5).get("exit_code", -1) == 0:
+        tool = "sstimap"
+        base = f"sstimap -u {shlex.quote(url)}"
+    elif _docker_exec("test -f /opt/sstimap/sstimap.py", timeout=5).get("exit_code", -1) == 0:
+        tool = "sstimap"
+        base = f"python3 /opt/sstimap/sstimap.py -u {shlex.quote(url)}"
+    else:
+        return json.dumps({"error": "neither tplmap nor sstimap available in container",
+                           "hint": "add tplmap or sstimap to the Dockerfile"})
+    cmd = base
+    if data:
+        cmd += f" -d {shlex.quote(data)}"
+    if extra_args:
+        cmd += f" {extra_args}"
+    cmd += " 2>&1"
+    result = _docker_exec(cmd, timeout=timeout)
+    stdout = result.get("stdout", "")
+    engine = ""
+    m = re.search(r"[Tt]emplate engine:\s*([A-Za-z0-9_.\-]+)", stdout)
+    if m:
+        engine = m.group(1)
+    findings: list[dict[str, Any]] = []
+    if engine or "injection" in stdout.lower() and "found" in stdout.lower():
+        findings.append({
+            "type": "Server-side template injection", "severity": "high",
+            "name": f"SSTI detected ({engine or 'engine unknown'})",
+            "matched_at": url, "detail": stdout[-400:],
+        })
+    kg = {
+        "source": "ssti_probe", "endpoints": [], "parameters": [],
+        "services": [], "findings": findings,
+        "summary": f"ssti_probe: engine={engine or 'none detected'}",
+    }
+    return json.dumps({
+        "tool": tool,
+        "engine": engine,
+        "output": stdout,
+        "exit_code": result.get("exit_code"),
+        "summary": kg["summary"],
+        "kg_records": kg,
+    }, indent=2, default=str)
+
+
+# =============================================================================
 # Session Registration Tool
 # =============================================================================
 
@@ -3492,6 +4017,68 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     "burp_set_intercept": lambda args: json.dumps(burp_mod.get_client().set_intercept(
         enabled=args["enabled"],
     ), indent=2),
+    # ---- Racing / batch sender ----
+    "race_send": lambda args: shodan_mod.dumps(race_mod.race_send(
+        url=args["url"],
+        count=args.get("count", 20),
+        concurrency=args.get("concurrency", 0),
+        method=args.get("method", "GET"),
+        headers=args.get("headers"),
+        body=args.get("body", ""),
+        mode=args.get("mode", "parallel"),
+        timeout=args.get("timeout", 10),
+    )),
+    # ---- OSINT / external recon ----
+    "shodan_host_lookup": lambda args: shodan_mod.dumps(shodan_mod.get_shodan_client().host_lookup(
+        ip=args["ip"],
+        history=args.get("history", False),
+        minify=args.get("minify", False),
+    )),
+    "shodan_search": lambda args: shodan_mod.dumps(shodan_mod.get_shodan_client().search(
+        query=args["query"],
+        page=args.get("page", 1),
+        facets=args.get("facets", ""),
+    )),
+    "censys_host": lambda args: shodan_mod.dumps(shodan_mod.get_censys_client().host_lookup(
+        ip=args["ip"],
+    )),
+    "dns_recon": lambda args: dns_recon(
+        domain=args["domain"],
+        record_types=args.get("record_types", ""),
+        timeout=args.get("timeout", 60),
+    ),
+    "tls_info": lambda args: tls_info(
+        target=args["target"],
+        timeout=args.get("timeout", 120),
+    ),
+    # ---- Class-specific OSS tools ----
+    "jwt_tool": lambda args: jwt_tool(
+        token=args["token"],
+        mode=args.get("mode", "scan"),
+        exploit=args.get("exploit", ""),
+        wordlist=args.get("wordlist", ""),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 180),
+    ),
+    "ysoserial_gen": lambda args: ysoserial_gen(
+        gadget=args["gadget"],
+        command=args["command"],
+        encode=args.get("encode", True),
+        timeout=args.get("timeout", 120),
+    ),
+    "phpggc_gen": lambda args: phpggc_gen(
+        chain=args["chain"],
+        command=args["command"],
+        encoding=args.get("encoding", "none"),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "ssti_probe": lambda args: ssti_probe(
+        url=args["url"],
+        data=args.get("data", ""),
+        extra_args=args.get("extra_args", ""),
+        timeout=args.get("timeout", 300),
+    ),
     # ---- Automatic tool selection ----
     "recommend_tools": lambda args: recommend_tools(
         vuln_class=args.get("vuln_class", ""),

