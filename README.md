@@ -1,19 +1,22 @@
 <div align="center">
 
 ```
-██████╗ ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ██████╗
-██╔══██╗██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔══██╗
-██████╔╝█████╗   ╚████╔╝ ██╔██╗ ██║███████║██████╔╝██║  ██║
-██╔══██╗██╔══╝    ╚██╔╝  ██║╚██╗██║██╔══██║██╔══██╗██║  ██║
-██║  ██║███████╗   ██║   ██║ ╚████║██║  ██║██║  ██║██████╔╝
-╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
+        /\   /\
+       //\\_//\\     ____
+       \_     _/    /   /
+        / . . \    /^^^]
+        \_\O/_/    [   ]
+         /   \_    [   /
+         \     \_  /  /
+          [ [ /  \/ _/
+         _[ [ \  /_/
 ```
 
-# Reynard
+# 🦊 Reynard
 
-**Autonomous multi-agent engine for CTFs, labs, and authorized security testing**
+### 🤖 Autonomous multi-agent engine for CTFs, labs & authorized security testing
 
-LLM reasoning · Kali Docker runtime · real Chromium · hypothesis-driven orchestration
+🧠 LLM reasoning · 🐉 Kali Docker runtime · 🌐 real Chromium · 🎯 hypothesis-driven orchestration
 
 <br/>
 
@@ -33,7 +36,7 @@ python orchestrator.py --ui --preflight "https://YOUR-AUTHORIZED-TARGET"
 
 ---
 
-## Why Reynard
+## ❓ Why Reynard
 
 Reynard is not a script runner with an LLM bolted on. It is a **structured multi-agent penetration engine** that plans, probes, pivots, validates, and reports — with durable memory, methodology RAG, and a real browser in the loop.
 
@@ -49,19 +52,19 @@ Reynard is not a script runner with an LLM bolted on. It is a **structured multi
 
 ---
 
-## Highlights
+## ✨ Highlights
 
 <table>
 <tr>
 <td width="50%">
 
-### Multi-agent core
+### 🧠 Multi-agent core
 Coordinator routes specialists through a lock-protected state machine. Bounded bootstrap subagents parallelize profile / readiness / research; exploitation stays serialized by default.
 
 </td>
 <td width="50%">
 
-### Hypothesis agenda
+### 🎯 Hypothesis agenda
 Six-phase StrategyEngine (`RECON → INJECTION → CONTEXT → CAPABILITY → ESCAPE → EXPLOIT`). Failed vectors demote. Stuck runs escalate to a high-reasoning `pivot` role before concluding failure.
 
 </td>
@@ -69,13 +72,13 @@ Six-phase StrategyEngine (`RECON → INJECTION → CONTEXT → CAPABILITY → ES
 <tr>
 <td width="50%">
 
-### Real browser proof
+### 🌐 Real browser proof
 Headless Chromium via Playwright inside the container — genuine DOM/JS execution and XSS `alert()` capture (`browser_navigate` / `browser_execute_js` / `browser_interact`).
 
 </td>
 <td width="50%">
 
-### Expert lab layer
+### 🧪 Expert lab layer
 Deterministic playbooks for PortSwigger practitioner/expert classes across **213 labs · 31 classes**, plus offline readiness scoring and live solve-rate scorecards.
 
 </td>
@@ -83,34 +86,34 @@ Deterministic playbooks for PortSwigger practitioner/expert classes across **213
 <tr>
 <td width="50%">
 
-### Cross-domain targets
+### 🌍 Cross-domain targets
 Web · network · binary/pwn · mobile · crypto · stego · forensics · CTF-misc — each seeds a category-appropriate tool agenda.
 
 </td>
 <td width="50%">
 
-### Client assessments
+### 📋 Client assessments
 `reynard-assess` runs scoped recon → enumerate → per-target test → consolidated report, gated by engagement rules of engagement.
 
 </td>
 </tr>
 </table>
 
-**Also built in**
+**🧩 Also built in**
 
-- Automatic tool selection per vuln-class / phase / stack (`recommend_tools`)
-- Structured parsers for `ffuf`, `sqlmap`, `nmap`, `nuclei`
-- Local RAG over `methodologies/` (sentence-transformers → Ollama → BM25)
-- Token/cost metering with hard budget caps
-- Caido Local Bridge + Cloud API, Burp MCP fallback
-- Optional OSINT via Shodan / Censys
-- Live dashboard at `http://127.0.0.1:8765`
-- Tiered model escalation (`LLM_STRONG_*`) for expert labs and stalls
-- Batch training loop: `reynard-lab-eval --train`
+- 🔧 Automatic tool selection per vuln-class / phase / stack (`recommend_tools`)
+- 🧷 Structured parsers for `ffuf`, `sqlmap`, `nmap`, `nuclei`
+- 📚 Local RAG over `methodologies/` (sentence-transformers → Ollama → BM25)
+- 💰 Token/cost metering with hard budget caps
+- ☁️ Caido Local Bridge + Cloud API, Burp MCP fallback
+- 🔎 Optional OSINT via Shodan / Censys
+- 👀 Live dashboard at `http://127.0.0.1:8765`
+- ⬆️ Tiered model escalation (`LLM_STRONG_*`) for expert labs and stalls
+- 🔁 Batch training loop: `reynard-lab-eval --train`
 
 ---
 
-## Architecture
+## 🧭 Architecture
 
 ```mermaid
 flowchart LR
@@ -137,7 +140,7 @@ flowchart LR
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### 1. Configure
 
@@ -212,7 +215,7 @@ python orchestrator.py --ui --no-oob --max-iterations 25 "Authorized lab: https:
 
 ---
 
-## Usage Modes
+## 🕹️ Usage Modes
 
 ### CTF / lab solve
 
@@ -284,7 +287,7 @@ python agent.py --ui "Authorized target: https://TARGET"
 
 ---
 
-## Scope & Safety
+## 🛡️ Scope & Safety
 
 **In scope by design**
 
@@ -302,7 +305,7 @@ python agent.py --ui "Authorized target: https://TARGET"
 
 ---
 
-## Tool Runtime
+## 🧰 Tool Runtime
 
 Container name: **`reynard-kali`**. Tools execute via `run_shell`; call `tool_inventory` at runtime.
 
@@ -332,7 +335,7 @@ python3 /opt/hackingtool/hackingtool.py
 
 ---
 
-## Integrations
+## 🔌 Integrations
 
 ### Caido
 
@@ -368,7 +371,7 @@ No search keys → DuckDuckGo HTML fallback. For blind XXE/SSRF/CMDi, do **not**
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
 Authoritative commented list: [`.env.example`](./.env.example)
 
@@ -401,7 +404,7 @@ Per-role overrides: `coordinator` · `recon` · `analyst` · `exploitation` · `
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```text
 reynard/
@@ -427,7 +430,7 @@ reynard/
 
 ---
 
-## Common Commands
+## ⌨️ Common Commands
 
 ```bash
 docker compose up -d
@@ -450,7 +453,7 @@ Logs, scorecards, and reports land under `logs/` (gitignored).
 
 ---
 
-## Recommended Workflow
+## ✅ Recommended Workflow
 
 1. `docker compose up -d`
 2. Configure `.env` + optional `--auth-file` / engagement YAML
@@ -462,7 +465,7 @@ Logs, scorecards, and reports land under `logs/` (gitignored).
 
 ---
 
-## Docs
+## 📚 Docs
 
 | Doc | Topic |
 | --- | --- |
@@ -474,7 +477,7 @@ Logs, scorecards, and reports land under `logs/` (gitignored).
 
 ---
 
-## Legal Notice
+## ⚖️ Legal Notice
 
 Reynard is for education, CTFs, research labs, and **authorized** security assessments only. You are responsible for ensuring every target, technique, and tool invocation is permitted by the applicable rules of engagement and law.
 
