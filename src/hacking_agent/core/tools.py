@@ -926,6 +926,78 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "browser_use_explore",
+            "description": (
+                "OPTIONAL semantic workflow discovery via Browser Use. Explores a "
+                "web app like a real user (signup/login/onboarding/invites/role "
+                "changes/settings/dashboards/checkout/uploads/multi-step forms) "
+                "and returns STRUCTURED observations (pages, actions, discovered "
+                "API/network requests, auth + workflow state) that populate the "
+                "attack surface. Use for SPA/JS-heavy or authenticated apps and "
+                "functionality a crawler misses. It does NOT replace browser_map "
+                "and CANNOT declare vulnerabilities."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "In-scope entry URL."},
+                    "task": {"type": "string",
+                             "description": "What workflow(s) to explore (natural language)."},
+                    "session": {"type": "string",
+                                "description": "Auth session name for authenticated exploration; omit for anonymous."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hexstrike_search_capability",
+            "description": (
+                "Ask the HexStrike broker which specialist tools could help a "
+                "hypothesis/requirement (e.g. 'hidden parameter discovery', "
+                "'graphql analysis', 'cloud s3 audit'). Returns the SMALLEST "
+                "relevant subset (<=5), gap-first so native Reynard tools stay "
+                "preferred. You never see the full 150+ catalogue."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "requirement": {"type": "string",
+                                    "description": "The missing capability / hypothesis need."},
+                    "limit": {"type": "integer", "description": "Max candidates (default 5)."},
+                },
+                "required": ["requirement"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hexstrike_run_capability",
+            "description": (
+                "Run exactly ONE HexStrike specialist capability (from "
+                "hexstrike_search_capability) against an in-scope target. Returns "
+                "STRUCTURED observations that feed the attack surface — never a "
+                "finding. Prefer a native Reynard tool when an equivalent exists."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string",
+                                   "description": "Capability/tool name from search results."},
+                    "target": {"type": "string", "description": "In-scope target."},
+                    "parameters": {"type": "object",
+                                   "description": "Optional tool params (e.g. {additional_args: '...'})."},
+                },
+                "required": ["capability", "target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_response",
             "description": (
                 "Analyze an HTTP response body for security-relevant signals. "
@@ -3340,6 +3412,62 @@ def authz_matrix_scan(urls: list[str] | str, resources: list[dict] | None = None
 
 
 # =============================================================================
+# External capabilities (OPTIONAL): Browser Use + HexStrike AI
+# These are UNTRUSTED providers behind a broker. They return STRUCTURED
+# observations (never findings); the executor re-ingests them into the attack
+# surface. The active ScopeGuard is enforced by the executor + re-checked in the
+# adapters. All degrade gracefully when the package/server is absent.
+# =============================================================================
+
+def browser_use_explore(url: str, task: str = "", session: str | None = None) -> str:
+    """Semantic workflow exploration of a web app via Browser Use (optional).
+
+    Explores like a real user (signup/login/onboarding/invites/role changes/
+    settings/dashboards/checkout/uploads/multi-step forms) and returns STRUCTURED
+    observations (pages, actions, discovered API/network requests, auth + workflow
+    state). Observations feed the attack surface; they are NEVER findings. This
+    does NOT replace browser_map (deterministic capture/proof)."""
+    from hacking_agent.integrations.external.browser_use import get_explorer
+    from hacking_agent.integrations.external.base import get_active_scope_guard
+    default_task = ("Map the application's functionality and workflows as a real "
+                    "user; do not attempt exploitation.")
+    cap = get_explorer().explore(
+        task or default_task, url, session=session,
+        scope_guard=get_active_scope_guard())
+    return cap.to_json()
+
+
+def hexstrike_search_capability(requirement: str, limit: int = 5) -> str:
+    """Ask the HexStrike broker for the SMALLEST relevant specialist-tool subset
+    for a requirement/hypothesis (<=5 candidates, gap-first so native tools stay
+    preferred). This is the ONLY broad listing exposed to the model — it never
+    sees the full 150+ catalogue."""
+    from hacking_agent.integrations.external.hexstrike import get_broker
+    broker = get_broker()
+    caps = broker.search_capability(requirement, limit=limit)
+    return json.dumps({
+        "requirement": requirement,
+        "available": broker.available(),
+        "candidates": caps,
+        "note": ("Prefer a native Reynard tool when native_equivalent is true; "
+                 "use HexStrike to fill capability gaps or add a second technique."),
+    }, default=str)
+
+
+def hexstrike_run_capability(capability: str, target: str,
+                             parameters: dict | None = None) -> str:
+    """Run exactly one HexStrike specialist capability against an in-scope target.
+    Returns STRUCTURED observations (never a finding). Scope is enforced by the
+    executor and re-checked in the broker."""
+    from hacking_agent.integrations.external.hexstrike import get_broker
+    from hacking_agent.integrations.external.base import get_active_scope_guard
+    cap = get_broker().execute_capability(
+        capability, target, parameters=parameters or {},
+        scope_guard=get_active_scope_guard())
+    return cap.to_json()
+
+
+# =============================================================================
 # OSINT / external recon (Shodan/Censys clients live in integrations/shodan.py;
 # dns_recon + tls_info run dependency-light tools inside the container)
 # =============================================================================
@@ -4326,6 +4454,17 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         urls=args.get("urls") or args.get("url", ""),
         resources=args.get("resources"),
         timeout=args.get("timeout", 20),
+    ),
+    # ---- External capabilities (optional): Browser Use + HexStrike ----
+    "browser_use_explore": lambda args: browser_use_explore(
+        url=args["url"], task=args.get("task", ""), session=args.get("session"),
+    ),
+    "hexstrike_search_capability": lambda args: hexstrike_search_capability(
+        requirement=args["requirement"], limit=int(args.get("limit", 5)),
+    ),
+    "hexstrike_run_capability": lambda args: hexstrike_run_capability(
+        capability=args["capability"], target=args["target"],
+        parameters=args.get("parameters") or {},
     ),
     # ---- Caido Cloud API ----
     "caido_cloud_api": lambda args: caido_mod.dumps(caido_mod.call_operation(

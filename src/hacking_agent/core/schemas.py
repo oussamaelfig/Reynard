@@ -65,6 +65,8 @@ ToolName = Literal[
     "katana_crawl", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
     # Authorization matrix (differential authz across identities)
     "authz_matrix_scan",
+    # External capabilities (optional): Browser Use + HexStrike broker
+    "browser_use_explore", "hexstrike_search_capability", "hexstrike_run_capability",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
     # Caido local Replay/history bridge
