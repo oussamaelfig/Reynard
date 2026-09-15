@@ -170,12 +170,15 @@ class ScopeGuard:
         Duck-typed on the ``Engagement`` attributes so ``scope.py`` needs no
         import of ``engagement.py`` (avoids an import cycle).
         """
-        for domain in getattr(engagement, "authorized_domains", []) or []:
-            if domain and domain not in self.allowed_domains:
-                self.allowed_domains.append(domain)
-        for cidr in getattr(engagement, "authorized_cidrs", []) or []:
-            if cidr and cidr not in self.allowed_cidrs:
-                self.allowed_cidrs.append(cidr)
+        # The engagement IS the authorization boundary. Replace any allowlist
+        # inferred from the target URL so a path-scoped asset
+        # (https://example.com/docs) cannot silently widen to the whole host.
+        self.allowed_domains = [
+            d for d in (getattr(engagement, "authorized_domains", []) or []) if d
+        ]
+        self.allowed_cidrs = [
+            c for c in (getattr(engagement, "authorized_cidrs", []) or []) if c
+        ]
         self.out_of_scope = list(getattr(engagement, "out_of_scope", []) or [])
         self.authorized_url_prefixes = list(
             getattr(engagement, "authorized_url_prefixes", []) or []
