@@ -460,6 +460,34 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_map",
+            "description": (
+                "APPLICATION MAPPER. Navigate a page as a real (optionally "
+                "authenticated) browser and capture ALL network traffic — XHR/"
+                "fetch/API calls, WebSockets, JS bundles + source maps — plus DOM "
+                "links and forms, returning a STRUCTURED endpoint/parameter "
+                "inventory that auto-populates the attack surface. Use this to "
+                "discover a SPA's real API surface and authenticated traffic that "
+                "a plain crawler misses."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "wait_ms": {"type": "integer",
+                                "description": "Settle time to let XHR/fetch fire (default 3500)."},
+                    "extract_links": {"type": "boolean",
+                                      "description": "Also harvest DOM anchors + forms (default true)."},
+                    "session": {"type": "string",
+                                "description": "Auth session name; omit for active."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
     # =========================================================================
     # Out-of-Band (Interactsh) — for blind vulnerabilities
     # =========================================================================
@@ -698,6 +726,200 @@ TOOL_SCHEMAS = [
                     "base_url": {"type": "string"},
                 },
                 "required": ["base_url"],
+            },
+        },
+    },
+    # =========================================================================
+    # Structured recon wrappers (ProjectDiscovery toolchain + passive OSINT).
+    # These parse tool output into STRUCTURED records (subdomains, endpoints,
+    # params, JS, technologies, IPs, services) that auto-populate the Attack
+    # Surface model. Prefer these over raw run_shell for recon so the researcher
+    # reasons over structured state instead of thousands of raw lines.
+    # =========================================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "subfinder_scan",
+            "description": (
+                "Passive subdomain enumeration for a domain via subfinder. "
+                "Returns a STRUCTURED list of discovered subdomains (auto-added "
+                "to the attack surface with provenance + scope status)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Root domain, e.g. example.com."},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dnsx_resolve",
+            "description": (
+                "Resolve a list of hosts with dnsx (A/AAAA/CNAME). Returns "
+                "STRUCTURED resolved hosts + IPs for the attack surface."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hosts": {"type": "array", "items": {"type": "string"}},
+                    "domain": {"type": "string", "description": "Single host if `hosts` omitted."},
+                    "timeout": {"type": "integer"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "httpx_probe",
+            "description": (
+                "Probe hosts/URLs with httpx: live status, title, web server, "
+                "and detected technologies. Returns STRUCTURED endpoint + "
+                "technology + IP records for the attack surface."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "targets": {"type": "array", "items": {"type": "string"}},
+                    "url": {"type": "string", "description": "Single target if `targets` omitted."},
+                    "timeout": {"type": "integer"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "naabu_scan",
+            "description": (
+                "Fast TCP port scan of a host via naabu. Returns STRUCTURED "
+                "open service records (host:port) for the attack surface."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": {"type": "string"},
+                    "top_ports": {"type": "string", "description": "Top-ports preset (default 1000)."},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["host"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "katana_crawl",
+            "description": (
+                "Crawl a URL with katana (JS-aware). Returns STRUCTURED "
+                "endpoint + JS-asset records (with methods/status) for the "
+                "attack surface. Prefer this to build an endpoint/param inventory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "depth": {"type": "integer", "description": "Crawl depth (default 2)."},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "waybackurls_fetch",
+            "description": (
+                "Fetch historical URLs for a domain from the Wayback Machine. "
+                "Returns STRUCTURED endpoint + JS-asset records for the attack "
+                "surface — great for finding forgotten/legacy endpoints."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "crtsh_lookup",
+            "description": (
+                "Certificate-transparency subdomain discovery via crt.sh (HTTP, "
+                "no key). Returns STRUCTURED subdomain records for the attack "
+                "surface. Passive — safe to run early."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "urlscan_lookup",
+            "description": (
+                "Passive URL/domain intel from urlscan.io (URLSCAN_API_KEY "
+                "optional; absence just lowers the rate limit). Returns "
+                "STRUCTURED subdomain + URL records for the attack surface."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "authz_matrix_scan",
+            "description": (
+                "AUTHORIZATION TESTING. Replay a set of endpoints as EVERY "
+                "registered identity (anon/user1/user2/admin-test-role), compare "
+                "results semantically, and build a roles x resources matrix to "
+                "surface IDOR/BOLA/BFLA/privilege-escalation with control-vs-test "
+                "evidence. Register identities first (register_session or "
+                "--auth-file). For object-level IDOR/BOLA checks, pass `resources` "
+                "with owner_identity + sensitive per URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {"type": "array", "items": {"type": "string"},
+                             "description": "Endpoints to test (GET) across identities."},
+                    "url": {"type": "string", "description": "Single endpoint if `urls` omitted."},
+                    "resources": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": (
+                            "Optional richer resources: [{url, method, "
+                            "expected_min_role, owner_identity, sensitive}]."
+                        ),
+                    },
+                    "timeout": {"type": "integer"},
+                },
+                "required": [],
             },
         },
     },
@@ -2523,6 +2745,30 @@ def browser_interact(
     }, indent=2)
 
 
+def browser_map(url: str, wait_ms: int = 3500, extract_links: bool = True,
+                session: str | None = None) -> str:
+    """Map a web application with a real (optionally authenticated) browser.
+
+    Navigates the page, captures ALL network traffic (XHR/fetch/API calls,
+    WebSockets, JS bundles + source maps) and DOM links/forms, then returns a
+    STRUCTURED endpoint/parameter inventory that auto-populates the Attack
+    Surface. Prefer this over browser_navigate when you want to discover a SPA's
+    real API surface and authenticated traffic.
+    """
+    from hacking_agent.core import recon_wrappers as rw
+    result = browser_mod.map_application(
+        url, wait_ms=wait_ms, session=session, extract_links=extract_links)
+    if not result.get("ok") and result.get("error"):
+        res = rw.browser_map_result({}, base_url=url, error=result.get("error", ""))
+    else:
+        res = rw.browser_map_result(result.get("network", {}), base_url=url)
+    payload = res.to_dict()
+    payload["final_url"] = result.get("final_url", "")
+    payload["title"] = result.get("title", "")
+    payload["xss_proof"] = result.get("xss_proof", "")
+    return json.dumps(payload, default=str)
+
+
 def analyze_response(response_body: str, payload: str = "") -> str:
     """
     Analyze an HTTP response using the ResponseAnalyzer.
@@ -2998,6 +3244,99 @@ def nmap_scan(target: str, ports: str = "", extra_args: str = "",
         "kg_records": records,
         "exit_code": result.get("exit_code"),
     }, indent=2, default=str)
+
+
+# =============================================================================
+# Structured recon wrappers (ProjectDiscovery toolchain + passive OSINT)
+# Each returns STRUCTURED records (not raw dumps) and degrades gracefully when
+# the underlying binary/key is unavailable. Results are auto-ingested into the
+# Attack Surface model by BudgetedToolExecutor.
+# =============================================================================
+
+def subfinder_scan(domain: str, timeout: int = 180) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    return rw.run_subfinder(domain, timeout=timeout).to_json()
+
+
+def dnsx_resolve(hosts: list[str] | str, timeout: int = 120) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    if isinstance(hosts, str):
+        hosts = [h for h in hosts.replace(",", " ").split() if h]
+    return rw.run_dnsx(list(hosts or []), timeout=timeout).to_json()
+
+
+def httpx_probe(targets: list[str] | str, timeout: int = 180) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    if isinstance(targets, str):
+        targets = [t for t in targets.replace(",", " ").split() if t]
+    return rw.run_httpx(list(targets or []), timeout=timeout).to_json()
+
+
+def naabu_scan(host: str, top_ports: str = "1000", timeout: int = 300) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    return rw.run_naabu(host, top_ports=top_ports, timeout=timeout).to_json()
+
+
+def katana_crawl(url: str, depth: int = 2, timeout: int = 240) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    return rw.run_katana(url, depth=depth, timeout=timeout).to_json()
+
+
+def waybackurls_fetch(domain: str, timeout: int = 120) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    return rw.run_waybackurls(domain, timeout=timeout).to_json()
+
+
+def crtsh_lookup(domain: str, timeout: int = 30) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    return rw.run_crtsh(domain, timeout=timeout).to_json()
+
+
+def urlscan_lookup(domain: str, timeout: int = 30) -> str:
+    from hacking_agent.core import recon_wrappers as rw
+    api_key = os.getenv("URLSCAN_API_KEY", "")
+    return rw.run_urlscan(domain, api_key=api_key, timeout=timeout).to_json()
+
+
+def authz_matrix_scan(urls: list[str] | str, resources: list[dict] | None = None,
+                      timeout: int = 20) -> str:
+    """Build a roles x resources authorization matrix from the REGISTERED auth
+    identities and a set of endpoints, replaying each request as every identity
+    and comparing results semantically to surface IDOR/BOLA/BFLA/privilege-
+    escalation. Returns the structured matrix + anomalies (each with control-vs-
+    test evidence). Register identities first (register_session / --auth-file).
+    """
+    from hacking_agent.core import authz_matrix as azm
+    from hacking_agent.core import sessions as session_mod
+    idents = azm.identities_from_registry(session_mod.get_registry())
+    if len(idents) < 2:
+        return json.dumps({
+            "error": "authz matrix needs >=2 registered identities "
+                     "(e.g. anon + user1 + admin). Register sessions first.",
+            "identities": [i.name for i in idents],
+        })
+    res_objs: list = []
+    if resources:
+        for r in resources:
+            if not isinstance(r, dict) or not r.get("url"):
+                continue
+            res_objs.append(azm.AuthzResource(
+                key=f"{str(r.get('method', 'GET')).upper()} {r['url']}",
+                method=str(r.get("method", "GET")).upper(), url=r["url"],
+                expected_min_role=str(r.get("expected_min_role", "")),
+                owner_identity=str(r.get("owner_identity", "")),
+                sensitive=bool(r.get("sensitive", False)),
+            ))
+    else:
+        if isinstance(urls, str):
+            urls = [u for u in urls.replace(",", " ").split() if u]
+        for u in (urls or []):
+            res_objs.append(azm.AuthzResource.get(u))
+    if not res_objs:
+        return json.dumps({"error": "no resources/urls provided for authz matrix"})
+    matrix = azm.run_authorization_matrix(
+        idents, res_objs, azm.live_requester(timeout=timeout))
+    return json.dumps(matrix.to_dict(), default=str)
 
 
 # =============================================================================
@@ -3902,6 +4241,12 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         actions=args["actions"],
         wait_ms=args.get("wait_ms", 2000),
     ),
+    "browser_map": lambda args: browser_map(
+        url=args["url"],
+        wait_ms=args.get("wait_ms", 3500),
+        extract_links=args.get("extract_links", True),
+        session=args.get("session"),
+    ),
     "analyze_response": lambda args: analyze_response(
         response_body=args["response_body"],
         payload=args.get("payload", ""),
@@ -3946,6 +4291,41 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     ),
     "discover_apis": lambda args: discover_apis(
         base_url=args["base_url"],
+    ),
+    # ---- Structured recon wrappers (ProjectDiscovery + passive OSINT) ----
+    "subfinder_scan": lambda args: subfinder_scan(
+        domain=args["domain"], timeout=args.get("timeout", 180),
+    ),
+    "dnsx_resolve": lambda args: dnsx_resolve(
+        hosts=args.get("hosts") or args.get("domain", ""),
+        timeout=args.get("timeout", 120),
+    ),
+    "httpx_probe": lambda args: httpx_probe(
+        targets=args.get("targets") or args.get("url", ""),
+        timeout=args.get("timeout", 180),
+    ),
+    "naabu_scan": lambda args: naabu_scan(
+        host=args["host"], top_ports=str(args.get("top_ports", "1000")),
+        timeout=args.get("timeout", 300),
+    ),
+    "katana_crawl": lambda args: katana_crawl(
+        url=args["url"], depth=int(args.get("depth", 2)),
+        timeout=args.get("timeout", 240),
+    ),
+    "waybackurls_fetch": lambda args: waybackurls_fetch(
+        domain=args["domain"], timeout=args.get("timeout", 120),
+    ),
+    "crtsh_lookup": lambda args: crtsh_lookup(
+        domain=args["domain"], timeout=args.get("timeout", 30),
+    ),
+    "urlscan_lookup": lambda args: urlscan_lookup(
+        domain=args["domain"], timeout=args.get("timeout", 30),
+    ),
+    # ---- Authorization matrix (differential authz across identities) ----
+    "authz_matrix_scan": lambda args: authz_matrix_scan(
+        urls=args.get("urls") or args.get("url", ""),
+        resources=args.get("resources"),
+        timeout=args.get("timeout", 20),
     ),
     # ---- Caido Cloud API ----
     "caido_cloud_api": lambda args: caido_mod.dumps(caido_mod.call_operation(

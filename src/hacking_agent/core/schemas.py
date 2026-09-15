@@ -51,7 +51,7 @@ ToolName = Literal[
     "run_shell", "request_smuggling_probe",
     "tool_inventory", "read_file", "write_file", "list_dir",
     "http_request", "browser_navigate", "browser_execute_js",
-    "browser_interact", "analyze_response",
+    "browser_interact", "browser_map", "analyze_response",
     # Out-of-band interaction (interactsh)
     "oob_get_domain", "oob_poll",
     # Multi-session auth
@@ -60,6 +60,11 @@ ToolName = Literal[
     "capture_baseline", "diff_against_baseline",
     # Recon expansions
     "nuclei_scan", "extract_js_endpoints", "discover_apis",
+    # Structured recon wrappers (ProjectDiscovery toolchain + passive OSINT)
+    "subfinder_scan", "dnsx_resolve", "httpx_probe", "naabu_scan",
+    "katana_crawl", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
+    # Authorization matrix (differential authz across identities)
+    "authz_matrix_scan",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
     # Caido local Replay/history bridge

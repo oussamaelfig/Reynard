@@ -11,13 +11,13 @@
 
 # Reynard
 
-**Autonomous multi-agent engine for CTFs, labs, and authorized security testing**
+**Autonomous web security researcher for authorized pentests, bug bounties, and CTF/lab benchmarks**
 
-LLM reasoning · Kali Docker runtime · real Chromium · hypothesis-driven orchestration
+LLM reasoning · persistent attack surface · structured recon · authenticated differential testing · evidence-gated reporting
 
 <br/>
 
-[![Version](https://img.shields.io/badge/version-2.1.0-0ea5e9?style=for-the-badge)](./pyproject.toml)
+[![Version](https://img.shields.io/badge/version-3.0.0-0ea5e9?style=for-the-badge)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](./pyproject.toml)
 [![Docker](https://img.shields.io/badge/runtime-Kali%20Linux-557C94?style=for-the-badge&logo=kalilinux&logoColor=white)](./Dockerfile)
 [![Labs](https://img.shields.io/badge/PortSwigger-213%20labs%20·%2031%20classes-f59e0b?style=for-the-badge)](./docs/portswigger-coverage-matrix.md)
@@ -46,6 +46,39 @@ Reynard is not a script runner with an LLM bolted on. It is a **structured multi
 | **Proof** | PoC evidence store, validator replay, report gating against premature “done” |
 
 > **Authorized use only.** Run Reynard against systems you own, intentionally vulnerable labs, CTF infrastructure, or targets covered by explicit written authorization.
+
+---
+
+## Production research (v3)
+
+Reynard v3 runs end-to-end authorized pentests and bug-bounty assessments around a
+single research loop: **understand scope → map attack surface → identify
+interesting behavior → hypothesize → test → learn → pivot/chain → independently
+verify → report**. Lab assumptions are gone from the default path (PortSwigger/CTF
+stay as benchmarks).
+
+| Capability | What it does |
+| --- | --- |
+| **Mission modes** | `production` (default) vs `benchmark` (labs). Lab fast-paths / "solved" banners are confined to benchmark; production concludes only on verified evidence. `--production` / `--benchmark`. |
+| **Attack Surface model** | Persistent, scope-annotated map (domains/subdomains/hosts/URLs/APIs/endpoints/params/JS/source-maps/websockets/tech/identities/roles/workflows/cloud) with provenance + confidence + first/last-seen. |
+| **Structured recon** | Typed wrappers for subfinder, dnsx, httpx, naabu, katana, waybackurls, crt.sh, urlscan → parsed into surface state (never raw dumps), graceful when tools/keys are absent. |
+| **Application mapper** | `browser_map` drives an authenticated Chromium and captures XHR/fetch/APIs, WebSockets, JS bundles + source maps, links and forms into an endpoint/param inventory. |
+| **Authorization matrix** | `authz_matrix_scan` replays endpoints as anon/userA/userB/admin-test-role, semantically compares, and flags IDOR/BOLA/BFLA/privilege-escalation with control-vs-test evidence. |
+| **EvidenceBundle** | Sanitized exchanges, identity, endpoint, control tests, reproduction steps, screenshots, OOB, verification status. Reports are generated from evidence, not model claims. |
+| **Delta hunting** | Prior attack surfaces persist across runs; newly-appeared subdomains/APIs/admin panels are prioritized on the next run. |
+| **Bug-bounty scope** | Import a program's scope (offline file or `hackerone:<handle>`) into an engagement behind ScopeGuard — never mutable by a connector/webpage/MCP. |
+
+```bash
+# Authorized production assessment from a bug-bounty scope
+reynard-assess --bounty-scope eval/bounty_scope.sample.json --out reports/acme
+reynard-assess --bounty-scope hackerone:acme --target https://app.acme.com/
+
+# Authorized pentest with controlled identities (authorization matrix)
+python orchestrator.py --production --auth-file auth-sessions.json \
+  "Authorized pentest for https://app.example.com. Scope: app.example.com only."
+```
+
+Details: [`docs/production-research-architecture.md`](./docs/production-research-architecture.md)
 
 ---
 

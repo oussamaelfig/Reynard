@@ -56,8 +56,13 @@ from hacking_agent.agents import (
     ReporterAgent,
     ValidatorAgent,
 )
+from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
+from hacking_agent.core.evidence_bundle import (
+    EvidenceBundleStore, build_bundle_from_pocs,
+    V_VERIFIED, V_REFUTED, V_UNVERIFIED,
+)
 from hacking_agent.core.events import emit
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
@@ -69,6 +74,7 @@ from hacking_agent.core.lab_intel import (
 )
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.metering import get_token_meter
+from hacking_agent.core.mission import Mission
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.preflight import has_fatal_failure, run_preflight
 from hacking_agent.core.providers import ProviderRegistry
@@ -338,11 +344,27 @@ class Orchestrator:
         subagents_enabled: bool = True,
         max_subagents: int = 4,
         exploit_server_url: str = "",
+        mission_mode: str | None = None,
     ):
         self.target_url = target_url
         self.objective = objective
         self.exploit_server_url = (exploit_server_url or "").strip()
-        self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
+
+        # ---- mission mode: benchmark (labs) vs production (real assessment) --
+        # Lab-specific behaviour (PortSwigger profile seeding, "solved" banner
+        # short-circuit, deterministic lab fast-paths, exploit-server workflow)
+        # is confined to benchmark mode. Constructing with a lab_profile or a
+        # lab host implies benchmark; everything else defaults to production so
+        # the default decision path carries no lab assumptions.
+        self.mission = Mission.detect(
+            target_url, objective, explicit=mission_mode, lab_profile=lab_profile
+        )
+        # In production, drop any lab profile so the decision path never routes
+        # through lab-specific seeding/fast-paths. Benchmark keeps it enriched.
+        if self.mission.is_benchmark:
+            self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
+        else:
+            self.lab_profile = {}
         self.playbook_context = render_playbook_context(self.lab_profile)
         self.interactive = interactive
         self.subagents_enabled = subagents_enabled
@@ -367,6 +389,10 @@ class Orchestrator:
 
         # ---- shared subsystems ----
         self.memory = AgentMemory(target_url=target_url)
+        self.memory.add_fact("mission_mode", self.mission.mode, source="mission")
+        self.memory.add_fact(
+            "mission_production", self.mission.is_production, source="mission"
+        )
         if self.objective:
             self.memory.add_fact("task_objective", self.objective, source="cli")
         if self.exploit_server_url:
@@ -407,6 +433,10 @@ class Orchestrator:
             StateMachineConfig(max_iterations=max_iterations)
         )
         self.evidence = EvidenceStore()
+        # Rich, reproducible evidence for reporting (sanitized exchanges, control
+        # tests, reproduction steps, verification status). Assembled from the PoC
+        # ledger at report time so reports are generated FROM evidence.
+        self.bundles = EvidenceBundleStore()
 
         # ---- durable cross-run memory (opt-in-safe; None => in-memory only) --
         # Disable explicitly with REYNARD_DURABLE_MEMORY=0. Any open failure
@@ -429,9 +459,26 @@ class Orchestrator:
         if self.lab_level:
             self.lab_profile.setdefault("lab_level", self.lab_level)
 
+        # ---- persistent Attack Surface model ----
+        # Structured, scope-annotated map of everything discovered about the
+        # target. Recon-wrapper tool results auto-populate it via the executor;
+        # it persists across runs for continuous / delta hunting.
+        self.surface = AttackSurface(
+            target=target_url, scope_evaluator=self.scope_guard.classify,
+        )
+        # Snapshot of the surface from previous runs (loaded from durable store).
+        # Diffing current-vs-prior powers continuous / delta hunting: assets that
+        # appear THIS run (new subdomains/APIs/admin panels) are prioritized.
+        self.prior_surface = AttackSurface(
+            target=target_url, scope_key=self.surface.scope_key,
+            scope_evaluator=self.scope_guard.classify,
+        )
+        self._surface_seed_sig: set[str] = set()
+
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
-            self.memory, self.sm, scope_guard=self.scope_guard
+            self.memory, self.sm, scope_guard=self.scope_guard,
+            surface=self.surface,
         )
         self.subagent_scheduler = BoundedSubagentScheduler(
             SubagentPolicy(
@@ -904,8 +951,11 @@ class Orchestrator:
                     continue
                 self._dispatch_validator(poc.id, poc.vuln_id)
 
-        # Check for lab_solved in global facts
-        lab_solved = self.memory.get_fact("lab_solved")
+        # Check for lab_solved in global facts. This is a BENCHMARK-only
+        # terminal signal ("Congratulations, you solved the lab"). In production
+        # there is no such banner and a run only concludes on verified evidence
+        # or budget exhaustion, so we never short-circuit on it.
+        lab_solved = self.memory.get_fact("lab_solved") and self.mission.is_benchmark
         if lab_solved:
             console.print("[green bold]🎉 LAB SOLVED — heading to report[/]")
             self.logger.log("LAB_SOLVED detected — reporting")
@@ -989,6 +1039,7 @@ class Orchestrator:
             # populated, category-appropriate agenda (not just web/PortSwigger).
             self._seed_category_hypotheses()
             self._sync_agenda_from_memory()
+            self._sync_agenda_from_surface()
             if self.agenda.all():
                 self.logger.log(
                     f"[AGENDA] seeded {len(self.agenda.all())} hypotheses "
@@ -1064,8 +1115,64 @@ class Orchestrator:
                 notes="seed:category_playbook",
             )
 
+    # ---- WS8: continuous / delta-hunting agenda seeding ------------------
+
+    _SURFACE_SEEDABLE = {
+        "subdomain": "recon", "host": "recon", "api": "injection",
+        "endpoint": "injection", "js_asset": "recon",
+    }
+
+    # Provenance sources that are only bridges/derivations, not active recon.
+    # Assets sourced ONLY from these do not seed the agenda (they mirror the KG,
+    # which already seeds via _sync_agenda_from_memory).
+    _BRIDGE_ONLY_SOURCES = {"memory_kg", "orchestrator/evidence"}
+
+    def _sync_agenda_from_surface(self) -> None:
+        """Fold high-value, in-scope attack-surface leads into the agenda.
+
+        On a delta run, assets that appeared since the previous run (new
+        subdomains, APIs, admin panels, JS bundles) are boosted so the researcher
+        prioritizes fresh surface. Only assets discovered by ACTIVE recon/mapping
+        (subfinder/httpx/katana/browser mapper/...) seed the agenda — the KG
+        bridge does not, to avoid duplicating the analyst-driven agenda. The root
+        target host and out-of-scope assets are never seeded."""
+        try:
+            target_host = (urlparse(self.target_url).hostname or "").lower()
+            new_keys = {a.key for a in self.surface.diff(self.prior_surface).new_assets}
+            leads = self.surface.prioritized_leads(previous=self.prior_surface,
+                                                   limit=12)
+            for a in leads:
+                if a.key in self._surface_seed_sig:
+                    continue
+                phase = self._SURFACE_SEEDABLE.get(a.kind)
+                if not phase:
+                    continue
+                if a.identifier == target_host:
+                    continue
+                if a.sources and all(s in self._BRIDGE_ONLY_SOURCES
+                                     for s in a.sources):
+                    continue
+                self._surface_seed_sig.add(a.key)
+                is_new = a.key in new_keys
+                admin_like = any(m in a.identifier.lower()
+                                 for m in ("admin", "internal", "graphql",
+                                           "swagger", "api", "debug", "actuator"))
+                heat = 1.35 if is_new else 0.8
+                if admin_like:
+                    heat += 0.15
+                tag = "NEW since last run" if is_new else "known surface"
+                self.agenda.add(
+                    text=(f"Investigate {a.kind} '{a.identifier}' ({tag}; via "
+                          f"{','.join(a.sources[:2])}) for exploitable behaviour."),
+                    vuln_type="", vector=a.identifier, phase=phase,
+                    heat=heat, notes="seed:surface_delta" if is_new else "seed:surface",
+                )
+        except Exception as e:
+            self.logger.log(f"[DELTA] surface agenda sync failed: {e}")
+
     def _select_active_hypothesis(self) -> Hypothesis | None:
         self._sync_agenda_from_memory()
+        self._sync_agenda_from_surface()
         h = self.agenda.hottest_open()
         self.active_hypothesis = h
         if h:
@@ -1119,6 +1226,8 @@ class Orchestrator:
 
     def _inject_task_context(self, task: AgentTask, agent_name: str) -> AgentTask:
         context = {**task.context, "target_url": self.target_url}
+        context["mission_mode"] = self.mission.mode
+        context["production"] = self.mission.is_production
         if self.objective:
             context["objective"] = self.objective
         if self.lab_profile:
@@ -1774,6 +1883,20 @@ class Orchestrator:
                 self.durable, self.durable_target, self.lab_class)
             n_ev = self.evidence.rehydrate(
                 self.durable, self.durable_target, self.lab_class)
+            # Load the prior attack surface for delta hunting + bundles.
+            try:
+                n_surf = self.prior_surface.load(self.durable)
+                self.bundles.load(self.durable, self.durable_target,
+                                  self.surface.scope_key)
+                if n_surf:
+                    self.memory.add_fact(
+                        "prior_surface_assets", n_surf, confidence="suspected",
+                        source="durable_surface")
+                    self.logger.log(
+                        f"[DELTA] loaded {n_surf} assets from prior runs "
+                        f"(scope={self.surface.scope_key})")
+            except Exception:
+                pass
             wins = self.durable.successful_techniques(self.lab_class)
             deads = self.durable.known_deadends(self.lab_class)
             if wins:
@@ -1841,12 +1964,25 @@ class Orchestrator:
                 self.durable, self.durable_target, self.lab_class)
             ok_ev = self.evidence.persist(
                 self.durable, self.durable_target, self.lab_class)
+            # Persist the CUMULATIVE attack surface: fold in prior assets not
+            # rediscovered this run, then save so the next run can delta-hunt.
+            ok_surf = False
+            try:
+                self.surface.ingest_memory_kg(self.memory)
+                self.surface.load(self.durable)  # merge prior into current
+                ok_surf = self.surface.persist(self.durable)
+                self.bundles.persist(self.durable, self.durable_target,
+                                     self.surface.scope_key)
+            except Exception:
+                pass
             self.logger.log(
                 f"[DURABLE] persisted memory={ok_mem} evidence={ok_ev} "
-                f"(target={self.durable_target}, class={self.lab_class})"
+                f"surface={ok_surf} (target={self.durable_target}, "
+                f"class={self.lab_class})"
             )
             emit("durable_persist", {
-                "memory": ok_mem, "evidence": ok_ev, "lab_class": self.lab_class,
+                "memory": ok_mem, "evidence": ok_ev, "surface": ok_surf,
+                "lab_class": self.lab_class,
             })
         except Exception as e:
             self.logger.log(f"[DURABLE] persist failed: {e}")
@@ -2058,8 +2194,77 @@ class Orchestrator:
 
     # ---- reporter dispatch ------------------------------------------------
 
+    def _collect_session_secrets(self) -> list[str]:
+        """Best-effort live secrets (cookie/token values) to redact from
+        evidence exchanges before they land in a report."""
+        secrets: set[str] = set()
+        try:
+            reg = session_mod.get_registry()
+            cookies = reg.read_cookies() if hasattr(reg, "read_cookies") else {}
+            for v in (cookies or {}).values():
+                if v and len(str(v)) >= 6:
+                    secrets.add(str(v))
+        except Exception:
+            pass
+        cred = self.memory.get_fact("credential_hint", "")
+        if cred and ":" in str(cred):
+            for part in str(cred).split(":"):
+                if part and len(part) >= 6:
+                    secrets.add(part)
+        return list(secrets)
+
+    def _assemble_evidence_bundles(self) -> None:
+        """Build reproducible EvidenceBundles from the PoC ledger and record the
+        resulting Findings on the attack surface. Reports render FROM these."""
+        try:
+            secrets = tuple(self._collect_session_secrets())
+            active_identity = ""
+            try:
+                active_identity = session_mod.get_registry().active().name
+            except Exception:
+                pass
+            state_to_status = {"verified": V_VERIFIED, "refuted": V_REFUTED,
+                               "unverified": V_UNVERIFIED}
+            surface_status = {V_VERIFIED: "verified", V_REFUTED: "false_positive",
+                              V_UNVERIFIED: "theoretical"}
+            for entity in self.memory.query("Vulnerability"):
+                vuln_id = entity.id
+                pocs = self.evidence.get_by_vuln(vuln_id)
+                if not pocs:
+                    continue
+                vstatus = state_to_status.get(
+                    self.evidence.verification_state(vuln_id), V_UNVERIFIED)
+                attrs = entity.attrs
+                endpoint = str(attrs.get("parameter") or attrs.get("endpoint")
+                               or self.target_url)
+                bundle = build_bundle_from_pocs(
+                    vuln_id, pocs, verification_status=vstatus,
+                    vuln_type=str(attrs.get("vuln_type", "")),
+                    title=str(attrs.get("vuln_type", "")) or "finding",
+                    severity=str(attrs.get("severity", "info")),
+                    target=self.target_url, endpoint=endpoint,
+                    identity=active_identity, extra_secrets=secrets,
+                )
+                self.bundles.add(bundle)
+                try:
+                    self.surface.record_finding(
+                        title=bundle.title, vuln_type=bundle.vuln_type,
+                        severity=bundle.severity,
+                        status=surface_status.get(vstatus, "theoretical"),
+                        evidence_bundle_id=bundle.id,
+                        source="orchestrator/evidence",
+                    )
+                except Exception:
+                    pass
+            if self.durable is not None:
+                self.bundles.persist(self.durable, self.durable_target,
+                                     self.surface.scope_key)
+        except Exception as e:
+            self.logger.log(f"[EVIDENCE] bundle assembly failed: {e}")
+
     def _execute_reporter(self, decision: CoordinatorDecision | None) -> AgentResult:
         """Run the reporter agent and return its result."""
+        self._assemble_evidence_bundles()
         task = AgentTask(
             task_description="Generate the final penetration test report.",
             context={
@@ -2069,6 +2274,8 @@ class Orchestrator:
                 "expert_playbook": self.playbook_context,
                 "session_duration": f"{time.time() - self.session_start:.1f}s",
                 "total_iterations": self.sm.iteration,
+                "evidence_bundles_markdown": self.bundles.render_markdown(
+                    verified_only=True),
             },
         )
         reporter = self.specialists["reporter"]
@@ -2381,6 +2588,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run preflight checks and exit without starting the orchestrator.",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--production", "--prod",
+        dest="mission_mode", action="store_const", const="production", default=None,
+        help=(
+            "Force PRODUCTION mode: authorized real-world pentest / bug-bounty. "
+            "No lab assumptions; findings require independently-verified evidence. "
+            "This is the default for any non-lab target."
+        ),
+    )
+    mode_group.add_argument(
+        "--benchmark", "--lab",
+        dest="mission_mode", action="store_const", const="benchmark",
+        help=(
+            "Force BENCHMARK mode: intentionally-vulnerable lab/CTF where a "
+            "lab-solved banner is a valid success signal and lab fast-paths apply."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -2401,8 +2626,17 @@ def main() -> None:
 
     raw_target = args.target
     target_url, objective = normalize_target_input(raw_target)
-    lab_profile = detect_lab_profile(raw_target, target_url)
-    exploit_server_url = extract_exploit_server_url(raw_target)
+
+    # Resolve mission mode first: lab detection / exploit-server extraction is
+    # BENCHMARK-only so the production decision path never carries lab state.
+    mission = Mission.detect(target_url, objective, explicit=args.mission_mode)
+    console.print(f"[dim]{mission.describe()}[/]")
+    if mission.is_benchmark:
+        lab_profile = detect_lab_profile(raw_target, target_url)
+        exploit_server_url = extract_exploit_server_url(raw_target)
+    else:
+        lab_profile = {}
+        exploit_server_url = ""
     if target_url != raw_target:
         console.print(f"[dim]Parsed target URL: {target_url}[/]")
     if lab_profile:
@@ -2472,6 +2706,7 @@ def main() -> None:
         subagents_enabled=not args.no_subagents,
         max_subagents=args.max_subagents,
         exploit_server_url=exploit_server_url,
+        mission_mode=mission.mode,
     )
 
     result = orchestrator.run()

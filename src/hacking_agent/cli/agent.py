@@ -258,6 +258,21 @@ def load_methodologies(methodologies_dir: str | os.PathLike = METHODOLOGIES_DIR)
     return methodology_text
 
 
+def _methodology_index(methodologies_dir: str | os.PathLike = METHODOLOGIES_DIR) -> str:
+    """A compact index (filenames only) of available methodology playbooks.
+
+    Used as a lean fallback when RAG retrieval is unavailable, so the prompt
+    lists what guidance exists without pasting every file's full contents."""
+    md_files = sorted(glob.glob(os.path.join(str(methodologies_dir), "*.md")))
+    if not md_files:
+        return ""
+    names = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in md_files)
+    return (
+        "\n\n## AVAILABLE METHODOLOGY PLAYBOOKS (retrieved on demand)\n"
+        f"{names}\n"
+    )
+
+
 # =============================================================================
 # Session Logger
 # =============================================================================
@@ -416,18 +431,44 @@ class HackingAgent:
             border_style="green",
         ))
 
+    def _relevant_methodology(self) -> str:
+        """Retrieve only the METHODOLOGY relevant to the current phase/hypothesis
+        via local RAG, instead of dumping all ~38 files (~168KB) into the prompt
+        every iteration.
+
+        Oversized security prompts measurably hurt strong coding agents; keeping
+        the harness lean is a core design principle. Falls back to a compact
+        index of available playbooks (filenames only) when the retriever yields
+        nothing, so the prompt never balloons back to a full dump."""
+        facts = self.memory.get_all_facts()
+        query = " ".join(str(x) for x in (
+            self.memory.get_fact("task_objective", ""),
+            self.memory.target_url,
+            self.memory.get_current_phase(),
+            facts.get("technology_stack", ""),
+            self.memory.current_hypothesis,
+        ) if x).strip()
+        try:
+            from hacking_agent.core.knowledge import retrieve_context
+            rag = retrieve_context(query or "web application security testing", k=4)
+        except Exception:
+            rag = ""
+        if rag:
+            return rag
+        return _methodology_index()
+
     def _build_system_prompt(self) -> str:
         """
         Build the full system prompt with:
         1. Core instructions (structured format, methodology)
-        2. Loaded methodology files
+        2. RAG-retrieved methodology relevant to the current phase
         3. Current memory state (facts, progress, payloads)
         4. Current phase instructions from strategy engine
         """
         # Base prompt + methodology files
         prompt_parts = [SYSTEM_PROMPT]
         prompt_parts.append(render_tool_catalog("general"))
-        prompt_parts.append(load_methodologies())
+        prompt_parts.append(self._relevant_methodology())
         if self.expert_playbook_context:
             prompt_parts.append(
                 "\n\n# DETECTED EXPERT LAB PLAYBOOK\n\n"

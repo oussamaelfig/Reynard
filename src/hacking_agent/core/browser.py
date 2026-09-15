@@ -120,10 +120,14 @@ def main():
         "js_result": None,
         "actions_performed": [],
         "content": "",
+        "network": {"requests": [], "responses": [], "websockets": [],
+                    "links": [], "forms": []},
         "error": "",
     }
     dialogs = result["dialogs"]
     console_errors = result["console_errors"]
+    network = result["network"]
+    _MAX_NET = 800
 
     try:
         from playwright.sync_api import sync_playwright
@@ -183,6 +187,46 @@ def main():
             page.on("dialog", _on_dialog)
             page.on("console", _on_console)
 
+            if job.get("capture_network"):
+                def _on_request(req):
+                    try:
+                        if len(network["requests"]) < _MAX_NET:
+                            network["requests"].append({
+                                "url": req.url, "method": req.method,
+                                "resource_type": req.resource_type,
+                            })
+                    except Exception:
+                        pass
+
+                def _on_response(resp2):
+                    try:
+                        if len(network["responses"]) >= _MAX_NET:
+                            return
+                        hdrs = {}
+                        try:
+                            hdrs = resp2.headers
+                        except Exception:
+                            hdrs = {}
+                        network["responses"].append({
+                            "url": resp2.url, "status": resp2.status,
+                            "content_type": hdrs.get("content-type", ""),
+                            "sourcemap_header": (hdrs.get("sourcemap")
+                                                 or hdrs.get("x-sourcemap") or ""),
+                        })
+                    except Exception:
+                        pass
+
+                def _on_ws(ws):
+                    try:
+                        if len(network["websockets"]) < _MAX_NET:
+                            network["websockets"].append(ws.url)
+                    except Exception:
+                        pass
+
+                page.on("request", _on_request)
+                page.on("response", _on_response)
+                page.on("websocket", _on_ws)
+
             resp = page.goto(
                 job["url"],
                 wait_until=job.get("wait_until", "load"),
@@ -240,6 +284,24 @@ def main():
                 result["title"] = page.title()
             except Exception:
                 pass
+
+            if job.get("extract_links"):
+                try:
+                    network["links"] = page.eval_on_selector_all(
+                        "a[href]",
+                        "els => Array.from(new Set(els.map(e => e.href))).slice(0, 500)",
+                    ) or []
+                except Exception:
+                    pass
+                try:
+                    network["forms"] = page.eval_on_selector_all(
+                        "form",
+                        "els => els.slice(0,100).map(f => ({action: f.action, "
+                        "method: (f.method||'GET'), inputs: Array.from(f.elements)"
+                        ".map(i => i.name).filter(Boolean)}))",
+                    ) or []
+                except Exception:
+                    pass
 
             if job.get("want_content", True):
                 try:
@@ -318,11 +380,16 @@ def run_job(
     want_content: bool = True,
     session: str | None = None,
     prompt_answer: str = "",
+    capture_network: bool = False,
+    extract_links: bool = False,
 ) -> dict[str, Any]:
     """Drive Chromium in the container for one job and return the parsed result.
 
     Always injects the active (or named) auth session's cookies + static
-    headers so authenticated client-side labs work.
+    headers so authenticated client-side labs work. When ``capture_network`` is
+    set, all request/response/websocket traffic is recorded; ``extract_links``
+    additionally harvests same-page anchors + forms — together they turn the
+    browser into an application mapper.
     """
     cookie_jar, headers, session_name = _active_session_context(session)
 
@@ -345,6 +412,8 @@ def run_job(
         "cookie_jar": cookie_jar,
         "headers": headers,
         "prompt_answer": prompt_answer,
+        "capture_network": capture_network,
+        "extract_links": extract_links,
         "executable_path": CHROMIUM_EXECUTABLE or "",
     }
     job_path = f"/tmp/reynard_pw_job_{uuid.uuid4().hex}.json"
@@ -436,6 +505,22 @@ def interact(url: str, actions: list[dict], wait_ms: int = 2000,
              session: str | None = None) -> dict[str, Any]:
     result = run_job(
         url, actions=actions, wait_ms=wait_ms, want_content=True, session=session,
+    )
+    proof = _dialog_proof(result)
+    if proof:
+        result["xss_proof"] = proof
+    return result
+
+
+def map_application(url: str, wait_ms: int = 3500, session: str | None = None,
+                   extract_links: bool = True) -> dict[str, Any]:
+    """Navigate a page as a real (optionally authenticated) browser and capture
+    the full network map: XHR/fetch/API calls, WebSockets, JS bundles, source
+    maps, plus DOM links and forms. Returns the parsed driver result whose
+    ``network`` field holds the captured inventory."""
+    result = run_job(
+        url, wait_ms=wait_ms, want_content=False, session=session,
+        capture_network=True, extract_links=extract_links,
     )
     proof = _dialog_proof(result)
     if proof:

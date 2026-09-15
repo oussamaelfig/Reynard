@@ -233,6 +233,29 @@ class ScopeGuard:
             return False
         return self._is_in_scope(url_or_host)
 
+    def classify(self, url_or_host: str) -> str:
+        """Read-only scope classification for annotating discoveries.
+
+        Returns one of ``"in_scope"``, ``"out_of_scope"``, ``"unknown"``.
+
+        This is a *pure predicate* used by the Attack Surface model to tag
+        every discovery with a scope status. It NEVER mutates the guard and
+        NEVER consumes the rate-limit / request budget, so a connector, web
+        page, or MCP response can inform the surface without being able to
+        widen (or narrow) the authorization boundary. ``unknown`` is returned
+        when no allowlist is configured at all (open lab path), so callers can
+        distinguish "provably in scope" from "no scope configured yet".
+        """
+        if not url_or_host:
+            return "unknown"
+        if self._is_out_of_scope(url_or_host):
+            return "out_of_scope"
+        # No allowlist configured => open lab behaviour; we cannot *prove*
+        # in-scope, so report unknown rather than a false positive.
+        if not self.allowed_domains and not self.allowed_cidrs and not self.ALLOWLIST:
+            return "unknown"
+        return "in_scope" if self._is_in_scope(url_or_host) else "out_of_scope"
+
     # ---- internals -------------------------------------------------------
 
     def _extract_target(self, tool_name: str, args: dict) -> str | None:
@@ -243,7 +266,8 @@ class ScopeGuard:
     def _extract_targets(self, tool_name: str, args: dict) -> list[str]:
         """Pull network targets from a tool call's args."""
         if tool_name in ("http_request", "browser_navigate",
-                         "browser_execute_js", "browser_interact"):
+                         "browser_execute_js", "browser_interact",
+                         "browser_map"):
             return self._dedupe([args.get("url", "")])
         if tool_name in ("capture_baseline", "diff_against_baseline",
                          "nuclei_scan", "extract_js_endpoints",
@@ -260,6 +284,34 @@ class ScopeGuard:
             return self._dedupe([args.get("domain", "")])
         if tool_name == "tls_info":
             return self._dedupe([args.get("target", "")])
+        # Structured recon wrappers operate on a domain/host/URL that must be in
+        # scope. crt.sh / urlscan query their OWN passive-intel APIs about the
+        # domain (they do not touch the target), but we still gate them on the
+        # domain so a run cannot enumerate an out-of-scope organisation.
+        if tool_name in ("subfinder_scan", "waybackurls_fetch",
+                         "crtsh_lookup", "urlscan_lookup"):
+            return self._dedupe([args.get("domain", "")])
+        if tool_name == "naabu_scan":
+            return self._dedupe([args.get("host", "")])
+        if tool_name == "katana_crawl":
+            return self._dedupe([args.get("url", "")])
+        if tool_name in ("httpx_probe", "dnsx_resolve"):
+            targets = args.get("targets") or args.get("hosts") or []
+            if isinstance(targets, str):
+                targets = [t for t in targets.replace(",", " ").split() if t]
+            single = args.get("url") or args.get("domain") or ""
+            return self._dedupe(list(targets) + ([single] if single else []))
+        if tool_name == "authz_matrix_scan":
+            urls = args.get("urls") or []
+            if isinstance(urls, str):
+                urls = [u for u in urls.replace(",", " ").split() if u]
+            out = list(urls)
+            if args.get("url"):
+                out.append(args["url"])
+            for r in (args.get("resources") or []):
+                if isinstance(r, dict) and r.get("url"):
+                    out.append(r["url"])
+            return self._dedupe(out)
         # jwt_tool is token-only unless an explicit exploit target URL is given.
         if tool_name == "jwt_tool":
             return self._dedupe([args.get("target_url", "")])

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reynard"
-version = "2.1.0"
-description = "Autonomous CTF and authorized web security testing agent"
+version = "3.0.0"
+description = "Autonomous web security researcher for authorized pentests, bug bounties, and CTF/lab benchmarks"
 requires-python = ">=3.10"
 dependencies = [
   "openai>=1.40.0",

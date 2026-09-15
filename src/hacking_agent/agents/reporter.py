@@ -564,6 +564,9 @@ class ReporterAgent(BaseAgent):
                 success=False, summary=f"Reporter LLM failure: {e}"
             )
 
+        # ---- append verbatim, machine-generated evidence appendix ----
+        report_md = self._append_evidence_appendix(report_md, task)
+
         # ---- persist to disk ----
         report_path = self._save_report(report_md)
         console.print(f"[green bold]📄 Report saved → {report_path}[/]")
@@ -610,6 +613,7 @@ class ReporterAgent(BaseAgent):
             return AgentResult(
                 success=False, summary=f"Assessment report failure: {e}"
             )
+        report_md = self._append_evidence_appendix(report_md, task)
         report_path = self._save_report(report_md)
         console.print(f"[green bold]📄 Assessment report saved → {report_path}[/]")
         verified, informational = self._classify_vulns()
@@ -686,6 +690,23 @@ class ReporterAgent(BaseAgent):
             "system prompt. Use the data above as your sole source of truth."
         )
         return "\n".join(sections)
+
+    def _append_evidence_appendix(self, report_md: str, task: AgentTask) -> str:
+        """Append the machine-generated EvidenceBundle appendix verbatim.
+
+        This is the reproducible, evidence-derived portion of the report (control
+        tests, sanitized exchanges, reproduction steps) — not LLM narration."""
+        appendix = (task.context or {}).get("evidence_bundles_markdown", "")
+        if not appendix or not appendix.strip():
+            return report_md
+        return (
+            f"{report_md}\n\n---\n\n"
+            "# Evidence Appendix (machine-generated, verbatim)\n\n"
+            "The following reproducible evidence bundles back the verified "
+            "findings above. Secrets are redacted; each bundle includes the "
+            "test exchange, control comparison, and reproduction steps.\n\n"
+            f"{appendix}\n"
+        )
 
     def _format_poc(self, poc: PoC) -> str:
         return (

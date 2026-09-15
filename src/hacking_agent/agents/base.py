@@ -69,11 +69,16 @@ class BudgetedToolExecutor:
         memory: AgentMemory,
         state_machine: StateMachine,
         scope_guard: ScopeGuard | None = None,
+        surface: Any = None,
     ):
         self.memory = memory
         self.sm = state_machine
         self.scope_guard = scope_guard
         self.analyzer = ResponseAnalyzer()
+        # Optional Attack Surface model. When set, structured recon-wrapper
+        # results are auto-ingested (with provenance + scope status) exactly like
+        # ffuf/sqlmap/nmap records flow into the knowledge graph.
+        self.surface = surface
 
     def call(self, decision: ToolDecision, agent_name: str,
              phase: str = "general", iteration: int = 0) -> dict[str, Any]:
@@ -188,6 +193,10 @@ class BudgetedToolExecutor:
             self._ingest_scanner_records(
                 decision.tool, decision.args, raw_result, agent_name, iteration
             )
+        # Structured recon wrappers auto-populate the Attack Surface model.
+        self._ingest_recon_surface(decision.tool, raw_result, agent_name)
+        # Authorization-matrix anomalies land on the surface as findings.
+        self._ingest_authz_surface(decision.tool, raw_result, agent_name)
         if signals:
             self._signals_to_facts(signals, agent_name, iteration)
             findings = self._format_findings(signals)
@@ -536,6 +545,53 @@ class BudgetedToolExecutor:
         except Exception:
             pass
 
+    def _ingest_recon_surface(self, tool_name: str, raw_result: str,
+                              agent_name: str) -> None:
+        """Fold structured recon-wrapper output into the Attack Surface model
+        (provenance + scope status handled by the surface). Best-effort."""
+        if self.surface is None:
+            return
+        try:
+            from hacking_agent.core import recon_wrappers as rw
+        except Exception:
+            return
+        if tool_name not in rw.RECON_WRAPPER_TOOLS:
+            return
+        try:
+            result = rw.result_from_json(raw_result)
+            if result is None:
+                return
+            n = rw.ingest_recon_result(self.surface, result)
+            if n:
+                emit("finding", {
+                    "agent": agent_name,
+                    "tool": tool_name,
+                    "summary": f"attack surface +{n} ({result.summary})",
+                    "phase": "recon",
+                })
+        except Exception:
+            pass
+
+    def _ingest_authz_surface(self, tool_name: str, raw_result: str,
+                              agent_name: str) -> None:
+        """Fold authz_matrix_scan anomalies onto the attack surface. Best-effort."""
+        if self.surface is None or tool_name != "authz_matrix_scan":
+            return
+        try:
+            from hacking_agent.core import authz_matrix as azm
+            scan = json.loads(raw_result)
+            if not isinstance(scan, dict) or scan.get("error"):
+                return
+            n = azm.ingest_scan_into_surface(self.surface, scan)
+            if n:
+                emit("finding", {
+                    "agent": agent_name, "tool": tool_name,
+                    "summary": f"authorization matrix: {n} anomaly finding(s)",
+                    "phase": "exploit",
+                })
+        except Exception:
+            pass
+
     def _classify_result(self, raw_result: str, signals: dict | None) -> str:
         if signals:
             if signals.get("lab_solved"):    return "SOLVED"
@@ -583,7 +639,11 @@ class BudgetedToolExecutor:
             self.memory.add_fact("html_encoding_active", True, source=src, iteration=iteration)
         if signals.get("waf_detected"):
             self.memory.add_fact("waf_detected", True, source=src, iteration=iteration)
-        if signals.get("lab_solved"):
+        # "lab_solved" (a PortSwigger "Congratulations" banner) is a BENCHMARK-only
+        # terminal signal. In production a real app string containing the same
+        # words must never be promoted to a solved fact, so we only record it
+        # when the run is not explicitly a production mission.
+        if signals.get("lab_solved") and not self.memory.get_fact("mission_production"):
             self.memory.add_fact("lab_solved", True, source=src, iteration=iteration)
         if signals.get("xss_proof"):
             self.memory.add_fact("xss_confirmed", True, source=src, iteration=iteration)

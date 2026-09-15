@@ -1,0 +1,14 @@
+{
+  "engagement_name": "acme-bug-bounty",
+  "client": "Acme Corp",
+  "notes": "Sample structured bug-bounty scope. Import with: reynard-assess --bounty-scope eval/bounty_scope.sample.json. For a live HackerOne program instead, set HACKERONE_API_USERNAME + HACKERONE_API_TOKEN and use --bounty-scope hackerone:<program-handle>.",
+  "max_requests_per_second": 5,
+  "scopes": [
+    {"asset_type": "WILDCARD", "asset_identifier": "*.acme.com", "eligible_for_submission": true},
+    {"asset_type": "URL", "asset_identifier": "https://api.acme.com/", "eligible_for_submission": true},
+    {"asset_type": "URL", "asset_identifier": "https://app.acme.com/", "eligible_for_submission": true},
+    {"asset_type": "CIDR", "asset_identifier": "203.0.113.0/24", "eligible_for_submission": true},
+    {"asset_type": "URL", "asset_identifier": "https://blog.acme.com/", "eligible_for_submission": false},
+    {"asset_type": "URL", "asset_identifier": "https://careers.acme.com/", "eligible_for_submission": false}
+  ]
+}
