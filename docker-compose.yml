@@ -15,6 +15,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Optional tool profiles. The default image is a lean WEB runtime; flip a
+      # profile to "1" (here or via `--build-arg`) to add CTF/binary, mobile,
+      # wireless, forensics, Metasploit, or the Z4nzu meta-toolkit.
+      args:
+        PROFILE_PWN: "0"
+        PROFILE_MOBILE: "0"
+        PROFILE_WIRELESS: "0"
+        PROFILE_FORENSICS: "0"
+        PROFILE_METASPLOIT: "0"
+        PROFILE_HACKINGTOOL: "0"
     container_name: reynard-kali
     hostname: kali-agent
     
