@@ -865,6 +865,39 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "authz_matrix_scan",
+            "description": (
+                "AUTHORIZATION TESTING. Replay a set of endpoints as EVERY "
+                "registered identity (anon/user1/user2/admin-test-role), compare "
+                "results semantically, and build a roles x resources matrix to "
+                "surface IDOR/BOLA/BFLA/privilege-escalation with control-vs-test "
+                "evidence. Register identities first (register_session or "
+                "--auth-file). For object-level IDOR/BOLA checks, pass `resources` "
+                "with owner_identity + sensitive per URL."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {"type": "array", "items": {"type": "string"},
+                             "description": "Endpoints to test (GET) across identities."},
+                    "url": {"type": "string", "description": "Single endpoint if `urls` omitted."},
+                    "resources": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": (
+                            "Optional richer resources: [{url, method, "
+                            "expected_min_role, owner_identity, sensitive}]."
+                        ),
+                    },
+                    "timeout": {"type": "integer"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_response",
             "description": (
                 "Analyze an HTTP response body for security-relevant signals. "
@@ -3213,6 +3246,47 @@ def urlscan_lookup(domain: str, timeout: int = 30) -> str:
     return rw.run_urlscan(domain, api_key=api_key, timeout=timeout).to_json()
 
 
+def authz_matrix_scan(urls: list[str] | str, resources: list[dict] | None = None,
+                      timeout: int = 20) -> str:
+    """Build a roles x resources authorization matrix from the REGISTERED auth
+    identities and a set of endpoints, replaying each request as every identity
+    and comparing results semantically to surface IDOR/BOLA/BFLA/privilege-
+    escalation. Returns the structured matrix + anomalies (each with control-vs-
+    test evidence). Register identities first (register_session / --auth-file).
+    """
+    from hacking_agent.core import authz_matrix as azm
+    from hacking_agent.core import sessions as session_mod
+    idents = azm.identities_from_registry(session_mod.get_registry())
+    if len(idents) < 2:
+        return json.dumps({
+            "error": "authz matrix needs >=2 registered identities "
+                     "(e.g. anon + user1 + admin). Register sessions first.",
+            "identities": [i.name for i in idents],
+        })
+    res_objs: list = []
+    if resources:
+        for r in resources:
+            if not isinstance(r, dict) or not r.get("url"):
+                continue
+            res_objs.append(azm.AuthzResource(
+                key=f"{str(r.get('method', 'GET')).upper()} {r['url']}",
+                method=str(r.get("method", "GET")).upper(), url=r["url"],
+                expected_min_role=str(r.get("expected_min_role", "")),
+                owner_identity=str(r.get("owner_identity", "")),
+                sensitive=bool(r.get("sensitive", False)),
+            ))
+    else:
+        if isinstance(urls, str):
+            urls = [u for u in urls.replace(",", " ").split() if u]
+        for u in (urls or []):
+            res_objs.append(azm.AuthzResource.get(u))
+    if not res_objs:
+        return json.dumps({"error": "no resources/urls provided for authz matrix"})
+    matrix = azm.run_authorization_matrix(
+        idents, res_objs, azm.live_requester(timeout=timeout))
+    return json.dumps(matrix.to_dict(), default=str)
+
+
 # =============================================================================
 # OSINT / external recon (Shodan/Censys clients live in integrations/shodan.py;
 # dns_recon + tls_info run dependency-light tools inside the container)
@@ -4188,6 +4262,12 @@ TOOL_FUNCTIONS: dict[str, callable] = {
     ),
     "urlscan_lookup": lambda args: urlscan_lookup(
         domain=args["domain"], timeout=args.get("timeout", 30),
+    ),
+    # ---- Authorization matrix (differential authz across identities) ----
+    "authz_matrix_scan": lambda args: authz_matrix_scan(
+        urls=args.get("urls") or args.get("url", ""),
+        resources=args.get("resources"),
+        timeout=args.get("timeout", 20),
     ),
     # ---- Caido Cloud API ----
     "caido_cloud_api": lambda args: caido_mod.dumps(caido_mod.call_operation(

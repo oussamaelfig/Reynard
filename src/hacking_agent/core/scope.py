@@ -300,6 +300,17 @@ class ScopeGuard:
                 targets = [t for t in targets.replace(",", " ").split() if t]
             single = args.get("url") or args.get("domain") or ""
             return self._dedupe(list(targets) + ([single] if single else []))
+        if tool_name == "authz_matrix_scan":
+            urls = args.get("urls") or []
+            if isinstance(urls, str):
+                urls = [u for u in urls.replace(",", " ").split() if u]
+            out = list(urls)
+            if args.get("url"):
+                out.append(args["url"])
+            for r in (args.get("resources") or []):
+                if isinstance(r, dict) and r.get("url"):
+                    out.append(r["url"])
+            return self._dedupe(out)
         # jwt_tool is token-only unless an explicit exploit target URL is given.
         if tool_name == "jwt_tool":
             return self._dedupe([args.get("target_url", "")])

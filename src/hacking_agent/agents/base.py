@@ -195,6 +195,8 @@ class BudgetedToolExecutor:
             )
         # Structured recon wrappers auto-populate the Attack Surface model.
         self._ingest_recon_surface(decision.tool, raw_result, agent_name)
+        # Authorization-matrix anomalies land on the surface as findings.
+        self._ingest_authz_surface(decision.tool, raw_result, agent_name)
         if signals:
             self._signals_to_facts(signals, agent_name, iteration)
             findings = self._format_findings(signals)
@@ -566,6 +568,26 @@ class BudgetedToolExecutor:
                     "tool": tool_name,
                     "summary": f"attack surface +{n} ({result.summary})",
                     "phase": "recon",
+                })
+        except Exception:
+            pass
+
+    def _ingest_authz_surface(self, tool_name: str, raw_result: str,
+                              agent_name: str) -> None:
+        """Fold authz_matrix_scan anomalies onto the attack surface. Best-effort."""
+        if self.surface is None or tool_name != "authz_matrix_scan":
+            return
+        try:
+            from hacking_agent.core import authz_matrix as azm
+            scan = json.loads(raw_result)
+            if not isinstance(scan, dict) or scan.get("error"):
+                return
+            n = azm.ingest_scan_into_surface(self.surface, scan)
+            if n:
+                emit("finding", {
+                    "agent": agent_name, "tool": tool_name,
+                    "summary": f"authorization matrix: {n} anomaly finding(s)",
+                    "phase": "exploit",
                 })
         except Exception:
             pass

@@ -819,9 +819,9 @@ class MiscFamilyFastPathTests(unittest.TestCase):
         self.assertTrue(evidence.is_verified(vuln.id))
 
     def test_tool_registry_parity(self):
-        # 62 base tools + 8 structured recon wrappers.
-        self.assertEqual(len(TOOL_SCHEMAS), 70)
-        self.assertEqual(len(TOOL_FUNCTIONS), 70)
+        # 62 base + 8 recon wrappers + 1 authz matrix = 71.
+        self.assertEqual(len(TOOL_SCHEMAS), 71)
+        self.assertEqual(len(TOOL_FUNCTIONS), 71)
 
 
 class ToolRegressionTests(unittest.TestCase):
@@ -3009,10 +3009,10 @@ class AuthzFastPathTests(unittest.TestCase):
 
 class ToolParityTests(unittest.TestCase):
     def test_tool_registry_parity(self):
-        # 62 base tools + 8 structured recon wrappers (subfinder/dnsx/httpx/
-        # naabu/katana/waybackurls/crtsh/urlscan).
-        self.assertEqual(len(TOOL_FUNCTIONS), 70)
-        self.assertEqual(len(TOOL_SCHEMAS), 70)
+        # 62 base + 8 structured recon wrappers + 1 authz matrix (subfinder/dnsx/httpx/
+        # naabu/katana/waybackurls/crtsh/urlscan/authz_matrix_scan).
+        self.assertEqual(len(TOOL_FUNCTIONS), 71)
+        self.assertEqual(len(TOOL_SCHEMAS), 71)
 
 
 class ToolDecisionLiteralTests(unittest.TestCase):
@@ -3043,7 +3043,7 @@ class ToolDecisionLiteralTests(unittest.TestCase):
     def test_literal_matches_registry_exactly_and_validates(self):
         names = self._literal_names()
         self.assertEqual(names, set(TOOL_FUNCTIONS))
-        self.assertEqual(len(names), 70)
+        self.assertEqual(len(names), 71)
         # A ToolDecision selecting a Phase-2 tool must now validate.
         decision = ToolDecision(
             tool="race_send",

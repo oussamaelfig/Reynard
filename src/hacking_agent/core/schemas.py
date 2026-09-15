@@ -63,6 +63,8 @@ ToolName = Literal[
     # Structured recon wrappers (ProjectDiscovery toolchain + passive OSINT)
     "subfinder_scan", "dnsx_resolve", "httpx_probe", "naabu_scan",
     "katana_crawl", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
+    # Authorization matrix (differential authz across identities)
+    "authz_matrix_scan",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
     # Caido local Replay/history bridge
