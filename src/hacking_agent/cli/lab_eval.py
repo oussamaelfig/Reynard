@@ -461,6 +461,8 @@ def run_live_lab(
                 objective=objective_final,
                 lab_profile=lab_profile,
                 subagents_enabled=bool(lab.get("subagents", True)),
+                # The lab-eval harness is the benchmark/regression path.
+                mission_mode="benchmark",
             )
             holder["orch"] = orch
             holder["result"] = orch.run()

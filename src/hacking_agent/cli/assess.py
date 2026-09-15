@@ -135,6 +135,9 @@ def run_target(
                 ),
                 scope_domains=list(engagement.authorized_domains),
                 scope_cidrs=list(engagement.authorized_cidrs),
+                # An authorized engagement is always a PRODUCTION assessment:
+                # no lab assumptions, evidence-gated findings only.
+                mission_mode="production",
             )
             # Install the rules of engagement onto the live ScopeGuard so every
             # tool call is gated by the out-of-scope denylist, rate limit,

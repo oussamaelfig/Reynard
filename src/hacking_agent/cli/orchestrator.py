@@ -69,6 +69,7 @@ from hacking_agent.core.lab_intel import (
 )
 from hacking_agent.core.memory import AgentMemory
 from hacking_agent.core.metering import get_token_meter
+from hacking_agent.core.mission import Mission
 from hacking_agent.core.paths import ENV_FILE, LOG_DIR, METHODOLOGIES_DIR, ensure_runtime_dirs
 from hacking_agent.core.preflight import has_fatal_failure, run_preflight
 from hacking_agent.core.providers import ProviderRegistry
@@ -338,11 +339,27 @@ class Orchestrator:
         subagents_enabled: bool = True,
         max_subagents: int = 4,
         exploit_server_url: str = "",
+        mission_mode: str | None = None,
     ):
         self.target_url = target_url
         self.objective = objective
         self.exploit_server_url = (exploit_server_url or "").strip()
-        self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
+
+        # ---- mission mode: benchmark (labs) vs production (real assessment) --
+        # Lab-specific behaviour (PortSwigger profile seeding, "solved" banner
+        # short-circuit, deterministic lab fast-paths, exploit-server workflow)
+        # is confined to benchmark mode. Constructing with a lab_profile or a
+        # lab host implies benchmark; everything else defaults to production so
+        # the default decision path carries no lab assumptions.
+        self.mission = Mission.detect(
+            target_url, objective, explicit=mission_mode, lab_profile=lab_profile
+        )
+        # In production, drop any lab profile so the decision path never routes
+        # through lab-specific seeding/fast-paths. Benchmark keeps it enriched.
+        if self.mission.is_benchmark:
+            self.lab_profile = enrich_lab_profile(lab_profile or {}, objective)
+        else:
+            self.lab_profile = {}
         self.playbook_context = render_playbook_context(self.lab_profile)
         self.interactive = interactive
         self.subagents_enabled = subagents_enabled
@@ -367,6 +384,10 @@ class Orchestrator:
 
         # ---- shared subsystems ----
         self.memory = AgentMemory(target_url=target_url)
+        self.memory.add_fact("mission_mode", self.mission.mode, source="mission")
+        self.memory.add_fact(
+            "mission_production", self.mission.is_production, source="mission"
+        )
         if self.objective:
             self.memory.add_fact("task_objective", self.objective, source="cli")
         if self.exploit_server_url:
@@ -904,8 +925,11 @@ class Orchestrator:
                     continue
                 self._dispatch_validator(poc.id, poc.vuln_id)
 
-        # Check for lab_solved in global facts
-        lab_solved = self.memory.get_fact("lab_solved")
+        # Check for lab_solved in global facts. This is a BENCHMARK-only
+        # terminal signal ("Congratulations, you solved the lab"). In production
+        # there is no such banner and a run only concludes on verified evidence
+        # or budget exhaustion, so we never short-circuit on it.
+        lab_solved = self.memory.get_fact("lab_solved") and self.mission.is_benchmark
         if lab_solved:
             console.print("[green bold]🎉 LAB SOLVED — heading to report[/]")
             self.logger.log("LAB_SOLVED detected — reporting")
@@ -1119,6 +1143,8 @@ class Orchestrator:
 
     def _inject_task_context(self, task: AgentTask, agent_name: str) -> AgentTask:
         context = {**task.context, "target_url": self.target_url}
+        context["mission_mode"] = self.mission.mode
+        context["production"] = self.mission.is_production
         if self.objective:
             context["objective"] = self.objective
         if self.lab_profile:
@@ -2381,6 +2407,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run preflight checks and exit without starting the orchestrator.",
     )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--production", "--prod",
+        dest="mission_mode", action="store_const", const="production", default=None,
+        help=(
+            "Force PRODUCTION mode: authorized real-world pentest / bug-bounty. "
+            "No lab assumptions; findings require independently-verified evidence. "
+            "This is the default for any non-lab target."
+        ),
+    )
+    mode_group.add_argument(
+        "--benchmark", "--lab",
+        dest="mission_mode", action="store_const", const="benchmark",
+        help=(
+            "Force BENCHMARK mode: intentionally-vulnerable lab/CTF where a "
+            "lab-solved banner is a valid success signal and lab fast-paths apply."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -2401,8 +2445,17 @@ def main() -> None:
 
     raw_target = args.target
     target_url, objective = normalize_target_input(raw_target)
-    lab_profile = detect_lab_profile(raw_target, target_url)
-    exploit_server_url = extract_exploit_server_url(raw_target)
+
+    # Resolve mission mode first: lab detection / exploit-server extraction is
+    # BENCHMARK-only so the production decision path never carries lab state.
+    mission = Mission.detect(target_url, objective, explicit=args.mission_mode)
+    console.print(f"[dim]{mission.describe()}[/]")
+    if mission.is_benchmark:
+        lab_profile = detect_lab_profile(raw_target, target_url)
+        exploit_server_url = extract_exploit_server_url(raw_target)
+    else:
+        lab_profile = {}
+        exploit_server_url = ""
     if target_url != raw_target:
         console.print(f"[dim]Parsed target URL: {target_url}[/]")
     if lab_profile:
@@ -2472,6 +2525,7 @@ def main() -> None:
         subagents_enabled=not args.no_subagents,
         max_subagents=args.max_subagents,
         exploit_server_url=exploit_server_url,
+        mission_mode=mission.mode,
     )
 
     result = orchestrator.run()

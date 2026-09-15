@@ -583,7 +583,11 @@ class BudgetedToolExecutor:
             self.memory.add_fact("html_encoding_active", True, source=src, iteration=iteration)
         if signals.get("waf_detected"):
             self.memory.add_fact("waf_detected", True, source=src, iteration=iteration)
-        if signals.get("lab_solved"):
+        # "lab_solved" (a PortSwigger "Congratulations" banner) is a BENCHMARK-only
+        # terminal signal. In production a real app string containing the same
+        # words must never be promoted to a solved fact, so we only record it
+        # when the run is not explicitly a production mission.
+        if signals.get("lab_solved") and not self.memory.get_fact("mission_production"):
             self.memory.add_fact("lab_solved", True, source=src, iteration=iteration)
         if signals.get("xss_proof"):
             self.memory.add_fact("xss_confirmed", True, source=src, iteration=iteration)
