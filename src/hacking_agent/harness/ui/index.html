@@ -124,6 +124,15 @@
     .k-finding { color: var(--green); } .k-error { color: var(--red); }
     .k-tool_start, .k-tool_end { color: var(--blue); }
     .k-run_start, .k-run_end, .k-session_start, .k-session_end { color: var(--teal); }
+    .k-agent_start, .k-agent_result, .k-llm_start, .k-llm_end { color: var(--muted); }
+    /* coalesced streaming blocks (DeepSeek reasoning / assistant output) */
+    .block { border: 1px solid var(--line); border-radius: 8px; margin: 7px 0; overflow: hidden; }
+    .block .bh { display: flex; gap: 8px; align-items: center; padding: 5px 9px; font: 600 11px var(--mono); background: var(--bg-soft); color: var(--muted); }
+    .block.think { border-color: var(--teal); } .block.think .bh { color: var(--teal); background: var(--teal-soft); }
+    .block.answer { border-color: var(--blue); } .block.answer .bh { color: var(--blue); background: var(--blue-soft); }
+    .block .txt { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--mono); max-height: 300px; overflow: auto; }
+    .block.think .txt { color: var(--ink-soft); font-style: italic; }
+    #log { font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 620px; overflow: auto; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0; }
     .empty { color: var(--muted); padding: 40px 15px; text-align: center; font-size: 13px; }
     .report { font-size: 13.5px; line-height: 1.6; max-height: 620px; overflow: auto; }
     .report h1 { font-size: 19px; } .report h2 { font-size: 16px; margin-top: 18px; } .report h3 { font-size: 14px; }
@@ -220,11 +229,19 @@
         </div>
         <div class="tabs">
           <div class="tab active" data-tab="live">Live</div>
+          <div class="tab" data-tab="console">Console</div>
           <div class="tab" data-tab="report">Report</div>
           <div class="tab" data-tab="evidence">Evidence</div>
         </div>
         <div class="pane active" data-pane="live">
           <div class="stream" id="stream"><div class="empty">Select a run to watch live progress.</div></div>
+        </div>
+        <div class="pane" data-pane="console">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span class="hint">Raw worker output — DeepSeek reasoning exactly as printed to the console.</span>
+            <button class="ghost" id="log-refresh">Refresh</button>
+          </div>
+          <pre id="log">No console output yet.</pre>
         </div>
         <div class="pane" data-pane="report">
           <div class="report" id="report"><div class="empty">No report yet.</div></div>
@@ -239,7 +256,8 @@
   <script>
     const TOKEN = "__HARNESS_TOKEN__";
     const H = { "x-harness-token": TOKEN, "content-type": "application/json" };
-    let selected = null, es = null, runsTimer = null;
+    let selected = null, es = null, runsTimer = null, logTimer = null;
+    let seen = new Set(), lastBlock = null, lastBlockKind = null;
 
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -282,7 +300,7 @@
       try {
         const res = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
         msg.className = "msg ok"; msg.textContent = "Launched run " + res.run_id;
-        await refreshRuns(); select(res.run_id);
+        await refreshRuns(); selectRun(res.run_id);
       } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
       finally { $("f-submit").disabled = false; }
     }
@@ -299,34 +317,84 @@
           <span class="badge s-${r.status}">${r.status}</span>
           <span class="tg">${esc(r.targets.join(", ") || r.description || "—")} · ${r.findings_count} finding(s), ${r.verified_count} verified</span>
         </div>`).join("");
-      el.querySelectorAll(".run").forEach((n) => n.onclick = () => select(n.dataset.id));
+      el.querySelectorAll(".run").forEach((n) => n.onclick = () => selectRun(n.dataset.id));
     }
 
     // ---- select + live stream ----
-    async function select(id) {
+    async function selectRun(id) {
+      const switching = id !== selected;
       selected = id;
       document.querySelectorAll(".run").forEach((n) => n.classList.toggle("active", n.dataset.id === id));
-      const rec = await api("/api/runs/" + id).catch(() => null);
-      $("d-meta").innerHTML = rec ? `${esc(id)} · <span class="badge s-${rec.status}">${rec.status}</span>` : esc(id);
-      $("d-cancel").style.display = rec && (rec.status === "queued" || rec.status === "running") ? "" : "none";
-      $("stream").innerHTML = "";
+      if (switching) {
+        seen = new Set(); lastBlock = null; lastBlockKind = null;
+        $("stream").innerHTML = ""; $("log").textContent = "Loading…";
+      }
+      await refreshDetail(id);
       openStream(id);
-      loadReport(id); loadEvidence(id);
+      loadReport(id); loadEvidence(id); loadLog(id); startLogTimer(id);
     }
 
-    function addEvent(ev) {
-      const s = $("stream");
-      const t = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
+    async function refreshDetail(id) {
+      const rec = await api("/api/runs/" + id).catch(() => null);
+      $("d-meta").innerHTML = rec
+        ? `${esc(id)} · <span class="badge s-${rec.status}">${rec.status}</span> · ${rec.findings_count} finding(s)`
+        : esc(id);
+      $("d-cancel").style.display = rec && (rec.status === "queued" || rec.status === "running") ? "" : "none";
+      return rec;
+    }
+
+    function scrollStream() { const s = $("stream"); s.scrollTop = s.scrollHeight; }
+
+    // Coalesce streaming tokens (reasoning_delta / assistant_delta) into one
+    // growing block instead of a row per token; render everything else as a row.
+    function renderEvent(ev) {
       const kind = ev.type || "event";
-      let p = "";
-      if (ev.payload && typeof ev.payload === "object") {
-        p = Object.entries(ev.payload).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join("  ");
+      const p = ev.payload || {};
+      if (kind === "reasoning_delta" || kind === "assistant_delta") {
+        const cls = kind === "reasoning_delta" ? "think" : "answer";
+        if (!(lastBlock && lastBlockKind === cls)) {
+          lastBlock = document.createElement("div");
+          lastBlock.className = "block " + cls;
+          const who = [p.agent, p.model].filter(Boolean).join(" · ");
+          lastBlock.innerHTML = `<div class="bh">${cls === "think" ? "🤔 thinking" : "✎ output"}${who ? " — " + esc(who) : ""}</div><pre class="txt"></pre>`;
+          $("stream").appendChild(lastBlock);
+          lastBlockKind = cls;
+        }
+        lastBlock.querySelector(".txt").textContent += (p.text || "");
+        scrollStream();
+        return;
+      }
+      lastBlock = null; lastBlockKind = null;
+      addRow(ev);
+    }
+
+    function addRow(ev) {
+      const kind = ev.type || "event";
+      const p = ev.payload || {};
+      const t = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
+      let summary = "";
+      switch (kind) {
+        case "reasoning_note": summary = (p.agent ? "[" + p.agent + "] " : "") + (p.text || ""); break;
+        case "finding": summary = (p.severity ? "[" + p.severity + "] " : "") + (p.title || p.summary || JSON.stringify(p)); break;
+        case "tool_start": summary = (p.tool || "") + " " + (p.command || p.args || ""); break;
+        case "tool_result": summary = (p.tool || "") + " → " + (p.status || p.summary || ""); break;
+        case "tool_blocked": summary = (p.tool || "") + " blocked: " + (p.reason || ""); break;
+        case "error": summary = p.message || p.error || JSON.stringify(p); break;
+        case "llm_start": summary = "→ " + [p.agent, p.model, p.mode].filter(Boolean).join(" · "); break;
+        case "llm_end": summary = "✓ " + [p.agent, p.model, p.mode].filter(Boolean).join(" · "); break;
+        case "agent_start": summary = p.agent || p.role || ""; break;
+        case "agent_result": summary = (p.agent || "") + " " + (p.status || ""); break;
+        case "token_usage": summary = "tokens " + (p.total ?? p.completion ?? ""); break;
+        case "session_start": summary = p.target || p.objective || ""; break;
+        case "run_start": summary = "targets: " + ((p.targets || []).join(", ")); break;
+        case "run_end": summary = "findings: " + (p.findings ?? "") + (p.error ? (" · error: " + p.error) : ""); break;
+        default: summary = Object.entries(p).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join("  ");
       }
       const row = document.createElement("div");
       row.className = "ev";
-      row.innerHTML = `<span class="t">${esc(t)}</span><span class="k k-${esc(kind)}">${esc(kind)}</span><span class="p">${esc(p).slice(0, 600)}</span>`;
-      s.appendChild(row);
-      s.scrollTop = s.scrollHeight;
+      row.innerHTML = `<span class="t">${esc(t)}</span><span class="k k-${esc(kind)}">${esc(kind)}</span><span class="p">${esc(String(summary)).slice(0, 800)}</span>`;
+      $("stream").appendChild(row);
+      scrollStream();
     }
 
     function openStream(id) {
@@ -334,16 +402,21 @@
       es = new EventSource("/api/runs/" + id + "/events?token=" + encodeURIComponent(TOKEN));
       es.onmessage = (m) => {
         let ev; try { ev = JSON.parse(m.data); } catch (e) { return; }
-        if (ev.type === "_done") { es.close(); es = null; select(id); return; }
-        addEvent(ev);
+        if (ev.type === "_done") { if (es) { es.close(); es = null; } finalize(id); return; }
+        if (ev.id != null) { if (seen.has(ev.id)) return; seen.add(ev.id); }
+        renderEvent(ev);
       };
-      es.onerror = () => { /* auto-reconnect via EventSource */ };
+      es.onerror = () => { /* browser auto-reconnects with Last-Event-ID; server + seen dedupe */ };
+    }
+
+    function finalize(id) {
+      refreshDetail(id); loadReport(id); loadEvidence(id); loadLog(id); stopLogTimer();
     }
 
     async function loadReport(id) {
       const el = $("report");
       try { const r = await api("/api/runs/" + id + "/report"); el.innerHTML = mdToHtml(r.markdown); }
-      catch (e) { el.innerHTML = '<div class="empty">No report yet.</div>'; }
+      catch (e) { el.innerHTML = '<div class="empty">No report yet (still running or no findings).</div>'; }
     }
 
     async function loadEvidence(id) {
@@ -362,9 +435,22 @@
       } catch (e) { el.innerHTML = '<div class="empty">No evidence yet.</div>'; }
     }
 
+    async function loadLog(id) {
+      try {
+        const r = await fetch("/api/runs/" + id + "/log", { headers: H });
+        const txt = r.ok ? await r.text() : "";
+        const el = $("log");
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+        el.textContent = txt || "No console output yet.";
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      } catch (e) { /* ignore transient errors */ }
+    }
+    function startLogTimer(id) { stopLogTimer(); logTimer = setInterval(() => loadLog(id), 2500); }
+    function stopLogTimer() { if (logTimer) { clearInterval(logTimer); logTimer = null; } }
+
     async function cancel() {
       if (!selected) return;
-      try { await api("/api/runs/" + selected + "/cancel", { method: "POST" }); await refreshRuns(); select(selected); } catch (e) {}
+      try { await api("/api/runs/" + selected + "/cancel", { method: "POST" }); await refreshRuns(); refreshDetail(selected); } catch (e) {}
     }
 
     // tiny, safe-ish markdown renderer (headings, code, bold, lists, tables)
@@ -396,9 +482,11 @@
     document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
       document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
       document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === t.dataset.tab));
+      if (t.dataset.tab === "console" && selected) loadLog(selected);
     });
     $("f-submit").onclick = submit;
     $("d-cancel").onclick = cancel;
+    $("log-refresh").onclick = () => { if (selected) loadLog(selected); };
 
     health();
     refreshRuns();
