@@ -1122,16 +1122,22 @@ class Orchestrator:
         "endpoint": "injection", "js_asset": "recon",
     }
 
+    # Provenance sources that are only bridges/derivations, not active recon.
+    # Assets sourced ONLY from these do not seed the agenda (they mirror the KG,
+    # which already seeds via _sync_agenda_from_memory).
+    _BRIDGE_ONLY_SOURCES = {"memory_kg", "orchestrator/evidence"}
+
     def _sync_agenda_from_surface(self) -> None:
         """Fold high-value, in-scope attack-surface leads into the agenda.
 
         On a delta run, assets that appeared since the previous run (new
         subdomains, APIs, admin panels, JS bundles) are boosted so the researcher
-        prioritizes fresh surface. Out-of-scope assets are never seeded (the
-        surface excludes them from prioritized_leads)."""
+        prioritizes fresh surface. Only assets discovered by ACTIVE recon/mapping
+        (subfinder/httpx/katana/browser mapper/...) seed the agenda — the KG
+        bridge does not, to avoid duplicating the analyst-driven agenda. The root
+        target host and out-of-scope assets are never seeded."""
         try:
-            # Keep the surface in sync with anything the legacy KG path found.
-            self.surface.ingest_memory_kg(self.memory)
+            target_host = (urlparse(self.target_url).hostname or "").lower()
             new_keys = {a.key for a in self.surface.diff(self.prior_surface).new_assets}
             leads = self.surface.prioritized_leads(previous=self.prior_surface,
                                                    limit=12)
@@ -1140,6 +1146,11 @@ class Orchestrator:
                     continue
                 phase = self._SURFACE_SEEDABLE.get(a.kind)
                 if not phase:
+                    continue
+                if a.identifier == target_host:
+                    continue
+                if a.sources and all(s in self._BRIDGE_ONLY_SOURCES
+                                     for s in a.sources):
                     continue
                 self._surface_seed_sig.add(a.key)
                 is_new = a.key in new_keys
