@@ -313,6 +313,40 @@
     .cmdk-item .rid { font-family: var(--mono); font-size: 11.5px; }
     .cmdk-item .tail { margin-left: auto; }
 
+    /* ---------- report / doc toolbar ---------- */
+    .doc-toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+
+    /* ---------- findings hub ---------- */
+    .findings-view { display: none; grid-row: 1; grid-column: 2 / -1; grid-template-columns: 372px 1fr; min-height: 0; overflow: hidden; }
+    body.mode-findings .findings-view { display: grid; }
+    body.mode-findings .list-col, body.mode-findings .detail { display: none; }
+    .fv-list { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--s1); }
+    .filters { display: flex; gap: 6px; padding: 9px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .chip { font: inherit; font-size: 11px; font-weight: 550; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--border-strong); color: var(--text-muted); cursor: pointer; background: transparent; transition: background var(--dur-1), color var(--dur-1); }
+    .chip:hover { background: var(--s2); color: var(--text); }
+    .chip.active { background: var(--accent-ghost); color: var(--text); border-color: transparent; }
+    .fitems { overflow-y: auto; min-height: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+    .fitem { padding: 11px; border-radius: var(--r-sm); cursor: pointer; border: 1px solid transparent; transition: background var(--dur-1); }
+    .fitem:hover { background: var(--s2); }
+    .fitem.active { background: var(--accent-ghost); border-color: var(--border); }
+    .fitem .ftitle { font-weight: 550; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fitem .fsub { font-size: 11px; color: var(--text-faint); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+    .fitem .frow { display: flex; align-items: center; gap: 7px; margin-top: 7px; }
+    .sev { font-size: 9.5px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 99px; letter-spacing: 0.04em; }
+    .sev.critical { color: #fff; background: var(--red); }
+    .sev.high { color: var(--red); background: var(--red-bg); border: 1px solid var(--red); }
+    .sev.medium { color: var(--amber); background: var(--amber-bg); }
+    .sev.low { color: var(--blue); background: var(--blue-bg); }
+    .sev.info { color: var(--text-muted); background: var(--s3); }
+    .vchip { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; color: var(--green); }
+    .vchip.no { color: var(--text-faint); }
+    .vchip svg { width: 11px; height: 11px; }
+    .fv-detail { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+    .fv-toolbar { height: 52px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+    .fv-toolbar .ft-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fv-body { overflow-y: auto; min-height: 0; padding: 20px; }
+    .fv-body .doc { max-width: 780px; margin: 0 auto; }
+
     @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
       .sidebar { flex-direction: row; align-items: center; border-right: none; border-bottom: 1px solid var(--border); }
@@ -337,6 +371,7 @@
       <nav class="nav">
         <span class="lbl">Workspace</span>
         <a class="active" id="nav-runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M4 12h16M4 18h10" stroke-linecap="round"/></svg>Runs</a>
+        <a id="nav-findings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4v5c0 4.4-3 8-8 9-5-1-8-4.6-8-9V7l8-4z" stroke-linejoin="round"/><path d="M9.2 12l2 2 3.6-3.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Findings</a>
         <a id="nav-new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>New run</a>
         <span class="lbl">Help</span>
         <a id="nav-cmdk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h.01M13 9h2v6" stroke-linecap="round"/></svg>Command menu<span style="margin-left:auto" class="kbd">⌘K</span></a>
@@ -387,8 +422,46 @@
           </div>
           <pre id="log">No console output yet.</pre>
         </div>
-        <div class="pane" data-pane="report"><div class="doc" id="report"></div></div>
+        <div class="pane" data-pane="report">
+          <div class="doc-toolbar">
+            <button class="btn sm" id="r-copy">Copy Markdown</button>
+            <button class="btn sm" id="r-dl">Download .md</button>
+            <button class="btn sm" id="r-pdf">Export PDF</button>
+          </div>
+          <div class="doc" id="report"></div>
+        </div>
         <div class="pane" data-pane="evidence"><div class="doc" id="evidence"></div></div>
+      </div>
+    </section>
+
+    <!-- FINDINGS HUB -->
+    <section class="findings-view" id="findings-view">
+      <div class="fv-list">
+        <div class="col-head">
+          <h2>Findings</h2><span class="count" id="f-count">0</span>
+          <span class="spacer"></span>
+          <button class="iconbtn" id="f-refresh" title="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11a8 8 0 1 0-.5 3M20 5v6h-6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="btn ghost sm" id="f-export">Export all</button>
+        </div>
+        <div class="filters" id="f-filters">
+          <button class="chip active" data-sev="all">All</button>
+          <button class="chip" data-sev="critical">Critical</button>
+          <button class="chip" data-sev="high">High</button>
+          <button class="chip" data-sev="medium">Medium</button>
+          <button class="chip" data-sev="low">Low</button>
+          <button class="chip" data-sev="info">Info</button>
+        </div>
+        <div class="fitems" id="f-items"></div>
+      </div>
+      <div class="fv-detail">
+        <div class="fv-toolbar">
+          <span class="ft-title" id="f-sel-title">Select a finding</span>
+          <span class="spacer"></span>
+          <button class="btn primary sm" id="f-copy" disabled>Copy submission</button>
+          <button class="btn sm" id="f-dl" disabled>Download .md</button>
+          <button class="btn sm" id="f-pdf" disabled>Export PDF</button>
+        </div>
+        <div class="fv-body"><div class="doc" id="f-doc"></div></div>
       </div>
     </section>
   </div>
@@ -685,13 +758,18 @@
       const ind = $("live-ind"); if (ind) ind.style.display = "none";
       const t = $("runbar-txt"); if (t) t.textContent = "run finished";
       refreshDetail(id); loadReport(id); loadEvidence(id); loadLog(id); stopLogTimer(); refreshRuns();
+      if (document.body.classList.contains("mode-findings")) loadFindings();
     }
 
+    let reportMd = "", reportRun = "";
     async function loadReport(id) {
       const el = $("report");
-      try { const r = await api("/api/runs/" + id + "/report"); el.innerHTML = mdToHtml(r.markdown); }
-      catch (e) { el.innerHTML = emptyState("No report yet", "It appears once the run finishes (or has findings)."); }
+      try { const r = await api("/api/runs/" + id + "/report"); reportMd = r.markdown || ""; reportRun = id; el.innerHTML = mdToHtml(reportMd); }
+      catch (e) { reportMd = ""; reportRun = ""; el.innerHTML = emptyState("No report yet", "It appears once the run finishes (or has findings)."); }
     }
+    $("r-copy").onclick = () => reportMd ? copyText(reportMd, "Report Markdown copied") : toast("Nothing to copy", "No report yet", "err");
+    $("r-dl").onclick = () => reportMd ? downloadText(`reynard-report-${reportRun}.md`, reportMd) : toast("Nothing to download", "No report yet", "err");
+    $("r-pdf").onclick = () => reportMd ? exportPdf("Reynard report " + reportRun, $("report").innerHTML) : toast("Nothing to export", "No report yet", "err");
     async function loadEvidence(id) {
       const el = $("evidence");
       try {
@@ -760,6 +838,8 @@
       q = (q || "").toLowerCase();
       const actions = [
         { t: "New run", d: "Open the launch drawer", ic: '<path d="M12 5v14M5 12h14"/>', run: () => { closeCmdk(); openDrawer(); } },
+        { t: "View findings", d: "Copy-paste bug-bounty submissions", ic: '<path d="M12 3l8 4v5c0 4.4-3 8-8 9-5-1-8-4.6-8-9V7l8-4z"/>', run: () => { closeCmdk(); setView("findings"); } },
+        { t: "View runs", d: "Back to the run list", ic: '<path d="M4 6h16M4 12h16M4 18h10"/>', run: () => { closeCmdk(); setView("runs"); } },
         { t: "Refresh runs", d: "Reload the run list", ic: '<path d="M20 11a8 8 0 1 0-.5 3M20 5v6h-6"/>', run: () => { closeCmdk(); refreshRuns(); } },
         { t: "Toggle theme", d: "Switch light / dark", ic: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>', run: () => { closeCmdk(); $("theme-toggle").click(); } },
       ].filter((a) => !q || a.t.toLowerCase().includes(q) || a.d.toLowerCase().includes(q));
@@ -785,6 +865,96 @@
       }
     });
     $("cmdk").addEventListener("click", (e) => { if (e.target.id === "cmdk") closeCmdk(); });
+
+    // ---------- export helpers ----------
+    async function copyText(text, okMsg) {
+      try { await navigator.clipboard.writeText(text); toast(okMsg || "Copied", "", "ok"); }
+      catch (e) {
+        const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); toast(okMsg || "Copied", "", "ok"); } catch (e2) { toast("Copy failed", "Select and copy manually", "err"); }
+        ta.remove();
+      }
+    }
+    function downloadText(name, text) {
+      const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 100);
+      toast("Downloaded", name, "ok");
+    }
+    async function downloadFromApi(path, name) {
+      try { const r = await fetch(path, { headers: H }); if (!r.ok) throw new Error("HTTP " + r.status); downloadText(name, await r.text()); }
+      catch (e) { toast("Download failed", e.message, "err"); }
+    }
+    function exportPdf(title, innerHtml) {
+      const w = window.open("", "_blank");
+      if (!w) { toast("Pop-up blocked", "Allow pop-ups to export PDF", "err"); return; }
+      w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+        <style>
+          body{font:13.5px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#14161b;max-width:800px;margin:32px auto;padding:0 24px;}
+          h1{font-size:22px;margin:0 0 14px;} h2{font-size:16px;margin:22px 0 8px;border-bottom:1px solid #e6e8ec;padding-bottom:4px;} h3{font-size:14px;}
+          code{font-family:ui-monospace,Menlo,monospace;background:#f2f3f5;padding:1px 5px;border-radius:4px;font-size:12px;}
+          pre{background:#f6f7f9;border:1px solid #e6e8ec;border-radius:8px;padding:12px 14px;overflow:auto;} pre code{background:none;padding:0;}
+          table{border-collapse:collapse;width:100%;margin:12px 0;} th,td{border:1px solid #e6e8ec;padding:7px 10px;text-align:left;font-size:12.5px;} th{background:#f6f7f9;}
+          a{color:#4f46e5;} @media print{body{margin:0;}}
+        </style></head><body>${innerHtml}<script>window.onload=function(){setTimeout(function(){window.print();},250);}<\/script></body></html>`);
+      w.document.close();
+    }
+
+    // ---------- view switching ----------
+    function setView(v) {
+      document.body.classList.toggle("mode-findings", v === "findings");
+      $("nav-runs").classList.toggle("active", v === "runs");
+      $("nav-findings").classList.toggle("active", v === "findings");
+      if (v === "findings") loadFindings();
+    }
+    $("nav-runs").onclick = () => setView("runs");
+    $("nav-findings").onclick = () => setView("findings");
+
+    // ---------- findings hub ----------
+    let findingsCache = [], fSev = "all", fSel = null;
+    async function loadFindings() {
+      let data;
+      try { data = await api("/api/findings"); } catch (e) { return; }
+      findingsCache = data.findings || [];
+      renderFindings();
+    }
+    function renderFindings() {
+      const items = findingsCache.filter((f) => fSev === "all" || f.severity === fSev);
+      $("f-count").textContent = findingsCache.length;
+      const el = $("f-items");
+      if (!items.length) {
+        el.innerHTML = `<div class="empty">${svg('<path d="M12 3l8 4v5c0 4.4-3 8-8 9-5-1-8-4.6-8-9V7l8-4z"/><path d="M9.2 12l2 2 3.6-3.6"/>', 1.5)}<div class="t1">No findings ${fSev === "all" ? "yet" : "at this severity"}</div><div class="t2">Findings appear here after a run produces evidence-backed results.</div></div>`;
+        return;
+      }
+      el.innerHTML = items.map((f) => `<div class="fitem ${f.finding_id === fSel ? "active" : ""}" data-id="${esc(f.finding_id)}">
+        <div class="ftitle">${esc(f.title || f.vuln_type || "Finding")}</div>
+        <div class="fsub">${esc(f.endpoint || f.target || "")}</div>
+        <div class="frow"><span class="sev ${f.severity}">${esc(f.severity)}</span>${f.cvss_score ? `<span class="fchip">CVSS ${f.cvss_score}</span>` : ""}${f.cwe ? `<span class="fchip">${esc(f.cwe)}</span>` : ""}
+          <span class="vchip ${f.verified ? "" : "no"}">${f.verified ? svg('<path d="M20 6L9 17l-5-5"/>', 2) + "verified" : "unverified"}</span></div>
+      </div>`).join("");
+      el.querySelectorAll(".fitem").forEach((n) => n.onclick = () => selectFinding(n.dataset.id));
+    }
+    let curSubmission = "", curSubName = "finding.md";
+    function selectFinding(id) {
+      const f = findingsCache.find((x) => x.finding_id === id);
+      if (!f) return;
+      fSel = id; renderFindings();
+      $("f-sel-title").textContent = f.title || "Finding";
+      curSubmission = f.submission || "";
+      curSubName = "reynard-" + (f.title || "finding").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) + ".md";
+      $("f-doc").innerHTML = mdToHtml(curSubmission);
+      ["f-copy", "f-dl", "f-pdf"].forEach((b) => $(b).disabled = false);
+    }
+    $("f-filters").querySelectorAll(".chip").forEach((c) => c.onclick = () => {
+      fSev = c.dataset.sev; $("f-filters").querySelectorAll(".chip").forEach((x) => x.classList.toggle("active", x === c)); renderFindings();
+    });
+    $("f-refresh").onclick = loadFindings;
+    $("f-export").onclick = () => downloadFromApi("/api/findings.md", "reynard-findings.md");
+    $("f-copy").onclick = () => curSubmission && copyText(curSubmission, "Submission copied — paste into the program");
+    $("f-dl").onclick = () => curSubmission && downloadText(curSubName, curSubmission);
+    $("f-pdf").onclick = () => curSubmission && exportPdf($("f-sel-title").textContent, $("f-doc").innerHTML);
 
     // ---------- boot ----------
     applyTheme(localStorage.getItem("reynard-theme") || "dark");

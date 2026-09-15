@@ -229,6 +229,20 @@ def build_consolidated_report(
                         "endpoint": f.endpoint,
                         "parameter": f.parameter,
                         "verified": f.verified,
+                        # Full detail so the harness can build a copy-paste
+                        # bug-bounty submission without re-running anything.
+                        "description": f.description,
+                        "impact": f.impact,
+                        "remediation": f.remediation,
+                        "evidence": [
+                            {
+                                "verdict": ev.get("verdict", ""),
+                                "payload": str(ev.get("payload") or "")[:400],
+                                "request": str(ev.get("request") or "")[:600],
+                                "response": str(ev.get("response") or "")[:1200],
+                            }
+                            for ev in (f.evidence or [])
+                        ],
                     }
                     for f in row.get("findings", [])
                 ],
