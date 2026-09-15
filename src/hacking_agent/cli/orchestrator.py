@@ -1378,6 +1378,14 @@ class Orchestrator:
     def _select_active_hypothesis(self) -> Hypothesis | None:
         self._sync_agenda_from_memory()
         self._sync_agenda_from_surface()
+        # Close the discovery -> reasoning loop: project surface discoveries
+        # (structured recon / browser_map / Browser Use / HexStrike / authz
+        # matrix) into the KG so every agent's kg_summary() actually shows them.
+        # Idempotent, so projecting each step never duplicates entities.
+        try:
+            self.surface.project_to_memory(self.memory)
+        except Exception:
+            pass
         h = self.agenda.hottest_open()
         self.active_hypothesis = h
         if h:
@@ -1415,7 +1423,21 @@ class Orchestrator:
             )
         if self.target_category:
             parts.append(f"\n# TARGET CATEGORY\n  {self.target_category}")
+        behaviour = self._surface_behaviour_block()
+        if behaviour:
+            parts.append("\n" + behaviour)
+        hint = self.memory.get_fact("external_capability_hint", "")
+        if hint:
+            parts.append(f"\n# EXTERNAL CAPABILITY HINT\n  {hint}")
         return "\n".join(parts)
+
+    def _surface_behaviour_block(self) -> str:
+        """Hardened, untrusted-framed block of interesting behaviour + workflow
+        leads from the attack surface, for injection into reasoning prompts."""
+        try:
+            return self.surface.render_interesting_behaviour()
+        except Exception:
+            return ""
 
     def _inner_budget_hint(self) -> int:
         """Adaptive inner-loop budget: deeper for hard/expert playbooks."""
@@ -1443,6 +1465,15 @@ class Orchestrator:
         inner_hint = self._inner_budget_hint()
         if inner_hint:
             context["inner_budget"] = inner_hint
+
+        # Surface-derived interesting behaviour + external capability hint so
+        # exploitation/analyst reason over what recon/browser/authz discovered.
+        behaviour = self._surface_behaviour_block()
+        if behaviour:
+            context["surface_behaviour"] = behaviour
+        ext_hint = self.memory.get_fact("external_capability_hint", "")
+        if ext_hint:
+            context["external_capability_hint"] = ext_hint
 
         # imp-loop: session-aware skip. Surface "already authenticated as
         # <user>" so agents reuse the live jar instead of re-logging-in.

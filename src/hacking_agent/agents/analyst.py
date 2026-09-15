@@ -147,6 +147,8 @@ class AnalystAgent(BaseAgent):
         stable.append(f"\n{render_tool_catalog('exploitation')}")
         volatile = [
             f"\n{self.kg_summary()}",
+            f"\n{task.context['surface_behaviour']}"
+            if task.context.get("surface_behaviour") else "",
             "\n# OUTPUT\n"
             "Return a SINGLE AnalystOutput JSON. Each Vulnerability MUST "
             "reference an existing target_entity_id from the KG above.",
