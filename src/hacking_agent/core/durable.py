@@ -100,6 +100,13 @@ CREATE TABLE IF NOT EXISTS surface_snapshots (
     updated_at TEXT,
     PRIMARY KEY (target, scope_key)
 );
+CREATE TABLE IF NOT EXISTS evidence_bundles (
+    target    TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    snapshot  TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY (target, scope_key)
+);
 """
 
 
@@ -295,6 +302,34 @@ class DurableStore:
                     (scope_key,),
                 )
                 row = cur.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def save_evidence_bundles(self, target: str, scope_key: str,
+                              snapshot: dict[str, Any]) -> None:
+        """Persist the evidence-bundle collection for a scope (idempotent upsert)."""
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO evidence_bundles
+                   (target, scope_key, snapshot, updated_at)
+                   VALUES (?,?,?,?)""",
+                (target or "", scope_key or "",
+                 json.dumps(snapshot, default=str), _now()),
+            )
+            self._conn.commit()
+
+    def load_evidence_bundles(self, target: str, scope_key: str) -> dict[str, Any] | None:
+        with self._lock:
+            cur = self._conn.execute(
+                """SELECT snapshot FROM evidence_bundles
+                   WHERE target=? AND scope_key=?""",
+                (target or "", scope_key or ""),
+            )
+            row = cur.fetchone()
         if not row:
             return None
         try:

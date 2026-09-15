@@ -59,6 +59,10 @@ from hacking_agent.agents import (
 from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
+from hacking_agent.core.evidence_bundle import (
+    EvidenceBundleStore, build_bundle_from_pocs,
+    V_VERIFIED, V_REFUTED, V_UNVERIFIED,
+)
 from hacking_agent.core.events import emit
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
@@ -429,6 +433,10 @@ class Orchestrator:
             StateMachineConfig(max_iterations=max_iterations)
         )
         self.evidence = EvidenceStore()
+        # Rich, reproducible evidence for reporting (sanitized exchanges, control
+        # tests, reproduction steps, verification status). Assembled from the PoC
+        # ledger at report time so reports are generated FROM evidence.
+        self.bundles = EvidenceBundleStore()
 
         # ---- durable cross-run memory (opt-in-safe; None => in-memory only) --
         # Disable explicitly with REYNARD_DURABLE_MEMORY=0. Any open failure
@@ -2094,8 +2102,77 @@ class Orchestrator:
 
     # ---- reporter dispatch ------------------------------------------------
 
+    def _collect_session_secrets(self) -> list[str]:
+        """Best-effort live secrets (cookie/token values) to redact from
+        evidence exchanges before they land in a report."""
+        secrets: set[str] = set()
+        try:
+            reg = session_mod.get_registry()
+            cookies = reg.read_cookies() if hasattr(reg, "read_cookies") else {}
+            for v in (cookies or {}).values():
+                if v and len(str(v)) >= 6:
+                    secrets.add(str(v))
+        except Exception:
+            pass
+        cred = self.memory.get_fact("credential_hint", "")
+        if cred and ":" in str(cred):
+            for part in str(cred).split(":"):
+                if part and len(part) >= 6:
+                    secrets.add(part)
+        return list(secrets)
+
+    def _assemble_evidence_bundles(self) -> None:
+        """Build reproducible EvidenceBundles from the PoC ledger and record the
+        resulting Findings on the attack surface. Reports render FROM these."""
+        try:
+            secrets = tuple(self._collect_session_secrets())
+            active_identity = ""
+            try:
+                active_identity = session_mod.get_registry().active().name
+            except Exception:
+                pass
+            state_to_status = {"verified": V_VERIFIED, "refuted": V_REFUTED,
+                               "unverified": V_UNVERIFIED}
+            surface_status = {V_VERIFIED: "verified", V_REFUTED: "false_positive",
+                              V_UNVERIFIED: "theoretical"}
+            for entity in self.memory.query("Vulnerability"):
+                vuln_id = entity.id
+                pocs = self.evidence.get_by_vuln(vuln_id)
+                if not pocs:
+                    continue
+                vstatus = state_to_status.get(
+                    self.evidence.verification_state(vuln_id), V_UNVERIFIED)
+                attrs = entity.attrs
+                endpoint = str(attrs.get("parameter") or attrs.get("endpoint")
+                               or self.target_url)
+                bundle = build_bundle_from_pocs(
+                    vuln_id, pocs, verification_status=vstatus,
+                    vuln_type=str(attrs.get("vuln_type", "")),
+                    title=str(attrs.get("vuln_type", "")) or "finding",
+                    severity=str(attrs.get("severity", "info")),
+                    target=self.target_url, endpoint=endpoint,
+                    identity=active_identity, extra_secrets=secrets,
+                )
+                self.bundles.add(bundle)
+                try:
+                    self.surface.record_finding(
+                        title=bundle.title, vuln_type=bundle.vuln_type,
+                        severity=bundle.severity,
+                        status=surface_status.get(vstatus, "theoretical"),
+                        evidence_bundle_id=bundle.id,
+                        source="orchestrator/evidence",
+                    )
+                except Exception:
+                    pass
+            if self.durable is not None:
+                self.bundles.persist(self.durable, self.durable_target,
+                                     self.surface.scope_key)
+        except Exception as e:
+            self.logger.log(f"[EVIDENCE] bundle assembly failed: {e}")
+
     def _execute_reporter(self, decision: CoordinatorDecision | None) -> AgentResult:
         """Run the reporter agent and return its result."""
+        self._assemble_evidence_bundles()
         task = AgentTask(
             task_description="Generate the final penetration test report.",
             context={
@@ -2105,6 +2182,8 @@ class Orchestrator:
                 "expert_playbook": self.playbook_context,
                 "session_duration": f"{time.time() - self.session_start:.1f}s",
                 "total_iterations": self.sm.iteration,
+                "evidence_bundles_markdown": self.bundles.render_markdown(
+                    verified_only=True),
             },
         )
         reporter = self.specialists["reporter"]
