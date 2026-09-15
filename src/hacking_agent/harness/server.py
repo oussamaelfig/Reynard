@@ -19,6 +19,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     StreamingResponse,
 )
 
@@ -169,6 +170,21 @@ def create_app(store: Optional[RunStore] = None,
                 report_json = {}
         return {"markdown": md_path.read_text(encoding="utf-8"),
                 "json": report_json}
+
+    @app.get("/api/runs/{run_id}/log", response_class=PlainTextResponse)
+    def run_log(run_id: str, _: None = Depends(require_token)) -> PlainTextResponse:
+        """Tail the worker's stdout/stderr (the rich console output, including the
+        live DeepSeek "Thinking…" stream). Returns the last ~256 KB as text."""
+        if store.get(run_id) is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        p = store.worker_log_path(run_id)
+        if not p.exists():
+            return PlainTextResponse("")
+        try:
+            data = p.read_bytes()[-262144:]
+            return PlainTextResponse(data.decode("utf-8", errors="replace"))
+        except Exception:
+            return PlainTextResponse("")
 
     @app.get("/api/runs/{run_id}/evidence")
     def run_evidence(run_id: str, _: None = Depends(require_token)) -> Any:

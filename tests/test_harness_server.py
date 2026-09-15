@@ -94,6 +94,23 @@ def test_create_run_completes_report_and_evidence(tmp_path):
     assert ev["finding_count"] == 1 and ev["target_count"] == 1
 
 
+def test_log_endpoint_returns_worker_output(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
+    store.worker_log_path(rec.id).write_text(
+        "\U0001f914 Thinking...\nreasoning goes here\n", encoding="utf-8")
+    r = c.get(f"/api/runs/{rec.id}/log", headers=AUTH)
+    assert r.status_code == 200 and "Thinking" in r.text
+    # token-gated
+    assert c.get(f"/api/runs/{rec.id}/log").status_code == 401
+    # empty (200) when no log yet
+    rec2 = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
+    r2 = c.get(f"/api/runs/{rec2.id}/log", headers=AUTH)
+    assert r2.status_code == 200 and r2.text == ""
+    # 404 for unknown run
+    assert c.get("/api/runs/does-not-exist/log", headers=AUTH).status_code == 404
+
+
 def test_report_404_before_ready(tmp_path):
     store, c = _client(tmp_path)
     rec = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
