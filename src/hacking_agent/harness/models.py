@@ -38,6 +38,7 @@ class RunRequest(BaseModel):
     targets: list[str] = Field(default_factory=list)
     authorized_domains: list[str] = Field(default_factory=list)
     authorized_cidrs: list[str] = Field(default_factory=list)
+    authorized_url_prefixes: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
     description: str = ""              # free-text objective / prompt from the operator
     mission_mode: str = "production"
@@ -52,7 +53,11 @@ class RunRequest(BaseModel):
     authorized: bool = False          # explicit "I am authorized to test this scope"
 
     def has_scope(self) -> bool:
-        return bool(self.authorized_domains or self.authorized_cidrs)
+        return bool(
+            self.authorized_domains
+            or self.authorized_cidrs
+            or self.authorized_url_prefixes
+        )
 
     def authorization_error(self) -> Optional[str]:
         """Return a human-readable refusal reason, or None if runnable."""
@@ -72,6 +77,7 @@ class RunRequest(BaseModel):
             "engagement_name": "harness-run",
             "authorized_domains": list(self.authorized_domains),
             "authorized_cidrs": list(self.authorized_cidrs),
+            "authorized_url_prefixes": list(self.authorized_url_prefixes),
             "out_of_scope": list(self.out_of_scope),
             "max_requests_per_second": self.max_requests_per_second,
             "max_total_requests": self.max_total_requests,

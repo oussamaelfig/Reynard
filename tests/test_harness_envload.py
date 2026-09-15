@@ -1,0 +1,89 @@
+"""Harness .env loading + instant-fail when the worker has no LLM key."""
+from __future__ import annotations
+
+import json
+import os
+
+from hacking_agent.harness.envload import (
+    load_operator_env, llm_key_present, missing_llm_key_error,
+)
+from hacking_agent.harness.models import RunRequest
+from hacking_agent.harness.run_job import main as run_job_main
+
+
+def test_fills_blank_key_from_dotenv(tmp_path, monkeypatch):
+    envfile = tmp_path / ".env"
+    envfile.write_text("DEEPSEEK_API_KEY=sk-from-file\n", encoding="utf-8")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_DEFAULT_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "hacking_agent.harness.envload.env_candidates", lambda: [envfile])
+    assert load_operator_env() == envfile
+    assert os.environ["DEEPSEEK_API_KEY"] == "sk-from-file"
+    assert llm_key_present() is True
+
+
+def test_does_not_clobber_existing_key(tmp_path, monkeypatch):
+    envfile = tmp_path / ".env"
+    envfile.write_text("DEEPSEEK_API_KEY=sk-from-file\n", encoding="utf-8")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-already-set")
+    monkeypatch.setattr(
+        "hacking_agent.harness.envload.env_candidates", lambda: [envfile])
+    load_operator_env()
+    assert os.environ["DEEPSEEK_API_KEY"] == "sk-already-set"
+
+
+def test_run_job_fails_immediately_without_key(tmp_path, monkeypatch):
+    for k in ("DEEPSEEK_API_KEY", "LLM_DEFAULT_API_KEY",
+              "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr("hacking_agent.harness.envload.load_operator_env",
+                        lambda: None)
+    monkeypatch.setattr("hacking_agent.harness.envload.llm_key_present",
+                        lambda: False)
+    req = RunRequest(authorized_domains=["example.com"], authorized=True)
+    (tmp_path / "config.json").write_text(req.model_dump_json(), encoding="utf-8")
+    rc = run_job_main([str(tmp_path)])
+    assert rc == 1
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert "No LLM API key" in result["error"]
+    events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    assert "error" in events and "run_end" in events
+    # Must NOT have started an Orchestrator (no memory_fact spam).
+    assert "memory_fact" not in events
+
+
+def test_run_job_target_error_is_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr("hacking_agent.harness.envload.load_operator_env",
+                        lambda: None)
+    monkeypatch.setattr("hacking_agent.harness.envload.llm_key_present",
+                        lambda: True)
+    req = RunRequest(authorized_domains=["example.com"], authorized=True)
+    (tmp_path / "config.json").write_text(req.model_dump_json(), encoding="utf-8")
+
+    def _boom(*_a, **_k):
+        return {"target": "https://example.com/",
+                "verdict": "error: No API key found.",
+                "timed_out": False, "wall_clock_seconds": 0, "findings": []}
+
+    monkeypatch.setattr("hacking_agent.cli.assess.run_target", _boom)
+    monkeypatch.setattr(
+        "hacking_agent.cli.assess.build_consolidated_report",
+        lambda *_a, **_k: ("# empty", {"finding_count": 0, "verified_count": 0}),
+    )
+    # run_job imports assess after preflight; patch via the module it binds.
+    import hacking_agent.harness.run_job as rj
+    monkeypatch.setattr(rj, "run_target", _boom, raising=False)
+
+    # Import happens inside main, so patch assess before calling.
+    import hacking_agent.cli.assess as assess
+    monkeypatch.setattr(assess, "run_target", _boom)
+    monkeypatch.setattr(
+        assess, "build_consolidated_report",
+        lambda *_a, **_k: ("# empty", {"finding_count": 0, "verified_count": 0}),
+    )
+
+    rc = run_job_main([str(tmp_path)])
+    assert rc == 1
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["error"].startswith("error:")

@@ -54,8 +54,8 @@ def authorized_targets(
     if not engagement.has_authorized_scope():
         raise EngagementError(
             "Refusing to run: the engagement declares no authorized scope "
-            "(authorized_domains / authorized_cidrs). Define an authorized "
-            "scope before running an assessment."
+            "(authorized_domains / authorized_cidrs / authorized_url_prefixes). "
+            "Define an authorized scope before running an assessment."
         )
 
     denied = {d.strip().lower() for d in engagement.out_of_scope if d.strip()}
@@ -79,6 +79,10 @@ def authorized_targets(
             if not host or _is_denied(host):
                 continue
             targets.append(f"https://{host}/")
+        for prefix in engagement.authorized_url_prefixes:
+            p = (prefix or "").strip()
+            if p and p not in targets:
+                targets.append(p if "://" in p else f"https://{p}")
 
     if not targets:
         raise EngagementError(

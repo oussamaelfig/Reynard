@@ -46,6 +46,10 @@ def main(argv: list[str] | None = None) -> int:
     # ---- env sinks + toggles MUST be set before importing the agent stack ----
     os.environ["REYNARD_EVENT_LOG"] = str(run_dir / "events.jsonl")
     os.environ.setdefault("REYNARD_MEMORY_DB", str(run_dir / "memory.db"))
+    from hacking_agent.harness.envload import (
+        load_operator_env, llm_key_present, missing_llm_key_error,
+    )
+    load_operator_env()
     browser = bool(config.get("enable_browser_use"))
     hexstrike = bool(config.get("enable_hexstrike"))
     os.environ["BROWSER_USE_ENABLED"] = "1" if browser else "0"
@@ -59,6 +63,15 @@ def main(argv: list[str] | None = None) -> int:
     err = req.authorization_error()
     if err:
         _write_result(run_dir, error=err)
+        return 1
+
+    if not llm_key_present():
+        from hacking_agent.core.events import emit
+        msg = missing_llm_key_error()
+        emit("error", {"message": msg})
+        emit("run_end", {"findings": 0, "error": msg})
+        _write_result(run_dir, error=msg)
+        print(msg, file=sys.stderr)
         return 1
 
     from hacking_agent.core.events import emit
@@ -109,6 +122,16 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         _write_result(run_dir, error=f"report generation failed: {exc}")
         emit("run_end", {"error": str(exc)[:300]})
+        return 1
+
+    fatal = [str(r.get("verdict") or "") for r in results
+             if str(r.get("verdict") or "").startswith("error:")]
+    if fatal:
+        err = " | ".join(fatal)[:500]
+        _write_result(run_dir, findings_count=findings_count,
+                      verified_count=verified_count, error=err)
+        emit("run_end", {"findings": findings_count, "verified": verified_count,
+                         "error": err})
         return 1
 
     _write_result(run_dir, findings_count=findings_count,

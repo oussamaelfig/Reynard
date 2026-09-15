@@ -46,6 +46,8 @@ class Engagement:
     Scope
       - authorized_domains: domains explicitly in scope (subdomains included)
       - authorized_cidrs:   IP ranges explicitly in scope
+      - authorized_url_prefixes: path-scoped URLs (e.g. https://example.com/docs)
+                            allowed without authorizing the whole host
       - out_of_scope:       hosts/domains that are NEVER in scope, even when
                             they fall inside an authorized domain (a denylist
                             that overrides the allowlist)
@@ -69,6 +71,7 @@ class Engagement:
 
     authorized_domains: list[str] = field(default_factory=list)
     authorized_cidrs: list[str] = field(default_factory=list)
+    authorized_url_prefixes: list[str] = field(default_factory=list)
     out_of_scope: list[str] = field(default_factory=list)
 
     max_requests_per_second: float = 0.0
@@ -90,7 +93,11 @@ class Engagement:
         The assessment CLI refuses to run without this — a scope-less
         engagement is not authorization to test anything.
         """
-        return bool(self.authorized_domains or self.authorized_cidrs)
+        return bool(
+            self.authorized_domains
+            or self.authorized_cidrs
+            or self.authorized_url_prefixes
+        )
 
     def is_within_window(self, now: datetime | None = None) -> bool:
         """True if ``now`` is inside the testing window.
@@ -115,6 +122,8 @@ class Engagement:
         parts.append(f"domains={self.authorized_domains}")
         if self.authorized_cidrs:
             parts.append(f"cidrs={self.authorized_cidrs}")
+        if self.authorized_url_prefixes:
+            parts.append(f"url_prefixes={self.authorized_url_prefixes}")
         if self.out_of_scope:
             parts.append(f"out_of_scope={self.out_of_scope}")
         parts.append(f"rps={self.max_requests_per_second or 'unlimited'}")
@@ -230,6 +239,11 @@ def engagement_from_dict(raw: dict[str, Any]) -> Engagement:
             raw.get("authorized_cidrs")
             if raw.get("authorized_cidrs") is not None
             else raw.get("cidrs")
+        ),
+        authorized_url_prefixes=_as_str_list(
+            raw.get("authorized_url_prefixes")
+            if raw.get("authorized_url_prefixes") is not None
+            else raw.get("url_prefixes")
         ),
         out_of_scope=_as_str_list(
             raw.get("out_of_scope")
