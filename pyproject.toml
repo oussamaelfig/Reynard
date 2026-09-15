@@ -27,6 +27,15 @@ rag = [
   "numpy>=1.24.0",
 ]
 
+# Optional external capability providers. The base install works without these:
+# both integrations degrade to available=False when their package/server is
+# absent. Browser Use is a Python library (semantic workflow discovery);
+# HexStrike AI is a separately-run MCP/HTTP server (specialist tools) — no PyPI
+# dependency, configured via HEXSTRIKE_SERVER_URL.
+external = [
+  "browser-use>=0.13",
+]
+
 [project.scripts]
 reynard = "hacking_agent.cli.agent:main"
 reynard-orchestrator = "hacking_agent.cli.orchestrator:main"

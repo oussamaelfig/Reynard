@@ -387,6 +387,15 @@ Bridge plugin: [`integrations/caido-reynard-bridge/`](./integrations/caido-reyna
 
 When the Burp MCP extension is online (`BURP_MCP_URL=http://127.0.0.1:9876`): raw HTTP/1.1, scanner issues, Collaborator, Repeater, Intruder. Offline → Caido Local Bridge / `http_request` / `curl` / OOB.
 
+### External capabilities (optional): Browser Use + HexStrike AI
+
+Two optional, untrusted specialist providers behind one adapter layer ([`integrations/external/`](./src/hacking_agent/integrations/external/)). They return **structured observations** into the AttackSurface — never findings — and every action still passes through ScopeGuard + BudgetedToolExecutor.
+
+- **Browser Use** — semantic workflow discovery (`browser_use_explore`): explores signup/login/onboarding/invites/role-changes/checkout/uploads/multi-step forms and reports pages, actions, discovered API/network requests, auth + workflow state. Hard-restricted to in-scope domains; reuses your session cookies. Does not replace `browser_map`. `pip install "reynard[external]"`.
+- **HexStrike AI** — on-demand specialist tools via a broker (`hexstrike_search_capability` → ≤5 gap-first candidates, `hexstrike_run_capability`). The LLM never sees the full 150+ catalogue; native tools stay preferred. Run the HexStrike server separately (`HEXSTRIKE_SERVER_URL`).
+
+Both are auto-triggered only in production missions when expected information gain justifies the cost, and degrade gracefully when absent. Details: [`docs/external-integrations.md`](./docs/external-integrations.md).
+
 ### Web research & OSINT
 
 ```env
