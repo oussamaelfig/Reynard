@@ -385,6 +385,24 @@ class ReconAgent(BaseAgent):
             f"# TARGET (id={target_id})\n{target_url}",
             f"\n# TASK\n{task.task_description}",
         ]
+        # Mission-aware recon breadth: production wants a WIDE structured surface
+        # (subdomains/hosts/endpoints/JS/APIs/workflows); benchmark stays lean.
+        if task.context.get("production"):
+            stable.append(
+                "\n# PRODUCTION RECON MODE (broad structured mapping)\n"
+                "This is an authorized real-world assessment, NOT a single lab. "
+                "Map a WIDE attack surface and let it accumulate in the KG:\n"
+                "  - subfinder_scan(domain) + crtsh_lookup(domain) for subdomains; "
+                "httpx_probe(targets) to find live hosts + tech.\n"
+                "  - katana_crawl(url) + waybackurls_fetch(domain) for endpoints/"
+                "params/JS; extract_js_endpoints for SPA backends.\n"
+                "  - browser_map(url[, session]) for SPA/authenticated apps to "
+                "capture the REAL API surface + workflows a crawler misses.\n"
+                "  - discover_apis + nuclei_scan as usual.\n"
+                "Do NOT stop after 3-4 iterations here: keep mapping until the "
+                "surface stops growing or budget runs low. Prefer these structured "
+                "wrappers over raw run_shell so results become structured state."
+            )
         expert_playbook = task.context.get("expert_playbook")
         if expert_playbook:
             stable.append(f"\n{expert_playbook}")

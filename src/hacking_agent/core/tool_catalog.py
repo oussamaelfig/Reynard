@@ -175,18 +175,73 @@ CATALOG: tuple[ToolEntry, ...] = (
         "The wrapper is interactive; prefer direct commands for automation.",
         "python3 /opt/hackingtool/hackingtool.py",
     ),
+    ToolEntry(
+        "structured recon (subfinder_scan/httpx_probe/katana_crawl/dnsx_resolve/"
+        "naabu_scan/waybackurls_fetch/crtsh_lookup/urlscan_lookup)",
+        "broad structured recon -> attack surface",
+        "Production/bug-bounty scope: map subdomains, live hosts, endpoints, JS "
+        "and historical URLs. Results are parsed into structured state (not raw "
+        "dumps) and auto-populate the attack surface.",
+        "A single fixed PortSwigger lab URL where broad recon is wasteful.",
+        "subfinder_scan(domain='example.com'); httpx_probe(targets=[...]); "
+        "katana_crawl(url='https://app.example.com/')",
+    ),
+    ToolEntry(
+        "browser_map",
+        "application mapper (authenticated, JS-aware)",
+        "You need a SPA's REAL API surface + authenticated traffic: captures "
+        "XHR/fetch/APIs, WebSockets, JS bundles + source maps, links and forms "
+        "into the attack surface. Prefer over browser_navigate for mapping.",
+        "A static page where curl/http_request already sees everything.",
+        "browser_map(url='https://app.example.com/', session='user1')",
+    ),
+    ToolEntry(
+        "authz_matrix_scan",
+        "differential authorization (IDOR/BOLA/BFLA/privesc)",
+        "You have >=2 identities (anon/user1/user2/admin) and want to compare the "
+        "SAME endpoints across them to surface access-control breaks with "
+        "control-vs-test evidence. The strongest authz signal Reynard has.",
+        "Only one identity is available, or the endpoint set is unknown.",
+        "authz_matrix_scan(urls=['https://app/api/users/1'], resources=[{url, owner_identity, sensitive}])",
+    ),
+    ToolEntry(
+        "browser_use_explore",
+        "semantic workflow discovery (OPTIONAL, external)",
+        "SPA/auth/complex-workflow apps where crawling misses functionality: "
+        "explores signup/login/onboarding/invites/role changes/checkout/uploads "
+        "like a real user and reports pages/actions/APIs/workflow state. "
+        "Discovers, never exploits; feeds the attack surface.",
+        "Simple static apps, or when browser_map already captured the surface.",
+        "browser_use_explore(url='https://app.example.com/', task='map invite + role-change flow', session='admin')",
+    ),
+    ToolEntry(
+        "hexstrike_search_capability / hexstrike_run_capability",
+        "on-demand specialist broker (OPTIONAL, external)",
+        "A hypothesis needs a capability Reynard lacks natively (hidden-parameter "
+        "discovery, GraphQL analysis, cloud/S3 audit, niche fingerprinting). First "
+        "search (<=5 candidates, native-first), then run ONE. Prefer native tools.",
+        "An equivalent native tool exists (subfinder/httpx/nuclei/sqlmap/etc.).",
+        "hexstrike_search_capability('hidden parameter discovery'); "
+        "hexstrike_run_capability(capability='arjun', target='https://app/api')",
+    ),
 )
 
 
 def render_tool_catalog(role: str = "general") -> str:
     """Render a compact prompt section tailored by role."""
     role = (role or "general").lower()
+    _STRUCTURED_RECON = (
+        "structured recon (subfinder_scan/httpx_probe/katana_crawl/dnsx_resolve/"
+        "naabu_scan/waybackurls_fetch/crtsh_lookup/urlscan_lookup)"
+    )
+    _HEXSTRIKE = "hexstrike_search_capability / hexstrike_run_capability"
     if role == "recon":
         names = {
             "http_request", "curl", "ffuf", "gobuster/dirb/wfuzz", "nuclei",
             "nmap", "whatweb/nikto", "subfinder/httpx/httprobe/waybackurls",
             "Chromium browser_*", "Caido Local Bridge", "Caido Cloud API", "Burp MCP",
             "/opt/hackingtool/hackingtool.py",
+            _STRUCTURED_RECON, "browser_map", "browser_use_explore",
         }
     elif role == "exploitation":
         names = {
@@ -194,6 +249,7 @@ def render_tool_catalog(role: str = "general") -> str:
             "metasploit/searchsploit", "Chromium browser_*", "OOB interactsh",
             "adb/apktool/jadx/frida/objection", "binwalk/radare2/steghide/foremost",
             "Caido Local Bridge", "Caido Cloud API", "Burp MCP", "/opt/hackingtool/hackingtool.py",
+            "authz_matrix_scan", "browser_map", "browser_use_explore", _HEXSTRIKE,
         }
     else:
         names = {entry.name for entry in CATALOG}
