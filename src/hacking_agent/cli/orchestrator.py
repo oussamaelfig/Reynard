@@ -474,6 +474,8 @@ class Orchestrator:
             scope_evaluator=self.scope_guard.classify,
         )
         self._surface_seed_sig: set[str] = set()
+        # Surface findings already promoted to KG Vulnerabilities (dedupe).
+        self._promoted_surface_findings: set[str] = set()
 
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
@@ -1181,14 +1183,33 @@ class Orchestrator:
                 if admin_like:
                     heat += 0.15
                 tag = "NEW since last run" if is_new else "known surface"
+                # Give endpoint/API leads a vuln-class hint so exploitation never
+                # targets an empty vuln_type (F7). Recon-phase leads (subdomains/
+                # hosts/JS) stay class-less — they route to recon, not exploitation.
+                vuln_hint = self._surface_lead_vuln_hint(a, phase, admin_like)
                 self.agenda.add(
                     text=(f"Investigate {a.kind} '{a.identifier}' ({tag}; via "
                           f"{','.join(a.sources[:2])}) for exploitable behaviour."),
-                    vuln_type="", vector=a.identifier, phase=phase,
+                    vuln_type=vuln_hint, vector=a.identifier, phase=phase,
                     heat=heat, notes="seed:surface_delta" if is_new else "seed:surface",
                 )
         except Exception as e:
             self.logger.log(f"[DELTA] surface agenda sync failed: {e}")
+
+    @staticmethod
+    def _surface_lead_vuln_hint(asset, phase: str, admin_like: bool) -> str:
+        """Vuln-class hint for a surface-seeded hypothesis so exploitation has a
+        meaningful class (avoids empty-vuln_type junk Vulnerabilities). Only
+        endpoint/API leads (exploit phase) get a class; recon-phase leads stay
+        empty and route to recon."""
+        if phase != "injection":
+            return ""
+        ident = asset.identifier.lower()
+        if "graphql" in ident:
+            return "graphql_api"
+        if admin_like or any(m in ident for m in ("/admin", "/internal", "/manage")):
+            return "access_control_idor"
+        return "api_testing"
 
     # ---- optional external capabilities (Browser Use / HexStrike) --------
 
@@ -1386,6 +1407,12 @@ class Orchestrator:
             self.surface.project_to_memory(self.memory)
         except Exception:
             pass
+        # Close the finding-pipeline seam: promote strong INTERNAL surface
+        # findings (authz-matrix anomalies) into theoretical KG Vulnerabilities so
+        # exploitation reproduces them and the Validator + EvidenceBundle can
+        # confirm/report. External-origin leads are never promoted here.
+        self._promote_surface_findings_to_kg()
+        self._sync_agenda_from_memory()
         h = self.agenda.hottest_open()
         self.active_hypothesis = h
         if h:
@@ -1438,6 +1465,67 @@ class Orchestrator:
             return self.surface.render_interesting_behaviour()
         except Exception:
             return ""
+
+    # Surface-finding sources that are TRUSTED internal Reynard analysis and may
+    # be promoted to theoretical KG Vulnerabilities. External-provider leads
+    # (browser_use/hexstrike) are deliberately excluded — they remain
+    # observations for the analyst to reason over, never auto-promoted.
+    _PROMOTABLE_FINDING_SOURCES = frozenset({"authz_matrix"})
+
+    def _promote_surface_findings_to_kg(self, limit: int = 20) -> None:
+        """Promote strong INTERNAL surface findings into theoretical KG
+        Vulnerabilities so they flow through exploitation -> Validator ->
+        EvidenceBundle -> report. Never promotes to 'verified' and never promotes
+        external-origin leads."""
+        try:
+            findings = self.surface.findings()
+        except Exception:
+            return
+        if not findings:
+            return
+        try:
+            targets = self.memory.query("Target")
+            target = targets[0] if targets else self.memory.add_entity(
+                "Target", {"url": self.target_url})
+        except Exception:
+            return
+        promoted = 0
+        for f in findings:
+            if promoted >= limit:
+                break
+            if f.status != "theoretical" or f.id in self._promoted_surface_findings:
+                continue
+            if (f.source or "") not in self._PROMOTABLE_FINDING_SOURCES:
+                continue
+            data = f.data or {}
+            resource = str(data.get("resource") or "")
+            try:
+                vuln = self.memory.add_entity("Vulnerability", {
+                    "vuln_type": f.vuln_type or "access_control",
+                    "severity": f.severity or "medium",
+                    "parameter": resource or None,
+                    "hypothesis": (f.title or f.vuln_type or "surface finding")[:300],
+                    "status": "theoretical",
+                    "notes": (f"promoted from surface finding {f.id} "
+                              f"(src={f.source}); requires independent Reynard "
+                              f"validation before it can be reported."),
+                    "target_entity_id": target.id,
+                    "source": f"surface/{f.source}",
+                })
+                self.memory.add_relationship(
+                    target.id, "POTENTIALLY_VULNERABLE_TO", vuln.id)
+                self._promoted_surface_findings.add(f.id)
+                try:
+                    f.data["kg_vuln_id"] = vuln.id
+                except Exception:
+                    pass
+                promoted += 1
+            except Exception:
+                continue
+        if promoted:
+            self.logger.log(
+                f"[SEAM] promoted {promoted} surface finding(s) to theoretical "
+                f"KG vulnerabilities (pending Reynard validation)")
 
     def _inner_budget_hint(self) -> int:
         """Adaptive inner-loop budget: deeper for hard/expert playbooks."""
