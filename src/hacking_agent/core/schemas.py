@@ -60,6 +60,9 @@ ToolName = Literal[
     "capture_baseline", "diff_against_baseline",
     # Recon expansions
     "nuclei_scan", "extract_js_endpoints", "discover_apis",
+    # Structured recon wrappers (ProjectDiscovery toolchain + passive OSINT)
+    "subfinder_scan", "dnsx_resolve", "httpx_probe", "naabu_scan",
+    "katana_crawl", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
     # Caido Cloud API
     "caido_cloud_api", "caido_cloud_request",
     # Caido local Replay/history bridge

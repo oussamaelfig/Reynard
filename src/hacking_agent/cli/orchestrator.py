@@ -56,6 +56,7 @@ from hacking_agent.agents import (
     ReporterAgent,
     ValidatorAgent,
 )
+from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
 from hacking_agent.core.events import emit
@@ -450,9 +451,18 @@ class Orchestrator:
         if self.lab_level:
             self.lab_profile.setdefault("lab_level", self.lab_level)
 
+        # ---- persistent Attack Surface model ----
+        # Structured, scope-annotated map of everything discovered about the
+        # target. Recon-wrapper tool results auto-populate it via the executor;
+        # it persists across runs for continuous / delta hunting.
+        self.surface = AttackSurface(
+            target=target_url, scope_evaluator=self.scope_guard.classify,
+        )
+
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
-            self.memory, self.sm, scope_guard=self.scope_guard
+            self.memory, self.sm, scope_guard=self.scope_guard,
+            surface=self.surface,
         )
         self.subagent_scheduler = BoundedSubagentScheduler(
             SubagentPolicy(

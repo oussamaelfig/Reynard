@@ -283,6 +283,23 @@ class ScopeGuard:
             return self._dedupe([args.get("domain", "")])
         if tool_name == "tls_info":
             return self._dedupe([args.get("target", "")])
+        # Structured recon wrappers operate on a domain/host/URL that must be in
+        # scope. crt.sh / urlscan query their OWN passive-intel APIs about the
+        # domain (they do not touch the target), but we still gate them on the
+        # domain so a run cannot enumerate an out-of-scope organisation.
+        if tool_name in ("subfinder_scan", "waybackurls_fetch",
+                         "crtsh_lookup", "urlscan_lookup"):
+            return self._dedupe([args.get("domain", "")])
+        if tool_name == "naabu_scan":
+            return self._dedupe([args.get("host", "")])
+        if tool_name == "katana_crawl":
+            return self._dedupe([args.get("url", "")])
+        if tool_name in ("httpx_probe", "dnsx_resolve"):
+            targets = args.get("targets") or args.get("hosts") or []
+            if isinstance(targets, str):
+                targets = [t for t in targets.replace(",", " ").split() if t]
+            single = args.get("url") or args.get("domain") or ""
+            return self._dedupe(list(targets) + ([single] if single else []))
         # jwt_tool is token-only unless an explicit exploit target URL is given.
         if tool_name == "jwt_tool":
             return self._dedupe([args.get("target_url", "")])
