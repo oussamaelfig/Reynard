@@ -466,6 +466,14 @@ class Orchestrator:
         self.surface = AttackSurface(
             target=target_url, scope_evaluator=self.scope_guard.classify,
         )
+        # Snapshot of the surface from previous runs (loaded from durable store).
+        # Diffing current-vs-prior powers continuous / delta hunting: assets that
+        # appear THIS run (new subdomains/APIs/admin panels) are prioritized.
+        self.prior_surface = AttackSurface(
+            target=target_url, scope_key=self.surface.scope_key,
+            scope_evaluator=self.scope_guard.classify,
+        )
+        self._surface_seed_sig: set[str] = set()
 
         self.registry = ProviderRegistry.from_env()
         self.tool_executor = BudgetedToolExecutor(
@@ -1031,6 +1039,7 @@ class Orchestrator:
             # populated, category-appropriate agenda (not just web/PortSwigger).
             self._seed_category_hypotheses()
             self._sync_agenda_from_memory()
+            self._sync_agenda_from_surface()
             if self.agenda.all():
                 self.logger.log(
                     f"[AGENDA] seeded {len(self.agenda.all())} hypotheses "
@@ -1106,8 +1115,53 @@ class Orchestrator:
                 notes="seed:category_playbook",
             )
 
+    # ---- WS8: continuous / delta-hunting agenda seeding ------------------
+
+    _SURFACE_SEEDABLE = {
+        "subdomain": "recon", "host": "recon", "api": "injection",
+        "endpoint": "injection", "js_asset": "recon",
+    }
+
+    def _sync_agenda_from_surface(self) -> None:
+        """Fold high-value, in-scope attack-surface leads into the agenda.
+
+        On a delta run, assets that appeared since the previous run (new
+        subdomains, APIs, admin panels, JS bundles) are boosted so the researcher
+        prioritizes fresh surface. Out-of-scope assets are never seeded (the
+        surface excludes them from prioritized_leads)."""
+        try:
+            # Keep the surface in sync with anything the legacy KG path found.
+            self.surface.ingest_memory_kg(self.memory)
+            new_keys = {a.key for a in self.surface.diff(self.prior_surface).new_assets}
+            leads = self.surface.prioritized_leads(previous=self.prior_surface,
+                                                   limit=12)
+            for a in leads:
+                if a.key in self._surface_seed_sig:
+                    continue
+                phase = self._SURFACE_SEEDABLE.get(a.kind)
+                if not phase:
+                    continue
+                self._surface_seed_sig.add(a.key)
+                is_new = a.key in new_keys
+                admin_like = any(m in a.identifier.lower()
+                                 for m in ("admin", "internal", "graphql",
+                                           "swagger", "api", "debug", "actuator"))
+                heat = 1.35 if is_new else 0.8
+                if admin_like:
+                    heat += 0.15
+                tag = "NEW since last run" if is_new else "known surface"
+                self.agenda.add(
+                    text=(f"Investigate {a.kind} '{a.identifier}' ({tag}; via "
+                          f"{','.join(a.sources[:2])}) for exploitable behaviour."),
+                    vuln_type="", vector=a.identifier, phase=phase,
+                    heat=heat, notes="seed:surface_delta" if is_new else "seed:surface",
+                )
+        except Exception as e:
+            self.logger.log(f"[DELTA] surface agenda sync failed: {e}")
+
     def _select_active_hypothesis(self) -> Hypothesis | None:
         self._sync_agenda_from_memory()
+        self._sync_agenda_from_surface()
         h = self.agenda.hottest_open()
         self.active_hypothesis = h
         if h:
@@ -1818,6 +1872,20 @@ class Orchestrator:
                 self.durable, self.durable_target, self.lab_class)
             n_ev = self.evidence.rehydrate(
                 self.durable, self.durable_target, self.lab_class)
+            # Load the prior attack surface for delta hunting + bundles.
+            try:
+                n_surf = self.prior_surface.load(self.durable)
+                self.bundles.load(self.durable, self.durable_target,
+                                  self.surface.scope_key)
+                if n_surf:
+                    self.memory.add_fact(
+                        "prior_surface_assets", n_surf, confidence="suspected",
+                        source="durable_surface")
+                    self.logger.log(
+                        f"[DELTA] loaded {n_surf} assets from prior runs "
+                        f"(scope={self.surface.scope_key})")
+            except Exception:
+                pass
             wins = self.durable.successful_techniques(self.lab_class)
             deads = self.durable.known_deadends(self.lab_class)
             if wins:
@@ -1885,12 +1953,25 @@ class Orchestrator:
                 self.durable, self.durable_target, self.lab_class)
             ok_ev = self.evidence.persist(
                 self.durable, self.durable_target, self.lab_class)
+            # Persist the CUMULATIVE attack surface: fold in prior assets not
+            # rediscovered this run, then save so the next run can delta-hunt.
+            ok_surf = False
+            try:
+                self.surface.ingest_memory_kg(self.memory)
+                self.surface.load(self.durable)  # merge prior into current
+                ok_surf = self.surface.persist(self.durable)
+                self.bundles.persist(self.durable, self.durable_target,
+                                     self.surface.scope_key)
+            except Exception:
+                pass
             self.logger.log(
                 f"[DURABLE] persisted memory={ok_mem} evidence={ok_ev} "
-                f"(target={self.durable_target}, class={self.lab_class})"
+                f"surface={ok_surf} (target={self.durable_target}, "
+                f"class={self.lab_class})"
             )
             emit("durable_persist", {
-                "memory": ok_mem, "evidence": ok_ev, "lab_class": self.lab_class,
+                "memory": ok_mem, "evidence": ok_ev, "surface": ok_surf,
+                "lab_class": self.lab_class,
             })
         except Exception as e:
             self.logger.log(f"[DURABLE] persist failed: {e}")
