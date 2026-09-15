@@ -43,6 +43,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"failed to read config.json: {exc}", file=sys.stderr)
         return 2
 
+    # Load .env as a fallback so a directly-invoked worker still gets the LLM
+    # provider/model/key (load_dotenv does not override already-inherited env).
+    try:
+        from dotenv import load_dotenv
+
+        from hacking_agent.core.paths import ENV_FILE
+        if ENV_FILE.exists():
+            load_dotenv(ENV_FILE)
+    except Exception:
+        pass
+
     # ---- env sinks + toggles MUST be set before importing the agent stack ----
     os.environ["REYNARD_EVENT_LOG"] = str(run_dir / "events.jsonl")
     os.environ.setdefault("REYNARD_MEMORY_DB", str(run_dir / "memory.db"))

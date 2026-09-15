@@ -194,6 +194,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     import argparse
 
     import uvicorn
+    from dotenv import load_dotenv
+
+    from hacking_agent.core.paths import ENV_FILE
+
+    # Load .env like the other CLIs so the operator's LLM provider/model/key
+    # (LLM_DEFAULT_*, DEEPSEEK_API_KEY, …) and REYNARD_HARNESS_* are available;
+    # these are then inherited by each run's worker subprocess via the env.
+    if ENV_FILE.exists():
+        load_dotenv(ENV_FILE)
 
     parser = argparse.ArgumentParser(description="Reynard run harness console")
     parser.add_argument("--host", default=os.getenv("REYNARD_HARNESS_HOST", "127.0.0.1"))
