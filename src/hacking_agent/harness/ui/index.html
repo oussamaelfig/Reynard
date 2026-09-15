@@ -551,9 +551,24 @@
       setBusy(true);
       try {
         const r = await fetch(path, { headers: H, ...opts });
-        if (!r.ok) { let d = ""; try { d = (await r.json()).detail; } catch (e) {} throw new Error(d || ("HTTP " + r.status)); }
+        if (!r.ok) {
+          if (r.status === 401) authError();
+          let d = ""; try { d = (await r.json()).detail; } catch (e) {} throw new Error(d || ("HTTP " + r.status));
+        }
         return r.status === 204 ? null : r.json();
       } finally { setBusy(false); }
+    }
+
+    // A 401 means this page's token no longer matches the server (usually a
+    // stale tab from a previous session, or the server restarted with a new
+    // token). Surface it clearly once instead of silently failing every poll.
+    let _authWarned = 0;
+    function authError() {
+      const now = Date.now();
+      if (now - _authWarned < 20000) return;
+      _authWarned = now;
+      const c = $("conn"); c.className = "conn off"; $("conn-text").textContent = "Auth failed — reload page";
+      toast("Session expired", "This tab's token no longer matches the server. Reload (Ctrl/Cmd+Shift+R).", "err");
     }
 
     // ---------- toasts ----------
@@ -913,12 +928,15 @@
     $("nav-findings").onclick = () => setView("findings");
 
     // ---------- findings hub ----------
-    let findingsCache = [], fSev = "all", fSel = null;
+    let findingsCache = [], fSev = "all", fSel = null, _findSig = "";
     async function loadFindings() {
       let data;
       try { data = await api("/api/findings"); } catch (e) { return; }
       findingsCache = data.findings || [];
-      renderFindings();
+      // Only re-render when the set actually changed, so a background refresh
+      // never reflows the list or steals focus while you're reading.
+      const sig = findingsCache.map((f) => f.finding_id).join("|");
+      if (sig !== _findSig) { _findSig = sig; renderFindings(); }
     }
     function renderFindings() {
       const items = findingsCache.filter((f) => fSev === "all" || f.severity === fSev);
@@ -963,7 +981,11 @@
     $("stream-wrap").innerHTML = emptyState("No run selected", "Select a run to watch live model reasoning and tool activity.");
     $("runs-refresh").onclick = refreshRuns;
     health(); refreshRuns();
-    setInterval(() => { refreshRuns(); $("progress").classList.toggle("on", busy > 0 || anyRunning()); document.querySelectorAll(".run .rtime").forEach((n) => {}); }, 3000);
+    setInterval(() => {
+      refreshRuns();
+      if (document.body.classList.contains("mode-findings")) loadFindings();
+      $("progress").classList.toggle("on", busy > 0 || anyRunning());
+    }, 3000);
     setInterval(health, 15000);
   </script>
 </body>
