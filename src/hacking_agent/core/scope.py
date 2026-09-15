@@ -312,6 +312,19 @@ class ScopeGuard:
                 if isinstance(r, dict) and r.get("url"):
                     out.append(r["url"])
             return self._dedupe(out)
+        # External capability providers (Browser Use / HexStrike) are UNTRUSTED
+        # and must be scope-gated exactly like native tools.
+        if tool_name == "browser_use_explore":
+            return self._dedupe([args.get("url", "")])
+        if tool_name == "hexstrike_run_capability":
+            params = args.get("parameters") or {}
+            extras = []
+            if isinstance(params, dict):
+                for k in ("target", "url", "domain"):
+                    if params.get(k):
+                        extras.append(str(params[k]))
+            return self._dedupe([args.get("target", "")] + extras)
+        # hexstrike_search_capability only lists capabilities; no network target.
         # jwt_tool is token-only unless an explicit exploit target URL is given.
         if tool_name == "jwt_tool":
             return self._dedupe([args.get("target_url", "")])

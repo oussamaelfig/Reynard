@@ -182,6 +182,11 @@ class BudgetedToolExecutor:
             f"[cyan]🔧 [{agent_name}/{decision.tool}][/] "
             f"{self._brief_args(decision.tool, decision.args)}"
         )
+        # External (untrusted) capability providers need the SAME ScopeGuard to
+        # hard-restrict the browser and re-validate URLs. Publish a read-only
+        # handle right before dispatch; adapters may only read it, never mutate.
+        if decision.tool in self.EXTERNAL_TOOLS:
+            self._publish_active_scope_guard()
         raw_result = execute_tool(decision.tool, decision.args)
 
         # ----- auto-analyze HTTP/browser responses -----
@@ -197,6 +202,9 @@ class BudgetedToolExecutor:
         self._ingest_recon_surface(decision.tool, raw_result, agent_name)
         # Authorization-matrix anomalies land on the surface as findings.
         self._ingest_authz_surface(decision.tool, raw_result, agent_name)
+        # External capability results (Browser Use / HexStrike) become surface
+        # Observations only — never findings.
+        self._ingest_external_surface(decision.tool, raw_result, agent_name)
         if signals:
             self._signals_to_facts(signals, agent_name, iteration)
             findings = self._format_findings(signals)
@@ -567,6 +575,50 @@ class BudgetedToolExecutor:
                     "agent": agent_name,
                     "tool": tool_name,
                     "summary": f"attack surface +{n} ({result.summary})",
+                    "phase": "recon",
+                })
+        except Exception:
+            pass
+
+    # Untrusted external capability tools. Their results are ingested as
+    # AttackSurface Observations only (never findings), and the active ScopeGuard
+    # is published to the adapters before dispatch.
+    EXTERNAL_TOOLS = {
+        "browser_use_explore", "hexstrike_run_capability",
+    }
+
+    def _publish_active_scope_guard(self) -> None:
+        """Expose this executor's ScopeGuard (read-only) to external adapters."""
+        try:
+            from hacking_agent.integrations.external.base import set_active_scope_guard
+            set_active_scope_guard(self.scope_guard)
+        except Exception:
+            pass
+
+    def _ingest_external_surface(self, tool_name: str, raw_result: str,
+                                 agent_name: str) -> None:
+        """Fold external-capability results into the AttackSurface as Observations
+        (and safe assets). HARD RULE: external providers never create findings —
+        this path only calls surface.observe / add_* via ingest_external_capability,
+        which itself never records a finding. Best-effort."""
+        if self.surface is None or tool_name not in self.EXTERNAL_TOOLS:
+            return
+        try:
+            from hacking_agent.integrations.external.base import (
+                ExternalCapability, ingest_external_capability,
+            )
+            data = json.loads(raw_result)
+            if not isinstance(data, dict) or "structured_observations" not in data:
+                return
+            cap = ExternalCapability.from_dict(data)
+            counts = ingest_external_capability(
+                self.surface, self.memory, cap, scope_guard=self.scope_guard)
+            if counts.get("observations"):
+                emit("finding", {
+                    "agent": agent_name, "tool": tool_name,
+                    "summary": (f"external {cap.provider}: +{counts['observations']} "
+                                f"observations, +{counts.get('endpoints', 0)} endpoints "
+                                f"(dropped {counts.get('dropped_out_of_scope', 0)} oos)"),
                     "phase": "recon",
                 })
         except Exception:

@@ -596,6 +596,20 @@ class Orchestrator:
             "REYNARD_REPORT_GATING", "1"
         ).lower() not in ("0", "false", "no")
 
+        # ---- optional external capabilities (Browser Use / HexStrike) ----
+        # Untrusted, optional. Gated to production missions and to a small budget
+        # of invocations; only fire when deterministic triggers say the expected
+        # information gain justifies the cost.
+        self._external_enabled = os.getenv(
+            "REYNARD_EXTERNAL_ENABLED", "1"
+        ).lower() not in ("0", "false", "no", "off")
+        self._external_ran: dict[str, bool] = {}
+        self._hexstrike_hinted: set[str] = set()
+        self._external_invocations = 0
+        self._max_external_invocations = int(
+            os.getenv("REYNARD_MAX_EXTERNAL_INVOCATIONS", "6") or 6
+        )
+
     # ---- category-profiler routing hook (shared with WS5 sibling) --------
 
     def _detect_target_category(self) -> str:
@@ -732,6 +746,12 @@ class Orchestrator:
         # Refresh the hottest OPEN hypothesis + mirror its phase into memory so
         # the coordinator and RAG methodology loader see the active vector/phase.
         self._select_active_hypothesis()
+
+        # Clever triggering: consider an OPTIONAL external capability (Browser Use
+        # workflow discovery / HexStrike specialist) when deterministic rules say
+        # the expected information gain justifies the cost. No-op in benchmark
+        # mode or when providers are unavailable.
+        self._maybe_invoke_external()
 
         try:
             decision: CoordinatorDecision = self.coordinator.decide(
@@ -1169,6 +1189,191 @@ class Orchestrator:
                 )
         except Exception as e:
             self.logger.log(f"[DELTA] surface agenda sync failed: {e}")
+
+    # ---- optional external capabilities (Browser Use / HexStrike) --------
+
+    # Vuln classes / hypothesis needs that benefit from a HexStrike specialist
+    # because Reynard has no strong native tool for them.
+    _HEXSTRIKE_GAP_NEEDS = {
+        "parameter", "hidden parameter", "graphql", "cloud", "s3", "aws",
+        "kubernetes", "wordpress", "cms", "waf", "fingerprint",
+    }
+    # Technologies whose presence is a niche signal worth a specialist.
+    _NICHE_TECH = ("graphql", "wordpress", "kubernetes", "s3", "firebase",
+                   "grpc", "soap", "wsdl", "saml")
+
+    def _external_providers(self):
+        """Lazily construct the optional providers; safe if packages absent."""
+        try:
+            from hacking_agent.integrations.external.browser_use import get_explorer
+            from hacking_agent.integrations.external.hexstrike import get_broker
+            return get_explorer(), get_broker()
+        except Exception:
+            return None, None
+
+    def _collect_trigger_signals(self):
+        from hacking_agent.integrations.external.base import TriggerSignals
+        from hacking_agent.core import attack_surface as _asm
+        explorer, broker = self._external_providers()
+        bu_avail = bool(explorer and explorer.available())
+        hx_avail = bool(broker and broker.available())
+
+        # Surface-derived signals.
+        js_count = len(self.surface.query(_asm.KIND_JS)) if self.surface else 0
+        endpoints = self.surface.query(_asm.KIND_ENDPOINT) if self.surface else []
+        endpoint_count = len(endpoints)
+        workflow_count = len(self.surface.query(_asm.KIND_WORKFLOW)) if self.surface else 0
+
+        tech = str(self.memory.get_fact("technology_stack", "") or "").lower()
+        is_spa = (js_count >= 3) or any(
+            fw in tech for fw in ("angular", "react", "vue", "svelte", "next"))
+
+        # Auth present: >1 identity registered or an authenticated session.
+        has_auth = False
+        try:
+            reg = session_mod.get_registry()
+            names = reg.names()
+            has_auth = len(names) > 1 or any(
+                reg.get(n).authenticated for n in names)
+        except Exception:
+            pass
+        if not has_auth and self.surface:
+            has_auth = bool(self.surface.query(_asm.KIND_IDENTITY)) or any(
+                "login" in (e.identifier.lower()) for e in endpoints)
+
+        complex_workflow = workflow_count > 0 or any(
+            e.attrs.get("form") for e in endpoints)
+        crawler_incomplete = (js_count > 0 and endpoint_count < 5)
+
+        # Hypothesis-driven HexStrike signals.
+        need = ""
+        active = self.active_hypothesis
+        if active is not None:
+            need = f"{active.vuln_type} {active.vector} {active.text}".lower()
+        strong_gap = bool(active) and any(k in need for k in self._HEXSTRIKE_GAP_NEEDS)
+        niche = any(t in tech or t in need for t in self._NICHE_TECH)
+        stalled = (self._stall_forced_pivots > 0
+                   or self.sm.consecutive_failures >= 2)
+
+        hyp_sig = self._recon_signature(active) if active else ""
+        return TriggerSignals(
+            mission_production=self.mission.is_production,
+            browser_use_available=bu_avail,
+            hexstrike_available=hx_avail,
+            budget_ok=not bool(self._budget_exceeded()),
+            is_spa=is_spa, has_auth=has_auth, complex_workflow=complex_workflow,
+            crawler_incomplete=crawler_incomplete,
+            already_ran_browser_use=self._external_ran.get("browser_use", False),
+            strong_hypothesis_without_native_tool=strong_gap,
+            stalled_after_native_attempts=stalled,
+            niche_tech_detected=niche,
+            already_ran_hexstrike_for_hypothesis=(hyp_sig in self._hexstrike_hinted),
+        )
+
+    def _maybe_invoke_external(self) -> None:
+        """Deterministically decide whether to invoke an optional external
+        capability, and (for Browser Use) dispatch it through the executor so it
+        is scope/budget-gated and its observations feed the surface. For HexStrike
+        it injects a hint so Reynard's own reasoning chooses the capability."""
+        if not self._external_enabled or not self.mission.is_production:
+            return
+        if self._external_invocations >= self._max_external_invocations:
+            return
+        try:
+            from hacking_agent.integrations.external.base import (
+                evaluate_triggers, PROVIDER_BROWSER_USE, PROVIDER_HEXSTRIKE,
+            )
+            signals = self._collect_trigger_signals()
+            if not (signals.browser_use_available or signals.hexstrike_available):
+                return
+            decisions = {d.provider: d for d in evaluate_triggers(signals)}
+
+            bu = decisions.get(PROVIDER_BROWSER_USE)
+            if bu and bu.should_invoke and self.sm.can_call_tool("browser_use_explore"):
+                self._invoke_browser_use(bu)
+                return  # one external action per step
+
+            hx = decisions.get(PROVIDER_HEXSTRIKE)
+            if hx and hx.should_invoke:
+                self._hint_hexstrike(hx)
+        except Exception as e:
+            self.logger.log(f"[EXTERNAL] trigger evaluation failed: {e}")
+
+    def _invoke_browser_use(self, decision) -> None:
+        """Dispatch Browser Use through the BudgetedToolExecutor (scope + budget +
+        surface ingest), then record the feedback-loop bookkeeping."""
+        task = ("Map the application's functionality and workflows as a real user "
+                "(signup/login/onboarding/invites/role changes/settings/dashboards/"
+                "checkout/uploads/multi-step forms). Report pages, actions, "
+                "discovered API/network requests, auth state and workflow states. "
+                "Do NOT attempt exploitation.")
+        active_session = ""
+        try:
+            active_session = session_mod.get_registry().active().name
+        except Exception:
+            pass
+        console.print(
+            f"[bold blue]🌐 External: Browser Use workflow discovery "
+            f"(gain={decision.expected_information_gain} cost={decision.estimated_cost}) "
+            f"— {decision.reason}[/]")
+        self.logger.log(f"[EXTERNAL] browser_use invoke: {decision.reason}")
+        emit("external_invoke", {"provider": "browser_use", **decision.to_dict()})
+        outcome = self.tool_executor.call(
+            ToolDecision(
+                tool="browser_use_explore",
+                args={"url": self.target_url, "task": task,
+                      "session": active_session},
+                reasoning=f"External workflow discovery: {decision.reason}",
+                expected_signal="pages/actions/APIs/workflow states discovered",
+            ),
+            agent_name="external/browser_use", phase="recon",
+            iteration=self.sm.iteration,
+        )
+        self._external_ran["browser_use"] = True
+        self._external_invocations += 1
+        self._record_external_feedback("browser_use", outcome, decision)
+
+    def _hint_hexstrike(self, decision) -> None:
+        """Nudge Reynard's reasoning to consider a HexStrike specialist for the
+        ACTIVE hypothesis. Reynard (not the trigger) decides WHICH capability via
+        hexstrike_search_capability; this keeps the researcher in control."""
+        active = self.active_hypothesis
+        need = ""
+        if active is not None:
+            need = (active.vuln_type or active.vector or active.text or "")[:120]
+        hint = (f"A specialist capability may cheaply increase confidence for the "
+                f"current hypothesis ({need or 'active vector'}). Consider "
+                f"hexstrike_search_capability(\"{need or 'the missing capability'}\") "
+                f"and run at most one gap-filling capability, preferring native tools.")
+        self.memory.add_fact("external_capability_hint", hint,
+                             confidence="suspected", source="external/trigger")
+        emit("external_invoke", {"provider": "hexstrike", **decision.to_dict()})
+        self.logger.log(f"[EXTERNAL] hexstrike hint: {decision.reason}")
+        if active is not None:
+            self._hexstrike_hinted.add(self._recon_signature(active))
+        self._external_invocations += 1
+
+    def _record_external_feedback(self, provider: str, outcome: dict,
+                                  decision) -> None:
+        """Close the observe->interpret->next-action loop after an external run.
+
+        The observations were already folded into the surface by the executor
+        (_ingest_external_surface). Here we record an interpretation nudge in
+        durable memory so the next coordinator/analyst turn reasons about what
+        changed and picks the cheapest next experiment."""
+        try:
+            summary = str((outcome or {}).get("result", ""))[:200]
+            self.memory.add_fact(
+                f"external_interpretation_{provider}",
+                (f"{provider} ran ({decision.reason}). Interpret the new surface "
+                 f"observations: did they reveal endpoints/workflows/identities that "
+                 f"enable an authorization/business-logic/hidden-functionality "
+                 f"hypothesis? Choose the cheapest next experiment. summary={summary}"),
+                confidence="suspected", source=f"external/{provider}")
+            # Fold any freshly discovered surface leads into the agenda now.
+            self._sync_agenda_from_surface()
+        except Exception:
+            pass
 
     def _select_active_hypothesis(self) -> Hypothesis | None:
         self._sync_agenda_from_memory()
