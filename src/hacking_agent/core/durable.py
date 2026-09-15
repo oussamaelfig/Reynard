@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS techniques (
     detail    TEXT,
     PRIMARY KEY (lab_class, technique, tool, outcome)
 );
+CREATE TABLE IF NOT EXISTS surface_snapshots (
+    target    TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    snapshot  TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY (target, scope_key)
+);
 """
 
 
@@ -248,6 +255,52 @@ class DurableStore:
                  "verdict": r[5], "agent_name": r[6], "timestamp": r[7]}
                 for r in cur.fetchall()
             ]
+
+    # ---- attack surface (continuous / delta hunting) -------------------
+
+    def save_surface(self, target: str, scope_key: str,
+                     snapshot: dict[str, Any]) -> None:
+        """Persist an attack-surface snapshot for a (target, scope_key).
+
+        Only the latest snapshot per scope is kept; the AttackSurface merges
+        prior state on load, so this is an idempotent upsert of the full model.
+        """
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO surface_snapshots
+                   (target, scope_key, snapshot, updated_at)
+                   VALUES (?,?,?,?)""",
+                (target or "", scope_key or "",
+                 json.dumps(snapshot, default=str), _now()),
+            )
+            self._conn.commit()
+
+    def load_surface(self, target: str, scope_key: str) -> dict[str, Any] | None:
+        """Load the most recent surface snapshot for a scope.
+
+        Prefers an exact (target, scope_key) match, then any snapshot sharing
+        the scope_key (so a new target host under the same root domain still
+        inherits the prior surface for delta hunting)."""
+        with self._lock:
+            cur = self._conn.execute(
+                """SELECT snapshot FROM surface_snapshots
+                   WHERE target=? AND scope_key=?""",
+                (target or "", scope_key or ""),
+            )
+            row = cur.fetchone()
+            if row is None and scope_key:
+                cur = self._conn.execute(
+                    """SELECT snapshot FROM surface_snapshots
+                       WHERE scope_key=? ORDER BY updated_at DESC LIMIT 1""",
+                    (scope_key,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
 
     # ---- learned techniques / failure patterns -------------------------
 
