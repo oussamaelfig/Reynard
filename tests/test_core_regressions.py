@@ -820,8 +820,8 @@ class MiscFamilyFastPathTests(unittest.TestCase):
 
     def test_tool_registry_parity(self):
         # 62 base + 8 recon wrappers + 1 authz matrix = 71.
-        self.assertEqual(len(TOOL_SCHEMAS), 71)
-        self.assertEqual(len(TOOL_FUNCTIONS), 71)
+        self.assertEqual(len(TOOL_SCHEMAS), 72)
+        self.assertEqual(len(TOOL_FUNCTIONS), 72)
 
 
 class ToolRegressionTests(unittest.TestCase):
@@ -3011,8 +3011,8 @@ class ToolParityTests(unittest.TestCase):
     def test_tool_registry_parity(self):
         # 62 base + 8 structured recon wrappers + 1 authz matrix (subfinder/dnsx/httpx/
         # naabu/katana/waybackurls/crtsh/urlscan/authz_matrix_scan).
-        self.assertEqual(len(TOOL_FUNCTIONS), 71)
-        self.assertEqual(len(TOOL_SCHEMAS), 71)
+        self.assertEqual(len(TOOL_FUNCTIONS), 72)
+        self.assertEqual(len(TOOL_SCHEMAS), 72)
 
 
 class ToolDecisionLiteralTests(unittest.TestCase):
@@ -3043,7 +3043,7 @@ class ToolDecisionLiteralTests(unittest.TestCase):
     def test_literal_matches_registry_exactly_and_validates(self):
         names = self._literal_names()
         self.assertEqual(names, set(TOOL_FUNCTIONS))
-        self.assertEqual(len(names), 71)
+        self.assertEqual(len(names), 72)
         # A ToolDecision selecting a Phase-2 tool must now validate.
         decision = ToolDecision(
             tool="race_send",

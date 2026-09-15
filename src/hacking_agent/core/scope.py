@@ -266,7 +266,8 @@ class ScopeGuard:
     def _extract_targets(self, tool_name: str, args: dict) -> list[str]:
         """Pull network targets from a tool call's args."""
         if tool_name in ("http_request", "browser_navigate",
-                         "browser_execute_js", "browser_interact"):
+                         "browser_execute_js", "browser_interact",
+                         "browser_map"):
             return self._dedupe([args.get("url", "")])
         if tool_name in ("capture_baseline", "diff_against_baseline",
                          "nuclei_scan", "extract_js_endpoints",

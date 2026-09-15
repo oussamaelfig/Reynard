@@ -433,7 +433,96 @@ def _http_get(url: str, *, headers: Optional[dict] = None,
 RECON_WRAPPER_TOOLS = frozenset({
     "subfinder_scan", "dnsx_resolve", "httpx_probe", "naabu_scan",
     "katana_crawl", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
+    "browser_map",
 })
+
+
+def records_from_browser_network(network: dict[str, Any],
+                                 base_url: str = "") -> list[ReconRecord]:
+    """Convert a Playwright application-map capture into structured records.
+
+    The capture holds the network traffic a real browser generated: requests
+    (with resource types), responses (status/content-type/source-map header),
+    websockets, plus DOM-extracted links and forms. This turns SPA/XHR/fetch/
+    WebSocket/JS-bundle/source-map traffic into an endpoint+parameter inventory.
+    """
+    from hacking_agent.core.attack_surface import endpoint_key
+    records: list[ReconRecord] = []
+    seen: set[tuple] = set()
+    resp_by_url = {r.get("url"): r for r in network.get("responses", []) if isinstance(r, dict)}
+
+    for req in network.get("requests", []) or []:
+        if not isinstance(req, dict):
+            continue
+        url = str(req.get("url", ""))
+        if not url.startswith("http"):
+            continue
+        method = str(req.get("method", "GET")).upper()
+        rtype = str(req.get("resource_type", ""))
+        key = (method, url.split("#", 1)[0])
+        if key in seen:
+            continue
+        seen.add(key)
+        resp = resp_by_url.get(url, {})
+        status = resp.get("status")
+        ctype = str(resp.get("content_type", ""))
+        if rtype == "script" or _is_js(url):
+            has_map = bool(resp.get("sourcemap_header")) or url.endswith(".map")
+            records.append(ReconRecord(kind=asm.KIND_JS, identifier=url,
+                                       attrs={"has_source_map": has_map,
+                                              "via": "browser"}))
+            smap = resp.get("sourcemap_header")
+            if smap:
+                records.append(ReconRecord(kind=asm.KIND_SOURCEMAP,
+                                           identifier=str(smap),
+                                           attrs={"js": url}))
+            continue
+        attrs: dict[str, Any] = {"method": method, "via": "browser"}
+        if status is not None:
+            attrs["status_code"] = status
+        if ctype:
+            attrs["content_type"] = ctype
+        is_api = rtype in ("xhr", "fetch") or "/api" in url.lower() or "graphql" in url.lower()
+        if is_api:
+            attrs["is_api"] = True
+            attrs["xhr"] = rtype in ("xhr", "fetch")
+        records.append(ReconRecord(kind=asm.KIND_ENDPOINT, identifier=url, attrs=attrs))
+
+    for ws in network.get("websockets", []) or []:
+        if ws:
+            records.append(ReconRecord(kind=asm.KIND_WEBSOCKET, identifier=str(ws)))
+
+    for form in network.get("forms", []) or []:
+        if not isinstance(form, dict):
+            continue
+        action = str(form.get("action") or base_url or "")
+        if not action.startswith("http"):
+            continue
+        method = str(form.get("method") or "GET").upper() or "GET"
+        records.append(ReconRecord(kind=asm.KIND_ENDPOINT, identifier=action,
+                                   attrs={"method": method, "form": True}))
+        ek = endpoint_key(method, action)
+        for name in form.get("inputs", []) or []:
+            if name:
+                records.append(ReconRecord(
+                    kind=asm.KIND_PARAMETER,
+                    identifier=f"{ek}::{name}::body",
+                    attrs={"name": str(name), "location": "body", "endpoint": ek}))
+
+    for link in network.get("links", []) or []:
+        link = str(link or "")
+        if link.startswith("http"):
+            records.append(ReconRecord(kind=asm.KIND_ENDPOINT, identifier=link,
+                                       attrs={"method": "GET", "link": True}))
+    return records
+
+
+def browser_map_result(network: dict[str, Any], base_url: str = "",
+                       error: str = "") -> ReconResult:
+    if error:
+        return ReconResult(tool="browser_map", ok=False, error=error[:300])
+    records = records_from_browser_network(network or {}, base_url)
+    return ReconResult(tool="browser_map", records=records)
 
 
 def result_from_json(raw: str) -> Optional[ReconResult]:

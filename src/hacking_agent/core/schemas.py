@@ -51,7 +51,7 @@ ToolName = Literal[
     "run_shell", "request_smuggling_probe",
     "tool_inventory", "read_file", "write_file", "list_dir",
     "http_request", "browser_navigate", "browser_execute_js",
-    "browser_interact", "analyze_response",
+    "browser_interact", "browser_map", "analyze_response",
     # Out-of-band interaction (interactsh)
     "oob_get_domain", "oob_poll",
     # Multi-session auth

@@ -460,6 +460,34 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_map",
+            "description": (
+                "APPLICATION MAPPER. Navigate a page as a real (optionally "
+                "authenticated) browser and capture ALL network traffic — XHR/"
+                "fetch/API calls, WebSockets, JS bundles + source maps — plus DOM "
+                "links and forms, returning a STRUCTURED endpoint/parameter "
+                "inventory that auto-populates the attack surface. Use this to "
+                "discover a SPA's real API surface and authenticated traffic that "
+                "a plain crawler misses."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "wait_ms": {"type": "integer",
+                                "description": "Settle time to let XHR/fetch fire (default 3500)."},
+                    "extract_links": {"type": "boolean",
+                                      "description": "Also harvest DOM anchors + forms (default true)."},
+                    "session": {"type": "string",
+                                "description": "Auth session name; omit for active."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
     # =========================================================================
     # Out-of-Band (Interactsh) — for blind vulnerabilities
     # =========================================================================
@@ -2717,6 +2745,30 @@ def browser_interact(
     }, indent=2)
 
 
+def browser_map(url: str, wait_ms: int = 3500, extract_links: bool = True,
+                session: str | None = None) -> str:
+    """Map a web application with a real (optionally authenticated) browser.
+
+    Navigates the page, captures ALL network traffic (XHR/fetch/API calls,
+    WebSockets, JS bundles + source maps) and DOM links/forms, then returns a
+    STRUCTURED endpoint/parameter inventory that auto-populates the Attack
+    Surface. Prefer this over browser_navigate when you want to discover a SPA's
+    real API surface and authenticated traffic.
+    """
+    from hacking_agent.core import recon_wrappers as rw
+    result = browser_mod.map_application(
+        url, wait_ms=wait_ms, session=session, extract_links=extract_links)
+    if not result.get("ok") and result.get("error"):
+        res = rw.browser_map_result({}, base_url=url, error=result.get("error", ""))
+    else:
+        res = rw.browser_map_result(result.get("network", {}), base_url=url)
+    payload = res.to_dict()
+    payload["final_url"] = result.get("final_url", "")
+    payload["title"] = result.get("title", "")
+    payload["xss_proof"] = result.get("xss_proof", "")
+    return json.dumps(payload, default=str)
+
+
 def analyze_response(response_body: str, payload: str = "") -> str:
     """
     Analyze an HTTP response using the ResponseAnalyzer.
@@ -4188,6 +4240,12 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         url=args["url"],
         actions=args["actions"],
         wait_ms=args.get("wait_ms", 2000),
+    ),
+    "browser_map": lambda args: browser_map(
+        url=args["url"],
+        wait_ms=args.get("wait_ms", 3500),
+        extract_links=args.get("extract_links", True),
+        session=args.get("session"),
     ),
     "analyze_response": lambda args: analyze_response(
         response_body=args["response_body"],
