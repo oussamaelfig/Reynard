@@ -31,10 +31,11 @@ INDEX_HTML = UI_DIR / "index.html"
 
 
 def _sse(event: dict[str, Any]) -> str:
-    ev_type = str(event.get("type", "message"))
+    # No `event:` line: every frame arrives on the client's single onmessage
+    # handler; the event kind travels inside the JSON payload as `type`.
     ev_id = event.get("id", "")
     data = json.dumps(event, ensure_ascii=False, default=str)
-    return f"id: {ev_id}\nevent: {ev_type}\ndata: {data}\n\n"
+    return f"id: {ev_id}\ndata: {data}\n\n"
 
 
 def _tail_events(store: RunStore, run_id: str, last_id: int) -> Iterator[str]:
@@ -75,8 +76,8 @@ def _tail_events(store: RunStore, run_id: str, last_id: int) -> Iterator[str]:
             # Give the file one more drain pass, then close the stream.
             drain_passes += 1
             if drain_passes >= 2:
-                yield ("event: done\n"
-                       f"data: {json.dumps({'status': rec.status.value})}\n\n")
+                yield ("data: " + json.dumps(
+                    {"type": "_done", "status": rec.status.value}) + "\n\n")
                 return
         time.sleep(0.5)
         yield ": keep-alive\n\n"
