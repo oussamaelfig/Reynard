@@ -26,6 +26,54 @@ from fastapi.responses import (
 from hacking_agent.harness.jobs import JobManager
 from hacking_agent.harness.models import RunRequest
 from hacking_agent.harness.store import RunStore
+from hacking_agent.harness.submission import (
+    build_submission_markdown,
+    iter_report_findings,
+    report_meta,
+)
+
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def _read_report_json(store: RunStore, run_id: str) -> dict[str, Any]:
+    _, json_path = store.report_paths(run_id)
+    if not json_path.exists():
+        return {}
+    try:
+        return json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
+    """Flatten every run's findings into copy-paste submission records."""
+    out: list[dict[str, Any]] = []
+    for rec in store.list(limit=500):
+        rj = _read_report_json(store, rec.id)
+        if not rj:
+            continue
+        meta = report_meta(rj)
+        for idx, f in enumerate(iter_report_findings(rj)):
+            out.append({
+                "finding_id": f"{rec.id}:{idx}",
+                "run_id": rec.id,
+                "created_at": rec.created_at,
+                "target": f.get("target", ""),
+                "title": f.get("title", ""),
+                "vuln_type": f.get("vuln_type", ""),
+                "severity": (f.get("severity") or "medium").lower(),
+                "cwe": f.get("cwe", ""),
+                "cvss_score": f.get("cvss_score", 0),
+                "cvss_vector": f.get("cvss_vector", ""),
+                "endpoint": f.get("endpoint", ""),
+                "parameter": f.get("parameter", ""),
+                "verified": bool(f.get("verified")),
+                "submission": build_submission_markdown(f, meta),
+            })
+    out.sort(key=lambda r: (0 if r["verified"] else 1,
+                            _SEVERITY_RANK.get(r["severity"], 5),
+                            -float(r.get("cvss_score") or 0)))
+    return out
 
 UI_DIR = Path(__file__).parent / "ui"
 INDEX_HTML = UI_DIR / "index.html"
@@ -170,6 +218,34 @@ def create_app(store: Optional[RunStore] = None,
                 report_json = {}
         return {"markdown": md_path.read_text(encoding="utf-8"),
                 "json": report_json}
+
+    @app.get("/api/findings")
+    def list_findings(_: None = Depends(require_token)) -> dict[str, Any]:
+        items = _collect_findings(store)
+        return {"count": len(items), "findings": items}
+
+    @app.get("/api/findings.md", response_class=PlainTextResponse)
+    def findings_markdown(_: None = Depends(require_token)) -> PlainTextResponse:
+        items = _collect_findings(store)
+        if not items:
+            body = "# Findings\n\nNo findings recorded yet.\n"
+        else:
+            parts = [f"# Reynard findings — {len(items)} submission(s)\n"]
+            parts += [it["submission"] for it in items]
+            body = "\n\n---\n\n".join(parts)
+        return PlainTextResponse(body, headers={
+            "Content-Disposition": 'attachment; filename="reynard-findings.md"'})
+
+    @app.get("/api/runs/{run_id}/report.md", response_class=PlainTextResponse)
+    def download_report_md(run_id: str,
+                           _: None = Depends(require_token)) -> PlainTextResponse:
+        md_path, _j = store.report_paths(run_id)
+        if not md_path.exists():
+            raise HTTPException(status_code=404, detail="report not ready")
+        return PlainTextResponse(
+            md_path.read_text(encoding="utf-8"),
+            headers={"Content-Disposition":
+                     f'attachment; filename="reynard-report-{run_id}.md"'})
 
     @app.get("/api/runs/{run_id}/log", response_class=PlainTextResponse)
     def run_log(run_id: str, _: None = Depends(require_token)) -> PlainTextResponse:

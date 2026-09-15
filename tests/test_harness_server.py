@@ -153,6 +153,62 @@ def test_cancel_endpoint(tmp_path):
     assert _wait_status(c, run_id)["status"] == "cancelled"
 
 
+def _seed_report(store, run_id):
+    md = "# Security Assessment Report\n\n## Findings\n\n- SQLi\n"
+    js = {"engagement_name": "harness-run", "targets": ["https://x/"],
+          "target_count": 1, "finding_count": 1, "verified_count": 1,
+          "targets_assessed": [{"target": "https://x/", "findings": [{
+              "title": "SQL injection via `id`", "vuln_type": "sql injection",
+              "severity": "high", "cwe": "CWE-89", "cvss_score": 7.5,
+              "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "endpoint": "https://x/api/users", "parameter": "id",
+              "verified": True, "description": "id is concatenated into SQL.",
+              "impact": "DB read.", "remediation": "Parameterize.",
+              "evidence": [{"verdict": "success", "payload": "1' OR '1'='1",
+                            "request": "GET /api/users?id=1", "response": "200 OK"}]}]}]}
+    md_path, json_path = store.report_paths(run_id)
+    md_path.write_text(md, encoding="utf-8")
+    json_path.write_text(json.dumps(js), encoding="utf-8")
+
+
+def test_findings_endpoint_aggregates_submissions(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    _seed_report(store, rec.id)
+    r = c.get("/api/findings", headers=AUTH)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["count"] == 1
+    f = data["findings"][0]
+    assert f["run_id"] == rec.id and f["severity"] == "high"
+    assert f["finding_id"].startswith(rec.id)
+    assert "## Steps to Reproduce" in f["submission"]
+    assert "CWE-89" in f["submission"]
+    # token gate
+    assert c.get("/api/findings").status_code == 401
+
+
+def test_findings_markdown_download(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    _seed_report(store, rec.id)
+    r = c.get("/api/findings.md", headers=AUTH)
+    assert r.status_code == 200
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "SQL injection" in r.text and "## Proof of Concept" in r.text
+
+
+def test_report_md_download(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    assert c.get(f"/api/runs/{rec.id}/report.md", headers=AUTH).status_code == 404
+    _seed_report(store, rec.id)
+    r = c.get(f"/api/runs/{rec.id}/report.md", headers=AUTH)
+    assert r.status_code == 200
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "Security Assessment Report" in r.text
+
+
 def test_index_injects_token(tmp_path):
     _, c = _client(tmp_path)
     html = c.get("/").text
