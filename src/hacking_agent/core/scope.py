@@ -71,6 +71,7 @@ class ScopeGuard:
     #   max_total_requests:      hard cap on scoped requests (0 = off)
     #   block_destructive:       block obviously destructive actions when True
     out_of_scope: list[str] = field(default_factory=list)
+    authorized_url_prefixes: list[str] = field(default_factory=list)
     max_requests_per_second: float = 0.0
     max_total_requests: int = 0
     block_destructive: bool = False
@@ -176,6 +177,9 @@ class ScopeGuard:
             if cidr and cidr not in self.allowed_cidrs:
                 self.allowed_cidrs.append(cidr)
         self.out_of_scope = list(getattr(engagement, "out_of_scope", []) or [])
+        self.authorized_url_prefixes = list(
+            getattr(engagement, "authorized_url_prefixes", []) or []
+        )
         self.max_requests_per_second = float(
             getattr(engagement, "max_requests_per_second", 0.0) or 0.0
         )
@@ -252,7 +256,8 @@ class ScopeGuard:
             return "out_of_scope"
         # No allowlist configured => open lab behaviour; we cannot *prove*
         # in-scope, so report unknown rather than a false positive.
-        if not self.allowed_domains and not self.allowed_cidrs and not self.ALLOWLIST:
+        if (not self.allowed_domains and not self.allowed_cidrs
+                and not self.authorized_url_prefixes and not self.ALLOWLIST):
             return "unknown"
         return "in_scope" if self._is_in_scope(url_or_host) else "out_of_scope"
 
@@ -485,6 +490,32 @@ class ScopeGuard:
         except ValueError:
             pass  # Not an IP — domain check already failed
 
+        # Path-scoped allowlist (e.g. https://example.com/docs without the
+        # rest of example.com). Host-only targets never match a URL prefix.
+        if self._matches_url_prefix(target):
+            return True
+
+        return False
+
+    def _matches_url_prefix(self, target: str) -> bool:
+        if not self.authorized_url_prefixes or "://" not in (target or ""):
+            return False
+        parsed = urlparse(target)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or "/"
+        rebuilt = f"{(parsed.scheme or 'https').lower()}://{host}{path}"
+        for raw in self.authorized_url_prefixes:
+            pref = (raw or "").strip()
+            if not pref:
+                continue
+            pp = urlparse(pref if "://" in pref else f"https://{pref}")
+            phost = (pp.hostname or "").lower()
+            ppath = pp.path or "/"
+            prefix = f"{(pp.scheme or 'https').lower()}://{phost}{ppath}"
+            if rebuilt == prefix:
+                return True
+            if rebuilt.startswith(prefix.rstrip("/") + "/"):
+                return True
         return False
 
     def _validate_shell_safety(self, command: str) -> None:

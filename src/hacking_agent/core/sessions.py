@@ -41,13 +41,33 @@ from typing import Any
 
 
 CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
-SESSION_DIR = "/data/sessions"
+
+
+def _host_exec_enabled() -> bool:
+    return os.getenv("REYNARD_HOST_EXEC", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _data_root() -> str:
+    """Cookie/session files live in the Kali /data volume, or a host temp dir
+    when REYNARD_HOST_EXEC is on (no container)."""
+    if _host_exec_enabled():
+        return os.getenv("REYNARD_HOST_DATA", "/tmp/reynard-data")
+    return "/data"
+
+
+SESSION_DIR = f"{_data_root()}/sessions"
 
 
 def _docker_exec(cmd: str, timeout: int = 30) -> tuple[int, str, str]:
     try:
+        if _host_exec_enabled():
+            argv = ["bash", "-c", cmd]
+        else:
+            argv = ["docker", "exec", CONTAINER_NAME, "bash", "-c", cmd]
         r = subprocess.run(
-            ["docker", "exec", CONTAINER_NAME, "bash", "-c", cmd],
+            argv,
             capture_output=True, text=True, timeout=timeout,
         )
         return r.returncode, r.stdout, r.stderr
@@ -78,7 +98,7 @@ class SessionRegistry:
     """
 
     DEFAULT_NAME = "default"
-    LEGACY_COOKIE_JAR = "/data/cookies/cookies.txt"
+    LEGACY_COOKIE_JAR = f"{_data_root()}/cookies/cookies.txt"
 
     def __init__(self):
         self._lock = threading.RLock()
