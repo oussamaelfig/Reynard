@@ -151,6 +151,52 @@ TOOL_PROFILES: dict[str, ToolProfile] = {
     "web_search": ToolProfile(
         "web_search", frozenset({"recon", "exploit"}),
         frozenset(), "Research writeups/CVEs when stuck."),
+    # ---- structured recon wrappers -> attack surface ----
+    "subfinder_scan": ToolProfile(
+        "subfinder_scan", frozenset({"recon"}),
+        frozenset(), "Passive subdomain enumeration -> attack surface."),
+    "dnsx_resolve": ToolProfile(
+        "dnsx_resolve", frozenset({"recon"}),
+        frozenset(), "Resolve hosts (A/AAAA/CNAME) -> attack surface."),
+    "httpx_probe": ToolProfile(
+        "httpx_probe", frozenset({"recon"}),
+        frozenset(), "Probe live hosts: status/title/tech -> attack surface."),
+    "naabu_scan": ToolProfile(
+        "naabu_scan", frozenset({"recon"}),
+        frozenset({"network", "host", "service"}),
+        "Fast port scan -> attack surface services."),
+    "katana_crawl": ToolProfile(
+        "katana_crawl", frozenset({"recon"}),
+        frozenset({"angular", "react", "vue", "javascript", "spa"}),
+        "JS-aware crawl: endpoints/params/js -> attack surface."),
+    "waybackurls_fetch": ToolProfile(
+        "waybackurls_fetch", frozenset({"recon"}),
+        frozenset(), "Historical URLs (legacy/forgotten endpoints)."),
+    "crtsh_lookup": ToolProfile(
+        "crtsh_lookup", frozenset({"recon"}),
+        frozenset(), "Certificate-transparency subdomains (passive)."),
+    "urlscan_lookup": ToolProfile(
+        "urlscan_lookup", frozenset({"recon"}),
+        frozenset(), "Passive URL/domain intel (urlscan.io)."),
+    "browser_map": ToolProfile(
+        "browser_map", frozenset({"recon"}),
+        frozenset({"angular", "react", "vue", "javascript", "spa", "api"}),
+        "Authenticated app mapper: XHR/APIs/WebSockets/JS+source maps -> surface."),
+    # ---- differential authorization ----
+    "authz_matrix_scan": ToolProfile(
+        "authz_matrix_scan", frozenset({"exploit", "validate"}),
+        frozenset(), "Replay endpoints across identities -> IDOR/BOLA/BFLA/privesc."),
+    # ---- optional external capabilities ----
+    "browser_use_explore": ToolProfile(
+        "browser_use_explore", frozenset({"recon", "exploit"}),
+        frozenset({"angular", "react", "vue", "javascript", "spa", "api"}),
+        "Semantic workflow discovery (optional): signup/login/invite/role flows."),
+    "hexstrike_search_capability": ToolProfile(
+        "hexstrike_search_capability", frozenset({"recon", "exploit"}),
+        frozenset(), "Find a specialist capability for a hypothesis gap (optional)."),
+    "hexstrike_run_capability": ToolProfile(
+        "hexstrike_run_capability", frozenset({"exploit"}),
+        frozenset(), "Run one specialist tool to fill a capability gap (optional)."),
 }
 
 
@@ -161,13 +207,19 @@ _VULN_TOOL_BONUS: dict[str, dict[str, float]] = {
     "dom_xss": {"browser_execute_js": 3.0, "browser_navigate": 2.0},
     "dom_based": {"browser_execute_js": 2.5, "browser_navigate": 1.5},
     "request_smuggling": {"request_smuggling_probe": 3.0},
-    "access_control_idor": {"swap_session": 2.5, "register_session": 1.5,
-                            "diff_against_baseline": 1.5},
-    "graphql_api": {"discover_apis": 2.0, "extract_js_endpoints": 1.0},
+    "access_control_idor": {"authz_matrix_scan": 4.0, "swap_session": 2.5,
+                            "register_session": 1.5, "diff_against_baseline": 1.5,
+                            "browser_map": 1.0},
+    "graphql_api": {"discover_apis": 2.0, "extract_js_endpoints": 1.0,
+                    "hexstrike_search_capability": 1.0, "browser_map": 1.0},
     "api_testing": {"discover_apis": 2.0, "extract_js_endpoints": 1.5,
-                    "swap_session": 1.0},
+                    "swap_session": 1.0, "browser_map": 1.5,
+                    "authz_matrix_scan": 1.5, "hexstrike_search_capability": 1.0},
+    "business_logic": {"browser_use_explore": 2.5, "browser_map": 1.5,
+                       "authz_matrix_scan": 1.5},
     "information_disclosure": {"ffuf_fuzz": 1.5, "extract_js_endpoints": 1.5,
-                               "discover_apis": 1.0},
+                               "discover_apis": 1.0, "waybackurls_fetch": 1.5,
+                               "katana_crawl": 1.5, "hexstrike_search_capability": 0.8},
 }
 
 
