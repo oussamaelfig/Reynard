@@ -2231,15 +2231,33 @@ TOOL_SCHEMAS = [
 # Tool Execution Functions
 # =============================================================================
 
+def _host_exec_enabled() -> bool:
+    """Opt-in host execution backend (default OFF).
+
+    When REYNARD_HOST_EXEC=1, container commands run on the HOST via bash instead
+    of `docker exec`. This exists ONLY to run/validate Reynard on a machine
+    without the Kali container (e.g. local authorized testing). It is off by
+    default so production behavior is unchanged and the agent never runs shell on
+    the orchestrator host unless an operator explicitly enables it. ScopeGuard
+    still gates every tool call."""
+    return os.getenv("REYNARD_HOST_EXEC", "0").lower() in ("1", "true", "yes", "on")
+
+
 def _docker_exec(command: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """
     Execute a command inside the Docker container via `docker exec`.
     Returns a dict with stdout, stderr, exit_code, and truncation info.
+
+    When REYNARD_HOST_EXEC is enabled, runs on the host instead (opt-in; see
+    _host_exec_enabled).
     """
-    full_cmd = [
-        "docker", "exec", CONTAINER_NAME,
-        "bash", "-c", command
-    ]
+    if _host_exec_enabled():
+        full_cmd = ["bash", "-c", command]
+    else:
+        full_cmd = [
+            "docker", "exec", CONTAINER_NAME,
+            "bash", "-c", command
+        ]
 
     try:
         result = subprocess.run(
