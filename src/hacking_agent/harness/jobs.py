@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -25,6 +26,23 @@ WorkerCmd = Callable[[str], list]
 
 def _default_worker_cmd(run_dir: str) -> list:
     return [sys.executable, "-m", "hacking_agent.harness.run_job", run_dir]
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Signal the worker AND its children (it spawns docker exec / tools).
+
+    The worker is started in its own session (start_new_session=True), so on
+    POSIX we can signal the whole process group; otherwise fall back to
+    terminating the direct child."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        return
+    except Exception:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
 
 
 class JobManager:
@@ -131,10 +149,7 @@ class JobManager:
                 self._cancelled.discard(run_id)
                 return True
         if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            _terminate(proc)
             return True
         return False
 
@@ -146,8 +161,5 @@ class JobManager:
         with self._lock:
             procs = list(self._running.values())
         for p in procs:
-            try:
-                if p.poll() is None:
-                    p.terminate()
-            except Exception:
-                pass
+            if p.poll() is None:
+                _terminate(p)
