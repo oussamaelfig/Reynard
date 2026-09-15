@@ -111,28 +111,32 @@ def run_target(
     *,
     max_iterations: int,
     per_target_timeout: float,
+    objective: str | None = None,
 ) -> dict[str, Any]:
     """Run the Orchestrator against a single authorized target under the RoE.
 
     Returns a per-target result row including the extracted findings. Imports
     the orchestrator lazily so the offline scope/report logic stays importable
-    without the full agent stack + optional runtime deps.
-    """
+    without the full agent stack + optional runtime deps. ``objective`` overrides
+    the default assessment goal (used by the run harness to pass the operator's
+    free-text description)."""
     from hacking_agent.cli.orchestrator import Orchestrator
 
     console.print(f"[bold cyan]▶ Assessing target:[/] {target_url}")
     holder: dict[str, Any] = {}
+    default_objective = (
+        "Authorized security assessment: recon, enumerate, and test "
+        "the in-scope target for exploitable vulnerabilities, then "
+        "produce evidence-backed findings."
+    )
+    run_objective = (objective or "").strip() or default_objective
 
     def _run() -> None:
         try:
             orch = Orchestrator(
                 target_url=target_url,
                 max_iterations=max_iterations,
-                objective=(
-                    "Authorized security assessment: recon, enumerate, and test "
-                    "the in-scope target for exploitable vulnerabilities, then "
-                    "produce evidence-backed findings."
-                ),
+                objective=run_objective,
                 scope_domains=list(engagement.authorized_domains),
                 scope_cidrs=list(engagement.authorized_cidrs),
                 # An authorized engagement is always a PRODUCTION assessment:
