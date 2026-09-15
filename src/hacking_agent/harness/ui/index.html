@@ -227,6 +227,7 @@
             <button class="ghost danger" id="d-cancel" style="display:none">Cancel</button>
           </span>
         </div>
+        <div class="msg" id="d-err" style="margin:10px 15px 0"></div>
         <div class="tabs">
           <div class="tab active" data-tab="live">Live</div>
           <div class="tab" data-tab="console">Console</div>
@@ -315,7 +316,7 @@
         <div class="run ${r.id === selected ? "active" : ""}" data-id="${r.id}">
           <span class="id">${esc(r.id)}</span>
           <span class="badge s-${r.status}">${r.status}</span>
-          <span class="tg">${esc(r.targets.join(", ") || r.description || "—")} · ${r.findings_count} finding(s), ${r.verified_count} verified</span>
+          <span class="tg">${esc(r.targets.join(", ") || r.description || "—")} · ${r.findings_count} finding(s)${r.error ? " · " + esc(r.error).slice(0, 80) : ""}</span>
         </div>`).join("");
       el.querySelectorAll(".run").forEach((n) => n.onclick = () => selectRun(n.dataset.id));
     }
@@ -340,6 +341,14 @@
         ? `${esc(id)} · <span class="badge s-${rec.status}">${rec.status}</span> · ${rec.findings_count} finding(s)`
         : esc(id);
       $("d-cancel").style.display = rec && (rec.status === "queued" || rec.status === "running") ? "" : "none";
+      const errEl = $("d-err");
+      if (rec && rec.error) {
+        errEl.className = "msg err";
+        errEl.textContent = rec.error;
+      } else {
+        errEl.className = "msg";
+        errEl.textContent = "";
+      }
       return rec;
     }
 

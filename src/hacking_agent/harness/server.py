@@ -211,6 +211,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     import uvicorn
 
+    from hacking_agent.harness.envload import load_operator_env, llm_key_present
+
+    loaded = load_operator_env()
+    if loaded:
+        print(f"[reynard-harness] loaded env from {loaded}")
+    if not llm_key_present():
+        print("[reynard-harness] WARNING: no LLM API key loaded. Runs will fail "
+              "immediately. Put DEEPSEEK_API_KEY or LLM_DEFAULT_API_KEY in the "
+              "repo .env and restart this process.")
+
     parser = argparse.ArgumentParser(description="Reynard run harness console")
     parser.add_argument("--host", default=os.getenv("REYNARD_HARNESS_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int,
