@@ -292,6 +292,22 @@ reynard-assess --engagement eval/engagement.sample.yaml \
 
 Engagement configs declare authorized domains/CIDRs, out-of-scope denylist, rate limits, destructive-action policy, and testing window. **Reynard refuses to run without an authorized scope.**
 
+### Run harness (local web console)
+
+Prefer a UI over the CLI? Submit a target + scope + objective in a form, watch
+live progress, and read the report — the agents run in the background against the
+same Dockerized runtime, still fully scope- and evidence-gated.
+
+```bash
+pip install -e ".[harness]"
+docker compose up -d
+export REYNARD_HARNESS_TOKEN="$(openssl rand -hex 24)"   # optional; auto-generated if unset
+reynard-harness                                          # http://127.0.0.1:8787/
+```
+
+Localhost-only + token-gated, one run per subprocess (isolated globals),
+serialized for the single-operator MVP. Details: [`docs/harness.md`](./docs/harness.md).
+
 ### Authenticated / IDOR testing
 
 ```bash

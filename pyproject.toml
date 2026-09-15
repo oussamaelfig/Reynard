@@ -36,11 +36,22 @@ external = [
   "browser-use>=0.13",
 ]
 
+# Optional local web console (run harness). The base install and all CLIs work
+# without these; only `reynard-harness` needs them.
+harness = [
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+]
+
 [project.scripts]
 reynard = "hacking_agent.cli.agent:main"
 reynard-orchestrator = "hacking_agent.cli.orchestrator:main"
 reynard-lab-eval = "hacking_agent.cli.lab_eval:main"
 reynard-assess = "hacking_agent.cli.assess:main"
+reynard-harness = "hacking_agent.harness.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"hacking_agent.harness.ui" = ["*.html"]
