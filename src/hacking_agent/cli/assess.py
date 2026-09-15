@@ -253,8 +253,30 @@ def write_reports(
 
 def run_assessment(args: argparse.Namespace) -> int:
     """Load the engagement, resolve targets, run each, and write the report."""
+    bounty_source = getattr(args, "bounty_scope", None)
+    if not args.engagement and not bounty_source:
+        console.print("[red]Provide --engagement or --bounty-scope.[/]")
+        return 2
     try:
-        engagement = load_engagement(args.engagement)
+        if bounty_source:
+            # Bug-bounty program scope -> Engagement (offline file or, when
+            # HackerOne credentials are set, the HackerOne API). This only
+            # PRODUCES the engagement; ScopeGuard remains the sole authority.
+            from hacking_agent.integrations.bounty import (
+                BountyScopeError, build_engagement_from_source,
+            )
+            try:
+                engagement = build_engagement_from_source(bounty_source)
+            except BountyScopeError as exc:
+                console.print(f"[red]Bounty scope error: {exc}[/]")
+                return 2
+            console.print(
+                f"[dim]Imported bounty scope from {bounty_source}: "
+                f"{len(engagement.authorized_domains)} in-scope domain(s), "
+                f"{len(engagement.out_of_scope)} out-of-scope.[/]"
+            )
+        else:
+            engagement = load_engagement(args.engagement)
     except EngagementError as exc:
         console.print(f"[red]Engagement config error: {exc}[/]")
         return 2
@@ -310,8 +332,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--engagement",
-        required=True,
+        default=None,
         help="Engagement config file (YAML or JSON). See eval/engagement.sample.yaml.",
+    )
+    parser.add_argument(
+        "--bounty-scope",
+        default=None,
+        help=(
+            "Bug-bounty program scope source: a structured scope file "
+            "(YAML/JSON) OR 'hackerone:<program-handle>' to import structured "
+            "scopes from the HackerOne API (requires HACKERONE_API_USERNAME + "
+            "HACKERONE_API_TOKEN). Alternative to --engagement."
+        ),
     )
     parser.add_argument(
         "--out",
