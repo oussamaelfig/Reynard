@@ -733,11 +733,13 @@ class BaseAgent(ABC):
 
     def __init__(self, provider: LLMProvider, memory: AgentMemory,
                   state_machine: StateMachine, evidence: EvidenceStore,
-                  tool_executor: BudgetedToolExecutor | None = None):
+                  tool_executor: BudgetedToolExecutor | None = None,
+                  evidence_bundles: Any = None):
         self.provider = provider
         self.memory = memory
         self.sm = state_machine
         self.evidence = evidence
+        self.evidence_bundles = evidence_bundles
         self.tools = tool_executor    # may be None for coordinator/reporter
         self._ctx_snapshot: dict[str, Any] | None = None
         if not self.name:

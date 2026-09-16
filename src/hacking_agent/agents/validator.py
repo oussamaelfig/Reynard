@@ -29,6 +29,8 @@ complete in the report.
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from typing import Any
 
 from rich.console import Console
 
@@ -49,12 +51,14 @@ prove it" better than "we said it was real and it wasn't".
 
 # RE-TEST PROTOCOL (run probes in this order)
 1. REPLAY  - Re-run the exact same payload. Same effect? Still works?
-2. COUNTER - Run a NEUTERED variant (e.g. for SQLi: same param but
+2. REPLAY AGAIN in a fresh or explicitly controlled context. One response is
+             never enough.
+3. COUNTER - Run a NEUTERED variant (e.g. for SQLi: same param but
              benign value; for XSS: same trigger context but text only;
              for SSRF: same parameter, internal IP that DOESN'T exist).
              If the success signal STILL appears, the signal is
              environmental and the original PoC was a false positive.
-3. VARY    - Perturb the payload predictably (encoding, position, case).
+4. VARY    - Perturb the payload predictably (encoding, position, case).
              The signal should change in a way consistent with the vuln.
              For OOB-based PoCs: re-mint a fresh OOB token, re-deliver,
              confirm a NEW callback (proves the previous one wasn't
@@ -80,6 +84,16 @@ token and session cookie are refreshed together), then submit.
 4. ONE next_probe per turn. After observing, judge.
 5. final=True ends iteration. You MUST set final=True before returning
    confirmed=True - i.e. you can only confirm AFTER finishing all probes.
+6. Every next_probe MUST include probe_kind. On the final response, provide
+   attempt_results referencing real executed attempt indexes. Confirmation
+   requires two replay/fresh_context_replay results with outcome
+   vulnerable_effect and one control result with outcome control_no_effect.
+7. Supply validation_context, exact reproduction_steps, and class-specific
+   proof_type/proof_metadata. XSS needs browser execution; injection needs a
+   payload-specific oracle; blind SSRF/XXE needs fresh attributable correlation
+   or direct sensitive-resource proof; authz needs a controlled identity and
+   ownership matrix; upload/traversal/cache/race/business logic/OAuth needs a
+   concrete exploit effect and matched control.
 
 # OUTPUT
 A SINGLE ValidationOutput JSON. While iterating, supply next_probe and
@@ -91,7 +105,8 @@ class ValidatorAgent(BaseAgent):
     name = "validator"
     role = "validator"
 
-    MAX_INNER_ITER = 6
+    VERSION = "reynard-validator/1"
+    MAX_INNER_ITER = 8
 
     def execute(self, task: AgentTask) -> AgentResult:
         poc_id = task.context.get("poc_id")
@@ -127,9 +142,9 @@ class ValidatorAgent(BaseAgent):
                     VALIDATOR_SYSTEM, prompt, ValidationOutput,
                 )
             except Exception as e:
-                return AgentResult(
-                    success=False,
-                    summary=f"Validator LLM failure at iter {inner}: {e}",
+                return self._record_validation_error(
+                    target_poc, vuln_entity,
+                    f"validator_llm_error: {type(e).__name__}: {e}",
                 )
 
             if out.final:
@@ -139,6 +154,11 @@ class ValidatorAgent(BaseAgent):
             if not out.next_probe:
                 final_output = out
                 break
+            if not out.probe_kind:
+                return self._record_validation_error(
+                    target_poc, vuln_entity,
+                    "validator_protocol_incomplete: next probe omitted probe_kind",
+                )
 
             outcome = self.tools.call(
                 out.next_probe, agent_name=self.name,
@@ -150,30 +170,32 @@ class ValidatorAgent(BaseAgent):
                 last_observation = self._summarize_result(
                     outcome["result"], outcome["signals"],
                 )
-            attempts.append({
-                "step": inner + 1,
-                "tool": out.next_probe.tool,
-                "args": str(out.next_probe.args)[:200],
-                "observation": last_observation[:400],
-                "signals": outcome.get("signals") or {},
-            })
+            attempts.append(self._capture_attempt(
+                index=inner + 1,
+                probe_kind=out.probe_kind,
+                decision=out.next_probe,
+                outcome=outcome,
+                observation=last_observation,
+                context=task.context,
+            ))
 
         if final_output is None:
             # Inner-loop budget exhausted before final - treat as ambiguous.
-            return AgentResult(
-                success=False,
-                summary=(
-                    f"Validator hit inner ceiling on {poc_id} - "
-                    f"no definitive verdict. Demoting to informational."
-                ),
-                next_recommendation=(
-                    f"Manual review of {poc_id}: validator could not "
-                    "complete its protocol within budget."
-                ),
+            return self._record_validation_error(
+                target_poc, vuln_entity,
+                "validator_protocol_incomplete: probe ceiling reached",
             )
 
         # Apply the verdict to the underlying entities.
         if final_output.confirmed:
+            metadata, protocol_error = self._validated_metadata(
+                final_output, attempts,
+            )
+            if protocol_error:
+                return self._record_validation_error(
+                    target_poc, vuln_entity, protocol_error,
+                    attempts=attempts,
+                )
             # Re-confirm: keep status verified, append a validator-source PoC
             # so the audit trail shows the second confirmation.
             confirm_poc = PoC(
@@ -184,6 +206,7 @@ class ValidatorAgent(BaseAgent):
                 response_excerpt=final_output.causal_signal[:500],
                 verdict="success",
                 agent_name=self.name,
+                validation_metadata=metadata,
             )
             self.evidence.record(confirm_poc)
             vuln_entity.attrs["status"] = "verified"
@@ -222,6 +245,15 @@ class ValidatorAgent(BaseAgent):
             response_excerpt=final_output.fp_reason[:500],
             verdict="failure",
             agent_name=self.name,
+            validation_metadata={
+                "validation_schema_version": 1,
+                "protocol_valid": False,
+                "validator_identity": self.name,
+                "validator_version": self.VERSION,
+                "validated_at": datetime.utcnow().isoformat(),
+                "rejection_reason": final_output.fp_reason[:500],
+                "attempts": attempts,
+            },
         )
         self.evidence.record(refute_poc)
 
@@ -240,6 +272,204 @@ class ValidatorAgent(BaseAgent):
         )
 
     # ---- helpers --------------------------------------------------------
+
+    def _capture_attempt(
+        self,
+        *,
+        index: int,
+        probe_kind: str,
+        decision: Any,
+        outcome: dict[str, Any],
+        observation: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        args = dict(getattr(decision, "args", {}) or {})
+        raw = str(outcome.get("result") or "")
+        parsed: dict[str, Any] = {}
+        try:
+            candidate = json.loads(raw)
+            if isinstance(candidate, dict):
+                parsed = candidate
+        except (json.JSONDecodeError, TypeError):
+            pass
+        response = (
+            parsed.get("response")
+            or parsed.get("body")
+            or parsed.get("rendered_content")
+            or parsed.get("rendered_html")
+            or parsed.get("stdout")
+            or raw
+        )
+        request = (
+            args.get("raw_request")
+            or args.get("request")
+            or json.dumps(
+                {"tool": getattr(decision, "tool", ""), "args": args},
+                sort_keys=True, default=str,
+            )
+        )
+        return {
+            "step": index,
+            "attempt_index": index,
+            "probe_kind": probe_kind,
+            "tool": getattr(decision, "tool", ""),
+            "args": json.dumps(args, sort_keys=True, default=str)[:1200],
+            "description": str(getattr(decision, "reasoning", "") or "")[:500],
+            "request": str(request)[:4000],
+            "response": str(response)[:5000],
+            "url": str(args.get("url") or context.get("target_url") or ""),
+            "method": str(args.get("method") or "GET").upper(),
+            "identity": str(
+                args.get("session")
+                or args.get("identity")
+                or context.get("active_session")
+                or "anonymous"
+            ),
+            "status_code": (
+                parsed.get("status_code")
+                if parsed.get("status_code") is not None
+                else parsed.get("status")
+            ),
+            "timestamp": datetime.utcnow().isoformat(),
+            "observation": observation[:1000],
+            "signals": outcome.get("signals") or {},
+            "blocked": bool(outcome.get("blocked")),
+        }
+
+    def _validated_metadata(
+        self,
+        output: ValidationOutput,
+        attempts: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], str]:
+        """Cross-check the model's verdict against probes actually executed."""
+        prefix = "validator_protocol_incomplete: "
+        if not output.final:
+            return {}, prefix + "confirmed verdict was not final"
+        if output.reproducibility != "reproducible":
+            return {}, prefix + "confirmed verdict was not reproducible"
+        if len(output.causal_signal.strip()) < 8:
+            return {}, prefix + "causal signal is empty or template-like"
+        if not output.validation_context:
+            return {}, prefix + "controlled/fresh validation context missing"
+        if len(output.reproduction_steps) < 2:
+            return {}, prefix + "exact reproduction steps missing"
+        if not output.proof_type or not output.proof_metadata:
+            return {}, prefix + "vulnerability-specific proof metadata missing"
+
+        actual = {int(a["attempt_index"]): a for a in attempts}
+        adjudicated: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for result in output.attempt_results:
+            index = int(result.attempt_index)
+            attempt = actual.get(index)
+            if attempt is None or index in seen:
+                return {}, prefix + "attempt result does not reference one real probe"
+            if result.probe_kind != attempt.get("probe_kind"):
+                return {}, prefix + "reported probe kind differs from executed probe"
+            if attempt.get("blocked") or result.outcome == "error":
+                return {}, prefix + "a required validation probe failed or was blocked"
+            if len(result.behavioral_signal.strip()) < 3:
+                return {}, prefix + "attempt behavioral signal missing"
+            if len(result.context_id.strip()) < 4:
+                return {}, prefix + "attempt context identifier missing"
+            seen.add(index)
+            merged = dict(attempt)
+            merged.update({
+                "outcome": result.outcome,
+                "behavioral_signal": result.behavioral_signal[:1000],
+                "context_id": result.context_id[:160],
+            })
+            adjudicated.append(merged)
+
+        positive = [
+            a for a in adjudicated
+            if a["probe_kind"] in {"replay", "fresh_context_replay"}
+            and a["outcome"] == "vulnerable_effect"
+        ]
+        controls = [
+            a for a in adjudicated
+            if a["probe_kind"] == "control"
+            and a["outcome"] == "control_no_effect"
+        ]
+        if len(positive) < 2:
+            return {}, prefix + "fewer than two positive replay probes"
+        if not controls:
+            return {}, prefix + "matched negative control did not pass"
+
+        replay_results = [
+            {
+                "attempt_index": a["attempt_index"],
+                "probe_kind": a["probe_kind"],
+                "outcome": a["outcome"],
+                "behavioral_signal": a["behavioral_signal"],
+                "context_id": a["context_id"],
+                "timestamp": a["timestamp"],
+            }
+            for a in adjudicated
+        ]
+        metadata = {
+            "validation_schema_version": 1,
+            "protocol_valid": True,
+            "validator_identity": self.name,
+            "validator_version": self.VERSION,
+            "validation_method": "two independent replays plus matched negative control",
+            "validation_context": output.validation_context,
+            "validated_at": datetime.utcnow().isoformat(),
+            "replay_count": len(positive),
+            "replay_results": replay_results,
+            "attempts": adjudicated,
+            "proof_type": output.proof_type,
+            "proof_metadata": dict(output.proof_metadata),
+            "causal_signal": output.causal_signal,
+            "reproduction_steps": list(output.reproduction_steps),
+            "oob_interactions": list(output.oob_interactions),
+            "screenshots": list(output.screenshots),
+            "validation_error": "",
+        }
+        return metadata, ""
+
+    def _record_validation_error(
+        self,
+        target_poc: PoC,
+        vuln_entity: Any,
+        reason: str,
+        *,
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> AgentResult:
+        """Persist validator exceptions/incomplete protocols as suppression."""
+        vuln_entity.attrs["validator_confirmed"] = False
+        vuln_entity.attrs["validator_error"] = reason[:500]
+        vuln_entity.attrs["status"] = "informational"
+        error_poc = PoC(
+            id=self.evidence.next_poc_id(),
+            vuln_id=target_poc.vuln_id,
+            payload=target_poc.payload,
+            request_summary=f"VALIDATOR_ERROR: {target_poc.request_summary}"[:300],
+            response_excerpt=reason[:500],
+            verdict="failure",
+            agent_name=self.name,
+            validation_metadata={
+                "validation_schema_version": 1,
+                "protocol_valid": False,
+                "validator_identity": self.name,
+                "validator_version": self.VERSION,
+                "validated_at": datetime.utcnow().isoformat(),
+                "validation_error": reason[:500],
+                "attempts": list(attempts or []),
+            },
+        )
+        self.evidence.record(error_poc)
+        console.print(
+            f"[yellow]⚠ Validator suppressed {target_poc.id}: {reason[:120]}[/]"
+        )
+        return AgentResult(
+            success=False,
+            summary=f"PoC {target_poc.id} suppressed: {reason[:240]}",
+            pocs_recorded=[error_poc],
+            next_recommendation=(
+                "Do not report; validation did not complete successfully."
+            ),
+        )
 
     def _build_prompt(self, poc: PoC, vuln_entity, attempts: list[dict],
                       last_observation: str, inner: int,
@@ -291,7 +521,7 @@ class ValidatorAgent(BaseAgent):
             f"# RE-TEST PROBES SO FAR ({len(attempts)})\n{attempts_str}\n\n"
             f"# LAST OBSERVATION\n{last_observation[:2500]}\n\n"
             f"# ITERATION {inner+1}/{self.MAX_INNER_ITER}\n"
-            "Decide what re-test probe to run next (replay -> counter -> vary). "
+            "Decide what re-test probe to run next (two replays -> control -> vary). "
             "When you are confident, set final=True and confirmed=true|false. "
             "Return a SINGLE ValidationOutput JSON."
         )

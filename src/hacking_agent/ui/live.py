@@ -537,9 +537,9 @@ HTML = r"""<!doctype html>
 
     <section class="kpis" aria-label="Run metrics">
       <div class="kpi findings">
-        <div class="label">Findings</div>
+        <div class="label">Candidate signals</div>
         <div class="value" id="findingCount">0</div>
-        <div class="hint" id="findingHint">verified evidence</div>
+        <div class="hint" id="findingHint">not report-ready</div>
       </div>
       <div class="kpi">
         <div class="label">Tool calls</div>
@@ -575,7 +575,7 @@ HTML = r"""<!doctype html>
           <div class="filters" id="filters">
             <button type="button" class="filter-btn active" data-filter="all">All</button>
             <button type="button" class="filter-btn" data-filter="tools">Tools</button>
-            <button type="button" class="filter-btn" data-filter="findings">Findings</button>
+            <button type="button" class="filter-btn" data-filter="findings">Candidates</button>
             <button type="button" class="filter-btn" data-filter="errors">Errors</button>
           </div>
         </div>
@@ -586,11 +586,11 @@ HTML = r"""<!doctype html>
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Findings &amp; evidence</h2>
+          <h2>Candidate diagnostics</h2>
           <span class="meta" id="findingsMeta">0 logged</span>
         </div>
         <div class="panel-body">
-          <div id="findings" class="findings"><div class="empty">No findings yet. Confirmed issues will surface here with evidence.</div></div>
+          <div id="findings" class="findings"><div class="empty">No candidate signals yet. Only the final confirmed-findings report is customer-facing.</div></div>
         </div>
       </section>
 
@@ -645,7 +645,8 @@ HTML = r"""<!doctype html>
       web_search: "Web search",
       web_fetch: "Web fetch",
       memory_fact: "Memory fact",
-      finding: "Finding",
+      finding: "Candidate signal",
+      finding_suppressed: "Candidate suppressed",
       state: "State change",
       error: "Error",
       reasoning_note: "Note",
@@ -666,13 +667,14 @@ HTML = r"""<!doctype html>
       return String(value).slice(0, 280);
     };
     const eventBucket = (type) => {
-      if (type === "finding") return "findings";
+      if (type === "finding" || type === "finding_suppressed") return "findings";
       if (type === "error" || type === "tool_blocked" || type === "budget_exceeded" || type === "llm_validation_error") return "errors";
       if (type.startsWith("tool_") || type === "web_search" || type === "web_fetch") return "tools";
       return "all";
     };
     const severityFor = (type) => {
-      if (type === "finding") return ["ok", "Finding"];
+      if (type === "finding") return ["warn", "Candidate"];
+      if (type === "finding_suppressed") return ["info", "Suppressed"];
       if (type === "error" || type === "tool_blocked" || type === "budget_exceeded") return ["crit", "Alert"];
       if (type === "llm_validation_error") return ["warn", "Retry"];
       if (type === "tool_result" || type === "session_end") return ["ok", "Done"];
@@ -712,10 +714,10 @@ HTML = r"""<!doctype html>
     const renderFindings = () => {
       el("findingsMeta").textContent = `${state.findingItems.length} logged`;
       if (!state.findingItems.length) {
-        findingsEl.innerHTML = `<div class="empty">No findings yet. Confirmed issues will surface here with evidence.</div>`;
+        findingsEl.innerHTML = `<div class="empty">No candidate signals yet. Only independently validated issues reach the report.</div>`;
         return;
       }
-      findingsEl.innerHTML = `<div class="finding header-row">Latest evidence-backed signals</div>`;
+      findingsEl.innerHTML = `<div class="finding header-row">Internal signals — not report-ready</div>`;
       state.findingItems.slice(0, 40).forEach((item) => {
         const card = document.createElement("div");
         card.className = "finding";
@@ -739,7 +741,7 @@ HTML = r"""<!doctype html>
       el("findingCount").textContent = state.findings.toLocaleString();
       el("tokenCount").textContent = state.tokens.toLocaleString();
       el("costEstimate").textContent = `$${Number(state.cost || 0).toFixed(4)}`;
-      el("findingHint").textContent = state.findings === 1 ? "1 signal logged" : "verified evidence";
+      el("findingHint").textContent = state.findings === 1 ? "1 candidate logged" : "not report-ready";
       el("toolHint").textContent = state.tools === 1 ? "1 action executed" : "actions executed";
 
       const tools = el("tools");

@@ -5,30 +5,42 @@ Reynard — Reporter Specialist
 Synthesises a professional penetration-test report from the knowledge graph
 and evidence store.
 
-HARD RULE:  A finding appears under "Verified Vulnerabilities" ONLY if
-            `evidence.is_verified(vuln_id)` returns True. Everything else
-            is "Informational / Unverified."
+HARD RULE: A customer finding appears only when the centralized
+``finding_validation.is_reportable`` policy accepts its complete, independently
+validated EvidenceBundle. Suppressed candidates are counted, never described.
 
-The reporter does NOT call any tools. It reads memory + evidence, calls the
-LLM once for free-form markdown (call_text), and returns the report as
-`AgentResult.artifact`.
+The reporter does not call tools or an LLM. It deterministically renders
+customer output from evidence accepted by the report gate.
 
 Reports are also written to `logs/report_<timestamp>.md`.
 =============================================================================
 """
 from __future__ import annotations
 
-import json
 import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from rich.console import Console
 
 from hacking_agent.agents.base import BaseAgent
+from hacking_agent.core.evidence_bundle import (
+    V_REFUTED,
+    V_UNVERIFIED,
+    V_VERIFIED,
+    build_bundle_from_pocs,
+    sanitize_text,
+)
+from hacking_agent.core.finding_validation import (
+    emit_suppression,
+    evaluate_reportability,
+    is_reportable,
+    partition_reportable,
+)
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
-from hacking_agent.core.schemas import AgentResult, AgentTask, PoC, Vulnerability
+from hacking_agent.core.schemas import AgentResult, AgentTask
 
 console = Console()
 
@@ -214,8 +226,10 @@ def cwe_for(vuln_type: str) -> str:
 
 @dataclass
 class Finding:
-    """A single client-report finding with scoring + remediation metadata."""
+    """A candidate plus the sealed evidence needed to cross the report gate."""
     title: str
+    finding_id: str = ""
+    vuln_id: str = ""
     vuln_type: str = ""
     severity: str = "medium"
     endpoint: str = ""
@@ -226,8 +240,14 @@ class Finding:
     cwe: str = ""
     cvss_vector: str = ""
     cvss_score: float = 0.0
+    # Compatibility mirror only.  Customer boundaries call ``is_reportable``;
+    # assigning this boolean cannot promote a candidate.
     verified: bool = False
     evidence: list[dict] = field(default_factory=list)
+    verification_status: str = ""
+    evidence_bundle: dict = field(default_factory=dict)
+    suppression_reason_code: str = ""
+    suppression_rationale: str = ""
 
     def ensure_scored(self) -> None:
         """Fill CWE / CVSS vector / CVSS score from severity when unset."""
@@ -240,6 +260,10 @@ class Finding:
                 self.cvss_score = score
         elif not self.cvss_score:
             self.cvss_score = cvss_v31_base_score(self.cvss_vector)
+
+    @property
+    def is_reportable(self) -> bool:
+        return is_reportable(self)
 
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -276,23 +300,47 @@ def _default_remediation(vuln_type: str) -> str:
             "privilege, and add regression tests covering this vector.")
 
 
-def _poc_to_evidence(poc: PoC) -> dict:
-    return {
-        "verdict": poc.verdict,
-        "payload": poc.payload,
-        "request": poc.request_summary,
-        "response": poc.response_excerpt,
-        "agent": poc.agent_name,
-        "timestamp": poc.timestamp,
-    }
+def _bundle_evidence(bundle: Any) -> list[dict]:
+    """Project already-sanitized bundle exchanges into report evidence rows."""
+    rows: list[dict] = []
+    if bundle is None:
+        return rows
+
+    def value(obj: Any, key: str, default: Any = "") -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    for exchange in value(bundle, "test_exchanges", []) or []:
+        rows.append({
+            "verdict": "success",
+            "payload": "",
+            "request": sanitize_text(str(value(exchange, "request") or "")),
+            "response": sanitize_text(str(value(exchange, "response") or "")),
+            "agent": "validator",
+            "timestamp": str(value(exchange, "timestamp") or ""),
+            "label": str(value(exchange, "label") or "replay"),
+        })
+    for control in value(bundle, "control_tests", []) or []:
+        exchange = value(control, "exchange", None)
+        rows.append({
+            "verdict": "control",
+            "payload": "",
+            "request": sanitize_text(str(value(exchange, "request") or "")),
+            "response": sanitize_text(str(value(exchange, "response") or "")),
+            "agent": "validator",
+            "timestamp": str(value(exchange, "timestamp") or ""),
+            "label": "control",
+        })
+    return rows
 
 
-def extract_findings(memory, evidence) -> list[Finding]:
-    """Build scored ``Finding`` objects from a run's memory + evidence store.
+def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
+    """Build internal candidate objects and evaluate the strict report gate.
 
-    A finding is marked verified ONLY when ``evidence.is_verified`` returns
-    True for the vulnerability id — the same evidence gate the lab reporter
-    uses. Everything else is carried as unverified/informational.
+    Candidates are retained with structured suppression diagnostics.  The
+    returned list is not itself a customer export; every renderer/exporter
+    partitions it through the same central predicate.
     """
     findings: list[Finding] = []
     for entity in memory.query("Vulnerability"):
@@ -301,7 +349,6 @@ def extract_findings(memory, evidence) -> list[Finding]:
         status = attrs.get("status", "theoretical")
         if status == "false_positive":
             continue
-        verified = bool(evidence.is_verified(vuln_id))
         vuln_type = str(attrs.get("vuln_type") or attrs.get("type") or "finding")
         parameter = attrs.get("parameter") or ""
         endpoint = (
@@ -312,20 +359,75 @@ def extract_findings(memory, evidence) -> list[Finding]:
         )
         severity = str(attrs.get("severity") or "medium").lower()
         pocs = evidence.get_by_vuln(vuln_id)
-        title = f"{vuln_type}" + (f" via `{parameter}`" if parameter else "")
+        title = f"{vuln_type}" + (
+            f" via `{parameter}`" if parameter else ""
+        )
+        bundle = None
+        if evidence_bundles is not None:
+            try:
+                candidates = evidence_bundles.by_vuln(vuln_id)
+                bundle = candidates[-1] if candidates else None
+            except Exception:
+                bundle = None
+        if bundle is None:
+            state = evidence.verification_state(vuln_id)
+            bundle = build_bundle_from_pocs(
+                vuln_id,
+                pocs,
+                verification_status={
+                    "verified": V_VERIFIED,
+                    "refuted": V_REFUTED,
+                }.get(state, V_UNVERIFIED),
+                vuln_type=vuln_type,
+                title=title,
+                severity=severity,
+                target=str(getattr(memory, "target_url", "") or endpoint),
+                endpoint=str(endpoint),
+                identity="anonymous",
+            )
+            # Give fallback bundles a stable local id and evidence seal.  They
+            # remain suppressed unless the full Validator transcript exists.
+            bundle.id = f"bundle:{vuln_id}"
+            bundle.finding_id = vuln_id
+            bundle.seal()
         finding = Finding(
             title=title.strip() or vuln_type,
+            finding_id=vuln_id,
+            vuln_id=vuln_id,
             vuln_type=vuln_type,
             severity=severity,
-            endpoint=endpoint,
+            endpoint=sanitize_text(str(endpoint)),
             parameter=parameter,
-            description=str(attrs.get("hypothesis") or attrs.get("notes") or ""),
-            impact=str(attrs.get("impact") or ""),
-            remediation=str(attrs.get("remediation") or _default_remediation(vuln_type)),
+            description=sanitize_text(
+                str(
+                    attrs.get("hypothesis")
+                    or attrs.get("notes")
+                    or bundle.causal_signal
+                    or ""
+                )
+            ),
+            impact=sanitize_text(str(
+                attrs.get("impact")
+                or (
+                    f"Independent validation demonstrated this exploit effect: "
+                    f"{bundle.causal_signal}"
+                    if bundle.causal_signal else ""
+                )
+            )),
+            remediation=sanitize_text(
+                str(attrs.get("remediation") or _default_remediation(vuln_type))
+            ),
             cvss_vector=str(attrs.get("cvss_vector") or ""),
-            verified=verified,
-            evidence=[_poc_to_evidence(p) for p in pocs],
+            evidence=_bundle_evidence(bundle),
+            verification_status=str(bundle.verification_status or ""),
+            evidence_bundle=bundle.to_dict(),
         )
+        decision = evaluate_reportability(finding)
+        finding.verified = decision.reportable
+        if not decision.reportable:
+            finding.suppression_reason_code = decision.reason_code
+            finding.suppression_rationale = decision.rationale
+            emit_suppression(finding, decision)
         finding.ensure_scored()
         findings.append(finding)
     findings.sort(
@@ -336,8 +438,45 @@ def extract_findings(memory, evidence) -> list[Finding]:
     return findings
 
 
+def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
+    """Serialize one confirmed finding; reject all attempted bypasses."""
+    decision = evaluate_reportability(finding)
+    if not decision.reportable:
+        raise ValueError(
+            f"candidate is not reportable: {decision.reason_code}"
+        )
+    finding.ensure_scored()
+    return {
+        "finding_id": finding.finding_id,
+        "vuln_id": finding.vuln_id,
+        "title": finding.title,
+        "vuln_type": finding.vuln_type,
+        "severity": finding.severity,
+        "cwe": finding.cwe,
+        "cvss_vector": finding.cvss_vector,
+        "cvss_score": finding.cvss_score,
+        "endpoint": finding.endpoint,
+        "parameter": finding.parameter,
+        "verification_status": "verified",
+        "verified": True,  # compatibility mirror; never trusted by the gate
+        "description": finding.description,
+        "impact": finding.impact,
+        "remediation": finding.remediation,
+        # Never trust a parallel, mutable evidence projection from stored JSON.
+        # Rebuild it from the sealed bundle accepted by the central policy.
+        "evidence": _bundle_evidence(finding.evidence_bundle),
+        "evidence_bundle": dict(finding.evidence_bundle),
+    }
+
+
 def _reproduction_steps(finding: Finding) -> list[str]:
     """Derive concrete reproduction steps from a finding's evidence."""
+    bundle_steps = (
+        finding.evidence_bundle.get("reproduction_steps", [])
+        if isinstance(finding.evidence_bundle, dict) else []
+    )
+    if bundle_steps:
+        return [str(step) for step in bundle_steps]
     steps: list[str] = []
     if finding.endpoint:
         steps.append(f"Send a request to `{finding.endpoint}`"
@@ -356,6 +495,8 @@ def _reproduction_steps(finding: Finding) -> list[str]:
 
 def render_finding_section(finding: Finding, index: int) -> str:
     """Render one finding as a professional per-finding markdown section."""
+    if not is_reportable(finding):
+        return ""
     finding.ensure_scored()
     lines = [
         f"### {index}. {finding.title}",
@@ -366,7 +507,7 @@ def render_finding_section(finding: Finding, index: int) -> str:
         f"- **CWE:** {finding.cwe}",
         f"- **Affected endpoint:** {finding.endpoint or 'N/A'}"
         + (f" (parameter `{finding.parameter}`)" if finding.parameter else ""),
-        f"- **Status:** {'VERIFIED (evidence-gated)' if finding.verified else 'Unverified / informational'}",
+        "- **Status:** CONFIRMED (independently replayed and evidence-gated)",
         "",
         "**Description**",
         "",
@@ -382,8 +523,9 @@ def render_finding_section(finding: Finding, index: int) -> str:
     for i, step in enumerate(_reproduction_steps(finding), 1):
         lines.append(f"{i}. {step}")
     lines += ["", "**Evidence**", ""]
-    if finding.evidence:
-        for ev in finding.evidence:
+    report_evidence = _bundle_evidence(finding.evidence_bundle)
+    if report_evidence:
+        for ev in report_evidence:
             lines.append(
                 f"- [{str(ev.get('verdict', '')).upper()}] "
                 f"payload: `{(ev.get('payload') or '')[:160]}`"
@@ -412,6 +554,41 @@ def _severity_tally(findings: list[Finding]) -> dict[str, int]:
     return tally
 
 
+def _target_summary(meta: dict[str, Any]) -> str:
+    """Render only structured aggregate target state, never free-form notes."""
+    lines: list[str] = []
+    rows = meta.get("target_summaries")
+    if not isinstance(rows, list):
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        target = sanitize_text(str(row.get("target") or "")).strip()
+        status = str(row.get("status") or "assessed").strip().lower()
+        if status not in {"assessed", "timeout", "error", "failed", "cancelled"}:
+            status = "unknown"
+        try:
+            confirmed = max(0, int(row.get("confirmed_count", 0) or 0))
+            suppressed = max(0, int(row.get("suppressed_count", 0) or 0))
+            seconds = max(0.0, float(row.get("wall_clock_seconds", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(seconds):
+            seconds = 0.0
+        lines.append(
+            f"- `{target or 'N/A'}`: {status} "
+            f"({confirmed} confirmed finding(s), {suppressed} suppressed "
+            f"candidate(s), {seconds:g}s)"
+        )
+    if lines:
+        return "\n".join(lines)
+    return (
+        "Reconnaissance, response anomalies, and candidate observations were "
+        "retained for internal review. Only independently confirmed findings "
+        "are described in this customer report."
+    )
+
+
 def render_assessment_report(
     meta: dict,
     findings: list[Finding],
@@ -419,15 +596,30 @@ def render_assessment_report(
 ) -> str:
     """Render a client-grade assessment report in Markdown.
 
-    ``meta`` carries the engagement header (engagement_name, client, tester,
-    targets, scope, testing_window, generated_at). ``findings`` are the scored
-    findings (verified first). This is deterministic and LLM-free so it can be
-    produced offline and unit-tested.
+    ``findings`` may include internal candidates, but only entries accepted by
+    the centralized reportability predicate are rendered.  Suppressed details
+    never cross this customer-facing boundary.
     """
     generated_at = meta.get("generated_at") or datetime.utcnow().isoformat()
-    verified = [f for f in findings if f.verified]
-    unverified = [f for f in findings if not f.verified]
-    tally = _severity_tally(findings)
+    verified, suppressed = partition_reportable(findings)
+    # ``recon_summary`` remains in the signature for API compatibility, but
+    # arbitrary KG/model prose can contain suppressed candidate details.
+    # Customer output is reconstructed from structured aggregate rows only.
+    recon_summary = _target_summary(meta)
+    tally = _severity_tally(verified)
+    external_suppressed = int(meta.get("external_suppressed_count", 0) or 0)
+    suppressed_total = len(suppressed) + external_suppressed
+    reason_counts: dict[str, int] = {}
+    for finding, decision in suppressed:
+        reason_counts[decision.reason_code] = (
+            reason_counts.get(decision.reason_code, 0) + 1
+        )
+        emit_suppression(finding, decision)
+    for reason, count in dict(
+        meta.get("external_suppression_reasons") or {}
+    ).items():
+        if isinstance(count, int) and count > 0:
+            reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + count
 
     lines = [
         f"# Security Assessment Report — {meta.get('engagement_name', 'Engagement')}",
@@ -446,11 +638,13 @@ def render_assessment_report(
         (
             f"This report documents an authorized security assessment of "
             f"{', '.join(meta.get('targets', [])) or 'the in-scope assets'}. "
-            f"Testing identified {len(findings)} finding(s), of which "
-            f"{len(verified)} were evidence-verified. Severity distribution: "
+            f"Testing found {len(verified)} independently validated "
+            f"vulnerability/vulnerabilities. Severity distribution for confirmed "
+            f"findings only: "
             f"{tally['critical']} critical, {tally['high']} high, "
             f"{tally['medium']} medium, {tally['low']} low, {tally['info']} "
-            f"informational."
+            f"informational. {suppressed_total} candidate observation(s) were "
+            "suppressed by the validation gate and are not findings in this report."
         ),
         "",
         "## 2. Scope",
@@ -467,8 +661,9 @@ def render_assessment_report(
             "analysis, exploitation, and skeptical validation). All activity was "
             "constrained by the engagement's rules of engagement (authorized "
             "scope, out-of-scope denylist, request rate limit, and destructive-"
-            "action policy). Only findings backed by a reproducible proof of "
-            "concept are reported as verified."
+            "action policy). Only independently replayed findings with matched "
+            "controls, complete sealed evidence, and vulnerability-specific "
+            "behavioural proof are reported."
         ),
         "",
         "## 4. Findings Summary",
@@ -476,29 +671,44 @@ def render_assessment_report(
         "| # | Finding | Severity | CVSS | CWE | Verified |",
         "| ---: | --- | --- | ---: | --- | :---: |",
     ]
-    for i, f in enumerate(findings, 1):
+    for i, f in enumerate(verified, 1):
         f.ensure_scored()
         lines.append(
             f"| {i} | {f.title.replace('|', chr(92) + '|')} | "
             f"{f.severity.capitalize()} | {f.cvss_score} | {f.cwe} | "
-            f"{'yes' if f.verified else 'no'} |"
+            "yes |"
         )
-    if not findings:
-        lines.append("| — | No findings recorded | — | — | — | — |")
+    if not verified:
+        lines.append(
+            "| — | No independently confirmed findings found | "
+            "— | — | — | — |"
+        )
 
-    lines += ["", "## 5. Verified Vulnerabilities", ""]
+    lines += ["", "## 5. Confirmed Vulnerabilities", ""]
     if verified:
         for i, f in enumerate(verified, 1):
             lines.append(render_finding_section(f, i))
     else:
-        lines.append("No findings passed the evidence gate.")
+        lines.append(
+            "No independently confirmed findings were found. No independently "
+            "validated vulnerabilities met the strict evidence gate. Scanner, "
+            "model, and other candidate observations are intentionally excluded."
+        )
 
-    lines += ["", "## 6. Informational / Unverified Findings", ""]
-    if unverified:
-        for i, f in enumerate(unverified, 1):
-            lines.append(render_finding_section(f, i))
+    lines += ["", "## 6. Validation Gate Summary", ""]
+    if suppressed_total:
+        lines.append(
+            f"{suppressed_total} internal candidate observation(s) were "
+            "suppressed and are not reportable findings."
+        )
+        if reason_counts:
+            lines.append("")
+            lines.append("| Suppression reason | Count |")
+            lines.append("| --- | ---: |")
+            for reason, count in sorted(reason_counts.items()):
+                lines.append(f"| `{reason}` | {count} |")
     else:
-        lines.append("None.")
+        lines.append("No candidate observations were suppressed.")
 
     lines += [
         "",
@@ -509,102 +719,28 @@ def render_assessment_report(
     ]
     return "\n".join(lines)
 
-REPORTER_SYSTEM = """You are the REPORTING specialist for an autonomous penetration-testing system.
-
-# YOUR MISSION
-Produce a professional penetration-test report in Markdown. The report is
-for a technical audience (security engineers, developers).
-
-# STRUCTURE (follow this order)
-1. **Executive Summary** — 2-3 sentences: target, scope, key result.
-2. **Methodology** — Briefly describe the multi-agent pipeline: recon →
-   analysis → exploitation → verification.
-3. **Verified Vulnerabilities** — One subsection per finding with:
-     - **Title** (e.g. "Reflected XSS via `search` parameter")
-     - **Severity** (Critical / High / Medium / Low / Info)
-     - **Endpoint & Parameter**
-     - **Description** — What the vulnerability is and why it matters
-     - **Proof of Concept** — The exact request/payload and the response
-       excerpt proving exploitation (provided to you as PoC data)
-     - **Remediation** — Concrete fix recommendation
-4. **Informational Findings** — Theoretical or partial findings that could
-   not be conclusively verified. Same subsection format minus the PoC.
-5. **Reconnaissance Summary** — Technologies, endpoints, and parameters
-   discovered.
-6. **Appendix** — Session statistics (iterations, tool calls, agent
-   dispatches).
-
-# RULES
-- NEVER invent a PoC that wasn't provided to you.
-- NEVER upgrade an INFORMATIONAL finding to VERIFIED — only the evidence
-  store controls that classification.
-- Use Markdown code blocks for PoC payloads and responses.
-- Be concise but thorough.
-
-# OUTPUT
-A single Markdown document (no JSON wrapper). Start with `# Penetration Test Report`.
-"""
-
-
 class ReporterAgent(BaseAgent):
     name = "reporter"
     role = "reporter"
 
     def execute(self, task: AgentTask) -> AgentResult:
-        # Assessment mode: produce the deterministic, client-grade professional
-        # report (CVSS/CWE/remediation) with no LLM call. The default lab path
-        # (no assessment_mode flag) is unchanged.
-        if task.context.get("assessment_mode"):
-            return self._execute_assessment(task)
-        prompt = self._build_prompt(task)
-        try:
-            report_md = self.call_text(REPORTER_SYSTEM, prompt)
-        except Exception as e:
-            return AgentResult(
-                success=False, summary=f"Reporter LLM failure: {e}"
-            )
-
-        # ---- append verbatim, machine-generated evidence appendix ----
-        report_md = self._append_evidence_appendix(report_md, task)
-
-        # ---- persist to disk ----
-        report_path = self._save_report(report_md)
-        console.print(f"[green bold]📄 Report saved → {report_path}[/]")
-
-        # ---- build summary JSON ----
-        verified, informational = self._classify_vulns()
-        summary_json = {
-            "generated_at": datetime.utcnow().isoformat(),
-            "target": task.context.get("target_url", "unknown"),
-            "verified_count": len(verified),
-            "informational_count": len(informational),
-            "total_pocs": len(self.evidence.all_pocs()),
-            "report_path": report_path,
-        }
-        json_path = report_path.replace(".md", ".json")
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(summary_json, f, indent=2)
-        console.print(f"[green]   📊 Summary JSON → {json_path}[/]")
-
-        return AgentResult(
-            success=True,
-            summary=(
-                f"Report generated: {len(verified)} verified, "
-                f"{len(informational)} informational."
-            ),
-            artifact=report_md,
-        )
+        # Reports are deterministic and evidence-derived.  An LLM is never
+        # allowed to synthesize or promote customer-facing findings.
+        return self._execute_assessment(task)
 
     # ---- assessment mode ------------------------------------------------
 
     def build_assessment_report(self, task: AgentTask) -> str:
         """Build the professional assessment report markdown from this agent's
         memory + evidence store. LLM-free and reusable by the assess CLI."""
-        findings = extract_findings(self.memory, self.evidence)
+        findings = extract_findings(
+            self.memory, self.evidence, self.evidence_bundles,
+        )
         meta = dict(task.context.get("engagement_meta") or {})
         meta.setdefault("targets", [self.memory.target_url] if self.memory.target_url else [])
-        recon_summary = task.context.get("recon_summary") or self.kg_summary()
-        return render_assessment_report(meta, findings, recon_summary)
+        # Incremental KG context contains unverified candidate detail and is
+        # never suitable for a customer report.
+        return render_assessment_report(meta, findings)
 
     def _execute_assessment(self, task: AgentTask) -> AgentResult:
         try:
@@ -620,8 +756,8 @@ class ReporterAgent(BaseAgent):
         return AgentResult(
             success=True,
             summary=(
-                f"Assessment report generated: {len(verified)} verified, "
-                f"{len(informational)} informational."
+                f"Assessment report generated: {len(verified)} confirmed, "
+                f"{len(informational)} suppressed."
             ),
             artifact=report_md,
         )
@@ -629,91 +765,47 @@ class ReporterAgent(BaseAgent):
     # ---- helpers --------------------------------------------------------
 
     def _classify_vulns(self) -> tuple[list[dict], list[dict]]:
-        """Split KG Vulnerability entities into verified vs informational."""
-        verified: list[dict] = []
-        informational: list[dict] = []
-        for entity in self.memory.query("Vulnerability"):
-            vuln_id = entity.id
-            if self.evidence.is_verified(vuln_id):
-                verified.append({"id": vuln_id, **entity.attrs})
-            else:
-                status = entity.attrs.get("status", "theoretical")
-                if status != "false_positive":
-                    informational.append({"id": vuln_id, **entity.attrs})
-        return verified, informational
-
-    def _build_prompt(self, task: AgentTask) -> str:
-        target_url = task.context.get("target_url", "unknown")
-        verified, informational = self._classify_vulns()
-        all_pocs = self.evidence.all_pocs()
-
-        sections: list[str] = [
-            f"# TARGET\n{target_url}",
-            f"\n{self.kg_summary()}",
-            f"\n{self.state_summary()}",
-        ]
-
-        # ---- verified findings + PoCs ----
-        if verified:
-            sections.append("\n# VERIFIED VULNERABILITIES (evidence-gated)")
-            for v in verified:
-                vid = v["id"]
-                pocs = self.evidence.get_by_vuln(vid)
-                poc_text = "\n".join(self._format_poc(p) for p in pocs)
-                sections.append(
-                    f"\n## {v.get('vuln_type', '?')} — {v.get('parameter', 'N/A')}\n"
-                    f"  Severity: {v.get('severity', 'medium')}\n"
-                    f"  Hypothesis: {v.get('hypothesis', '')}\n"
-                    f"  Status: VERIFIED\n"
-                    f"  PoCs:\n{poc_text}"
-                )
-        else:
-            sections.append(
-                "\n# VERIFIED VULNERABILITIES\n  (none — no finding passed "
-                "the evidence gate)"
-            )
-
-        # ---- informational ----
-        if informational:
-            sections.append("\n# INFORMATIONAL / UNVERIFIED FINDINGS")
-            for v in informational:
-                sections.append(
-                    f"\n## {v.get('vuln_type', '?')} — {v.get('parameter', 'N/A')}\n"
-                    f"  Severity: {v.get('severity', 'medium')}\n"
-                    f"  Hypothesis: {v.get('hypothesis', '')}\n"
-                    f"  Status: {v.get('status', 'theoretical')}"
-                )
-
-        sections.append(
-            "\n# YOUR TASK\n"
-            "Write the full Markdown report following the structure in your "
-            "system prompt. Use the data above as your sole source of truth."
+        """Split internal candidates with the same centralized predicate."""
+        candidates = extract_findings(
+            self.memory, self.evidence, self.evidence_bundles,
         )
-        return "\n".join(sections)
+        confirmed, suppressed = partition_reportable(candidates)
+        return (
+            [
+                {"id": finding.finding_id, "title": finding.title}
+                for finding in confirmed
+            ],
+            [
+                {
+                    "id": finding.finding_id,
+                    "reason_code": decision.reason_code,
+                }
+                for finding, decision in suppressed
+            ],
+        )
 
     def _append_evidence_appendix(self, report_md: str, task: AgentTask) -> str:
         """Append the machine-generated EvidenceBundle appendix verbatim.
 
         This is the reproducible, evidence-derived portion of the report (control
         tests, sanitized exchanges, reproduction steps) — not LLM narration."""
-        appendix = (task.context or {}).get("evidence_bundles_markdown", "")
+        appendix = ""
+        if self.evidence_bundles is not None:
+            try:
+                appendix = self.evidence_bundles.render_markdown(
+                    verified_only=True,
+                )
+            except Exception:
+                appendix = ""
         if not appendix or not appendix.strip():
             return report_md
         return (
             f"{report_md}\n\n---\n\n"
             "# Evidence Appendix (machine-generated, verbatim)\n\n"
-            "The following reproducible evidence bundles back the verified "
+            "The following reproducible evidence bundles back the confirmed "
             "findings above. Secrets are redacted; each bundle includes the "
             "test exchange, control comparison, and reproduction steps.\n\n"
             f"{appendix}\n"
-        )
-
-    def _format_poc(self, poc: PoC) -> str:
-        return (
-            f"    - [{poc.verdict.upper()}] payload: {poc.payload[:200]}\n"
-            f"      request: {poc.request_summary[:200]}\n"
-            f"      response: {poc.response_excerpt[:300]}\n"
-            f"      agent: {poc.agent_name} @ {poc.timestamp}"
         )
 
     def _save_report(self, content: str) -> str:

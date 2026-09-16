@@ -4,13 +4,11 @@ Reynard — Evidentiary Store
 =============================================================================
 Append-only ledger of Proof-of-Concept artifacts.
 
-A vulnerability is treated as VERIFIED **only if** at least one PoC linked
-to it has `verdict == "success"`. Without that, the reporter MUST list the
-finding under "Informational / Unverified" instead of as a confirmed
-vulnerability.
-
-This module is the single source of truth for the "can we report this?"
-question — agents cannot bypass it by self-declaring success.
+PoCs are candidate evidence.  Only a successful record written by the
+independent Validator after its strict replay protocol advances the ledger's
+verification state.  Customer reportability remains the stricter, centralized
+decision in ``core.finding_validation`` because it also validates the complete
+EvidenceBundle and vulnerability-specific proof.
 =============================================================================
 """
 from __future__ import annotations
@@ -60,10 +58,15 @@ class EvidenceStore:
             request = poc.request_summary or ""
             if is_validator and poc.verdict == "failure":
                 state = "refuted"
+            elif (
+                is_validator
+                and poc.verdict == "success"
+                and bool((poc.validation_metadata or {}).get("protocol_valid"))
+            ):
+                state = "verified"
             elif is_validator and poc.verdict == "success":
-                state = "verified"
-            elif poc.verdict == "success":
-                state = "verified"
+                # Legacy/partial validator assertions fail closed.
+                state = "unverified"
             elif request.startswith("REFUTED:"):
                 state = "refuted"
         return state
@@ -92,7 +95,8 @@ class EvidenceStore:
                      "request_summary": p.request_summary,
                      "response_excerpt": p.response_excerpt,
                      "verdict": p.verdict, "agent_name": p.agent_name,
-                     "timestamp": p.timestamp}
+                     "timestamp": p.timestamp,
+                     "validation_metadata": p.validation_metadata}
                     for p in self._pocs
                 ]
             store.save_pocs(target, lab_class, rows)
@@ -112,6 +116,19 @@ class EvidenceStore:
                 if not request.startswith("REHYDRATED:"):
                     request = f"REHYDRATED: {request}".strip()
                 try:
+                    validation_metadata = dict(
+                        r.get("validation_metadata") or {}
+                    )
+                    if validation_metadata:
+                        # Historical evidence is useful research context, but a
+                        # new customer report requires a fresh independent replay.
+                        validation_metadata.update({
+                            "rehydrated": True,
+                            "protocol_valid": False,
+                            "validation_error": (
+                                "rehydrated evidence requires fresh validation"
+                            ),
+                        })
                     poc = PoC(
                         id=r.get("id", ""),
                         vuln_id=r.get("vuln_id", ""),
@@ -121,6 +138,7 @@ class EvidenceStore:
                         verdict=r.get("verdict", "success"),
                         agent_name=r.get("agent_name", "validator"),
                         timestamp=r.get("timestamp") or "",
+                        validation_metadata=validation_metadata,
                     )
                 except Exception:
                     continue

@@ -15,6 +15,14 @@ _OK = (
     "(p/'result.json').write_text(json.dumps({'findings_count':2,'verified_count':1}))"
 )
 _SLOW = "import time;time.sleep(30)"
+_SUPPRESSED = (
+    "import sys,json,pathlib;p=pathlib.Path(sys.argv[1]);"
+    "(p/'report.json').write_text(json.dumps({"
+    "'finding_count':9,'verified_count':9,'suppressed_count':2,"
+    "'targets_assessed':[]}));"
+    "(p/'result.json').write_text(json.dumps({"
+    "'findings_count':9,'verified_count':9,'suppressed_count':99}))"
+)
 _TIMED = (
     "import sys,json,pathlib,time;p=pathlib.Path(sys.argv[1]);s=time.time();"
     "time.sleep(0.5);e=time.time();"
@@ -40,15 +48,26 @@ def _req():
     return RunRequest(authorized_domains=["example.com"], authorized=True)
 
 
-def test_run_completes_and_records_counts(tmp_path):
+def test_result_json_counts_cannot_bypass_report_gate(tmp_path):
     store = RunStore(root=tmp_path)
     jm = JobManager(store, worker_cmd=_cmd(_OK))
     rec = store.create(_req())
     jm.submit(rec.id)
     final = _wait_terminal(store, rec.id)
     assert final.status is RunStatus.completed
-    assert final.findings_count == 2 and final.verified_count == 1
+    assert final.findings_count == 0 and final.verified_count == 0
     assert final.exit_code == 0
+
+
+def test_run_record_exposes_regated_suppressed_count(tmp_path):
+    store = RunStore(root=tmp_path)
+    jm = JobManager(store, worker_cmd=_cmd(_SUPPRESSED))
+    rec = store.create(_req())
+    jm.submit(rec.id)
+    final = _wait_terminal(store, rec.id)
+    assert final.status is RunStatus.completed
+    assert final.findings_count == final.verified_count == 0
+    assert final.suppressed_count == 2
 
 
 def test_cancel_running_marks_cancelled(tmp_path):

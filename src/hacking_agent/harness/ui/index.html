@@ -442,7 +442,7 @@
     <section class="findings-view" id="findings-view">
       <div class="fv-list">
         <div class="col-head">
-          <h2>Findings</h2><span class="count" id="f-count">0</span>
+          <h2>Confirmed findings only</h2><span class="count" id="f-count">0 confirmed</span>
           <span class="spacer"></span>
           <button class="iconbtn" id="f-refresh" title="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 11a8 8 0 1 0-.5 3M20 5v6h-6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="btn ghost sm" id="f-export">Export all</button>
@@ -555,9 +555,24 @@
       setBusy(true);
       try {
         const r = await fetch(path, { headers: H, ...opts });
-        if (!r.ok) { let d = ""; try { d = (await r.json()).detail; } catch (e) {} throw new Error(d || ("HTTP " + r.status)); }
+        if (!r.ok) {
+          if (r.status === 401) authError();
+          let d = ""; try { d = (await r.json()).detail; } catch (e) {} throw new Error(d || ("HTTP " + r.status));
+        }
         return r.status === 204 ? null : r.json();
       } finally { setBusy(false); }
+    }
+
+    // A 401 means this page's token no longer matches the server (usually a
+    // stale tab from a previous session, or the server restarted with a new
+    // token). Surface it clearly once instead of silently failing every poll.
+    let _authWarned = 0;
+    function authError() {
+      const now = Date.now();
+      if (now - _authWarned < 20000) return;
+      _authWarned = now;
+      const c = $("conn"); c.className = "conn off"; $("conn-text").textContent = "Auth failed — reload page";
+      toast("Session expired", "This tab's token no longer matches the server. Reload (Ctrl/Cmd+Shift+R).", "err");
     }
 
     // ---------- toasts ----------
@@ -637,7 +652,9 @@
     function runRow(r) {
       const tgt = r.targets && r.targets.length ? r.targets.join(", ") : (r.description || "—");
       const err = r.error ? `<span class="fchip" style="color:var(--red)">${esc(r.error).slice(0, 60)}</span>` : "";
-      const f = (r.status === "completed" || r.status === "failed") ? `<span class="fchip">${r.findings_count} finding(s)</span>` : "";
+      const f = (r.status === "completed" || r.status === "failed")
+        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} suppressed</span>`
+        : "";
       return `<div class="run ${r.id === selected ? "active" : ""}" data-id="${r.id}">
         <span class="rid">${esc(r.id)}</span>
         <span class="rtime">${esc(relTime(r.created_at))}</span>
@@ -782,8 +799,8 @@
         const rows = [];
         targets.forEach((t) => (t.findings || []).forEach((f) => rows.push(
           `<tr><td>${esc(t.target || "")}</td><td>${esc(f.title || f.name || "")}</td><td>${esc(f.severity || "")}</td><td>${esc(f.verification_status || f.status || "")}</td></tr>`)));
-        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${j.target_count ?? "-"}</dd><dt>Findings</dt><dd>${j.finding_count ?? "-"}</dd><dt>Verified</dt><dd>${j.verified_count ?? "-"}</dd></dl>` +
-          (rows.length ? `<table><thead><tr><th>Target</th><th>Finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<p class="hint" style="color:var(--text-faint)">No findings recorded.</p>`);
+        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${j.target_count ?? "-"}</dd><dt>Confirmed findings</dt><dd>${j.confirmed_count ?? j.finding_count ?? "-"}</dd><dt>Suppressed candidates</dt><dd>${j.suppressed_count ?? 0}</dd></dl>` +
+          (rows.length ? `<table><thead><tr><th>Target</th><th>Confirmed finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<p class="hint" style="color:var(--text-faint)">No independently validated vulnerabilities were found.</p>`);
       } catch (e) { el.innerHTML = emptyState("No evidence yet", "Evidence bundles appear after the run completes."); }
     }
     async function loadLog(id) {
@@ -917,26 +934,29 @@
     $("nav-findings").onclick = () => setView("findings");
 
     // ---------- findings hub ----------
-    let findingsCache = [], fSev = "all", fSel = null;
+    let findingsCache = [], fSev = "all", fSel = null, _findSig = "";
     async function loadFindings() {
       let data;
       try { data = await api("/api/findings"); } catch (e) { return; }
       findingsCache = data.findings || [];
-      renderFindings();
+      $("f-count").textContent = `${data.confirmed_count || 0} confirmed · ${data.suppressed_count || 0} suppressed`;
+      // Only re-render when the set actually changed, so a background refresh
+      // never reflows the list or steals focus while you're reading.
+      const sig = findingsCache.map((f) => f.finding_id).join("|");
+      if (sig !== _findSig) { _findSig = sig; renderFindings(); }
     }
     function renderFindings() {
       const items = findingsCache.filter((f) => fSev === "all" || f.severity === fSev);
-      $("f-count").textContent = findingsCache.length;
       const el = $("f-items");
       if (!items.length) {
-        el.innerHTML = `<div class="empty">${svg('<path d="M12 3l8 4v5c0 4.4-3 8-8 9-5-1-8-4.6-8-9V7l8-4z"/><path d="M9.2 12l2 2 3.6-3.6"/>', 1.5)}<div class="t1">No findings ${fSev === "all" ? "yet" : "at this severity"}</div><div class="t2">Findings appear here after a run produces evidence-backed results.</div></div>`;
+        el.innerHTML = `<div class="empty">${svg('<path d="M12 3l8 4v5c0 4.4-3 8-8 9-5-1-8-4.6-8-9V7l8-4z"/><path d="M9.2 12l2 2 3.6-3.6"/>', 1.5)}<div class="t1">No independently confirmed findings ${fSev === "all" ? "found" : "at this severity"}</div><div class="t2">Scanner and model candidates stay hidden unless independent replay, controls, and class-specific proof pass.</div></div>`;
         return;
       }
       el.innerHTML = items.map((f) => `<div class="fitem ${f.finding_id === fSel ? "active" : ""}" data-id="${esc(f.finding_id)}">
         <div class="ftitle">${esc(f.title || f.vuln_type || "Finding")}</div>
         <div class="fsub">${esc(f.endpoint || f.target || "")}</div>
         <div class="frow"><span class="sev ${f.severity}">${esc(f.severity)}</span>${f.cvss_score ? `<span class="fchip">CVSS ${f.cvss_score}</span>` : ""}${f.cwe ? `<span class="fchip">${esc(f.cwe)}</span>` : ""}
-          <span class="vchip ${f.verified ? "" : "no"}">${f.verified ? svg('<path d="M20 6L9 17l-5-5"/>', 2) + "verified" : "unverified"}</span></div>
+          <span class="vchip">${svg('<path d="M20 6L9 17l-5-5"/>', 2)}confirmed</span></div>
       </div>`).join("");
       el.querySelectorAll(".fitem").forEach((n) => n.onclick = () => selectFinding(n.dataset.id));
     }
@@ -967,7 +987,11 @@
     $("stream-wrap").innerHTML = emptyState("No run selected", "Select a run to watch live model reasoning and tool activity.");
     $("runs-refresh").onclick = refreshRuns;
     health(); refreshRuns();
-    setInterval(() => { refreshRuns(); $("progress").classList.toggle("on", busy > 0 || anyRunning()); document.querySelectorAll(".run .rtime").forEach((n) => {}); }, 3000);
+    setInterval(() => {
+      refreshRuns();
+      if (document.body.classList.contains("mode-findings")) loadFindings();
+      $("progress").classList.toggle("on", busy > 0 || anyRunning());
+    }, 3000);
     setInterval(health, 15000);
   </script>
 </body>

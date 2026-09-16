@@ -15,7 +15,8 @@ class EvidenceLifecycleTests(unittest.TestCase):
             verdict="success",
             agent_name="exploitation",
         ))
-        self.assertTrue(store.is_verified("vuln:1"))
+        self.assertFalse(store.is_verified("vuln:1"))
+        self.assertEqual(store.verification_state("vuln:1"), "unverified")
 
         store.record(PoC(
             vuln_id="vuln:1",
@@ -45,6 +46,7 @@ class EvidenceLifecycleTests(unittest.TestCase):
             response_excerpt="causal signal",
             verdict="success",
             agent_name="validator",
+            validation_metadata={"protocol_valid": True},
         ))
         self.assertTrue(store.is_verified("vuln:1"))
 
