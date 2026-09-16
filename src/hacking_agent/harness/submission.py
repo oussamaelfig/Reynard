@@ -276,6 +276,9 @@ def sanitize_report_json(
     )
     if not report_ok:
         return _invalid_report_projection(source)
+    report_engagement_id = str(
+        (source.get("report_authenticity") or {}).get("engagement_id") or ""
+    )
 
     safe: dict[str, Any] = report_meta(source)
     safe["reportability_policy_version"] = REPORTABILITY_SCHEMA_VERSION
@@ -297,12 +300,11 @@ def sanitize_report_json(
                 candidates.append(finding_from_dict(item))
             except (TypeError, ValueError):
                 malformed += 1
-        confirmed, suppressed = partition_reportable(candidates)
-        if expected_run_id:
-            confirmed, suppressed = partition_reportable(
-                candidates,
-                expected_run_id=expected_run_id,
-            )
+        confirmed, suppressed = partition_reportable(
+            candidates,
+            expected_run_id=expected_run_id,
+            expected_engagement_id=report_engagement_id,
+        )
         rejected_here += malformed
         for _finding, decision in suppressed:
             rejected_here += 1

@@ -271,6 +271,56 @@ def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
     assert "Report-candidate suppressions: 2." in responses[4].text
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "title", "vuln_type", "endpoint", "severity", "description",
+        "impact", "remediation", "parameter", "cwe", "cvss_vector",
+        "cvss_score", "target", "engagement_id", "reproduction_steps",
+        "references", "evidence",
+    ],
+)
+def test_each_bound_field_mutation_is_rejected_by_all_harness_exports(
+    tmp_path,
+    field,
+):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    raw = signed_report(
+        finding_for(
+            valid_bundle(run_id=rec.id),
+            title="SQL injection via `id`",
+        ),
+        run_id=rec.id,
+    )
+    item = raw["targets_assessed"][0]["findings"][0]
+    marker = f"HARNESS-MUTATION-{field}"
+    if field in {"reproduction_steps", "references", "evidence"}:
+        item[field] = [marker]
+    elif field == "cvss_score":
+        item[field] = 10.0
+    else:
+        item[field] = marker
+    md_path, json_path = store.report_paths(rec.id)
+    md_path.write_text(f"# stale\n{marker}", encoding="utf-8")
+    json_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    responses = [
+        c.get(f"/api/runs/{rec.id}/report", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/report.md", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/evidence", headers=AUTH),
+        c.get("/api/findings", headers=AUTH),
+        c.get("/api/findings.md", headers=AUTH),
+    ]
+    assert all(response.status_code == 200 for response in responses)
+    assert responses[0].json()["json"]["confirmed_count"] == 0
+    assert responses[2].json()["confirmed_count"] == 0
+    assert responses[3].json()["confirmed_count"] == 0
+    assert responses[3].json()["suppressed_count"] == 1
+    if field != "cvss_score":
+        assert all(marker not in response.text for response in responses)
+
+
 def test_report_md_download(tmp_path):
     store, c = _client(tmp_path)
     rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))

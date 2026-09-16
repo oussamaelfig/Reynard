@@ -351,6 +351,7 @@ class Orchestrator:
         max_subagents: int = 4,
         exploit_server_url: str = "",
         mission_mode: str | None = None,
+        engagement_id: str = "",
     ):
         self.target_url = target_url
         self.objective = objective
@@ -361,6 +362,7 @@ class Orchestrator:
         )
         self.validation_engagement_id = (
             os.getenv("REYNARD_ENGAGEMENT_ID")
+            or engagement_id
             or f"engagement:{sha256_text(target_url)[:16]}"
         )
 
@@ -2588,6 +2590,8 @@ class Orchestrator:
                 existing = self.bundles.by_vuln(vuln_id)
                 if existing:
                     bundle.id = existing[-1].id
+                else:
+                    bundle.id = f"bundle:{vuln_id}"
                 bundle.finding_id = vuln_id
                 finalize_bundle_for_reporting(
                     bundle,

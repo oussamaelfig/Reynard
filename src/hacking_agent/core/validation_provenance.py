@@ -49,6 +49,12 @@ _ALLOWED_EFFECT_KINDS = {
     "concrete_exploit_effect",
 }
 _BINDING_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_ARTIFACT_MEDIA = {
+    "browser_execution_trace": {"application/json"},
+    "oob_interaction_trace": {"application/json"},
+    "validation_trace": {"application/json", "application/octet-stream"},
+    "browser_screenshot": {"image/png", "image/jpeg", "image/webp"},
+}
 
 
 def utc_now() -> str:
@@ -106,6 +112,12 @@ def _read_key(*, create: bool) -> bytes:
     root = _state_dir()
     key_path = root / "authority.key"
     if key_path.exists():
+        if key_path.is_symlink() or not key_path.is_file():
+            raise ValueError("validation authority key path is unsafe")
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
         data = key_path.read_bytes()
         if len(data) < 32:
             raise ValueError("validation authority key is malformed")
@@ -350,6 +362,14 @@ def _artifact_extension(media_type: str) -> str:
     return ".bin"
 
 
+def _valid_timestamp(value: Any) -> bool:
+    try:
+        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return bool(str(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def store_artifact(
     content: bytes,
     *,
@@ -362,6 +382,11 @@ def store_artifact(
     """Persist content-addressed evidence and return a signed manifest."""
     if not _BINDING_RE.fullmatch(str(run_id or "")):
         raise ValueError("unsafe artifact run binding")
+    if (
+        kind not in _ARTIFACT_MEDIA
+        or media_type not in _ARTIFACT_MEDIA[kind]
+    ):
+        raise ValueError("unsupported artifact kind or media type")
     digest = sha256_bytes(content)
     extension = _artifact_extension(media_type)
     relative = PurePosixPath(
@@ -439,6 +464,7 @@ def verify_artifact(
         data.get("source") != EXECUTOR_SOURCE
         or data.get("producer") != ARTIFACT_PRODUCER
         or data.get("run_id") != expected_run_id
+        or not _valid_timestamp(data.get("captured_at"))
     ):
         return False, "untrusted_artifact_provenance"
     raw_path = str(data.get("path") or "")
@@ -449,6 +475,8 @@ def verify_artifact(
         or ".." in relative.parts
         or "." in relative.parts
         or "\\" in raw_path
+        or not relative.parts
+        or relative.parts[0] != expected_run_id
     ):
         return False, "artifact_path_escape"
     root = artifact_root()
@@ -474,7 +502,8 @@ def verify_artifact(
     ):
         return False, "artifact_size_mismatch"
     try:
-        actual_digest = sha256_bytes(resolved.read_bytes())
+        content = resolved.read_bytes()
+        actual_digest = sha256_bytes(content)
     except OSError:
         return False, "artifact_unreadable"
     if (
@@ -482,8 +511,27 @@ def verify_artifact(
         or data.get("artifact_id") != f"sha256:{actual_digest}"
     ):
         return False, "artifact_hash_mismatch"
-    if not str(data.get("kind") or "") or not str(data.get("media_type") or ""):
+    kind = str(data.get("kind") or "")
+    media_type = str(data.get("media_type") or "")
+    if (
+        kind not in _ARTIFACT_MEDIA
+        or media_type not in _ARTIFACT_MEDIA[kind]
+        or resolved.suffix.lower() != _artifact_extension(media_type)
+    ):
         return False, "malformed_artifact_manifest"
+    if media_type == "application/json":
+        try:
+            json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False, "artifact_type_mismatch"
+    elif media_type == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False, "artifact_type_mismatch"
+    elif media_type == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
+        return False, "artifact_type_mismatch"
+    elif media_type == "image/webp" and not (
+        content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    ):
+        return False, "artifact_type_mismatch"
     return True, ""
 
 
@@ -611,9 +659,20 @@ def verify_observation(
         or data.get("probe_kind")
         not in {"replay", "fresh_context_replay", "control", "vary"}
         or data.get("effect_kind") not in _ALLOWED_EFFECT_KINDS | {""}
+        or not _valid_timestamp(data.get("captured_at"))
+        or not isinstance(data.get("status_code"), int)
+        or isinstance(data.get("status_code"), bool)
+        or not 100 <= int(data.get("status_code")) <= 599
+        or str(data.get("method") or "").upper()
+        not in {
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS",
+            "CONNECT", "TRACE",
+        }
     ):
         return False, "malformed_executor_observation"
-    if data.get("effect_kind") and len(str(data.get("effect_fingerprint"))) != 64:
+    if data.get("effect_kind") and not re.fullmatch(
+        r"[0-9a-f]{64}", str(data.get("effect_fingerprint") or ""),
+    ):
         return False, "malformed_executor_effect"
     for artifact in data.get("artifacts") or []:
         ok, reason = verify_artifact(
@@ -813,12 +872,37 @@ def verify_protocol(protocol: Any) -> tuple[bool, str]:
     return True, ""
 
 
+_BUNDLE_PUBLIC_FIELDS = (
+    "id", "title", "vuln_type", "severity", "target", "endpoint", "identity",
+    "vuln_id", "finding_id", "created_at", "updated_at", "test_exchanges",
+    "control_tests", "oob_interactions", "screenshots", "reproduction_steps",
+    "causal_signal", "verification_status", "verified_by", "notes",
+    "validation_schema_version", "discovered_by", "validator_identity",
+    "validator_version", "validation_method", "validation_context",
+    "validated_at", "replay_count", "replay_results", "proof_type",
+    "proof_metadata", "validation_protocol", "artifacts",
+    "customer_projection", "validation_error", "integrity_sha256",
+)
+
+
 def bundle_signing_payload(bundle: Any) -> dict[str, Any]:
-    data = dict(bundle) if isinstance(bundle, Mapping) else dict(bundle.to_dict())
-    data.pop("authenticity", None)
-    data.pop("suppression_reason_code", None)
-    data.pop("suppression_rationale", None)
-    return data
+    raw = dict(bundle) if isinstance(bundle, Mapping) else dict(bundle.to_dict())
+    return {
+        key: raw.get(key)
+        for key in _BUNDLE_PUBLIC_FIELDS
+    }
+
+
+def public_evidence_bundle(bundle: Any) -> dict[str, Any]:
+    """Return the only EvidenceBundle shape allowed in customer documents."""
+    payload = bundle_signing_payload(bundle)
+    authenticity = (
+        bundle.get("authenticity")
+        if isinstance(bundle, Mapping)
+        else getattr(bundle, "authenticity", None)
+    )
+    payload["authenticity"] = dict(authenticity or {})
+    return payload
 
 
 def attest_bundle(bundle: Any) -> dict[str, Any]:
@@ -843,6 +927,7 @@ def verify_bundle_authenticity(
     bundle: Any,
     *,
     expected_run_id: str = "",
+    expected_engagement_id: str = "",
 ) -> tuple[bool, str]:
     data = bundle_signing_payload(bundle)
     envelope = (
@@ -862,7 +947,7 @@ def verify_bundle_authenticity(
         "evidence_bundle",
         data,
         expected_run_id=expected_run_id or run_id,
-        expected_engagement_id=engagement_id,
+        expected_engagement_id=expected_engagement_id or engagement_id,
         expected_validator_instance_id=str(identity.get("instance_id") or ""),
     )
 

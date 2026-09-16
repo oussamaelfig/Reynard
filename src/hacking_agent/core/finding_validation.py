@@ -19,11 +19,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlparse
 
 
 from hacking_agent.core.validation_provenance import (
     EXECUTOR_SOURCE,
     VALIDATOR_IMPLEMENTATION,
+    bundle_signing_payload,
     canonical_json,
     sha256_text,
     verify_artifact,
@@ -191,12 +193,8 @@ def _has_unsanitized_secret(value: Any, key: str = "") -> bool:
 
 def evidence_integrity_digest(bundle: Any) -> str:
     """Return a stable digest of the persisted, sanitized evidence payload."""
-    data = _as_mapping(bundle)
+    data = bundle_signing_payload(bundle)
     data.pop("integrity_sha256", None)
-    data.pop("authenticity", None)
-    # Suppression diagnostics are mutable policy output, not evidence.
-    data.pop("suppression_reason_code", None)
-    data.pop("suppression_rationale", None)
     try:
         canonical = canonical_json(data)
     except (TypeError, ValueError):
@@ -510,6 +508,7 @@ def _evaluate_reportability(
     evidence_bundle: Any = None,
     *,
     expected_run_id: str = "",
+    expected_engagement_id: str = "",
 ) -> ReportabilityDecision:
     """Evaluate a candidate against the complete fail-closed report gate.
 
@@ -623,6 +622,7 @@ def _evaluate_reportability(
     authentic, authenticity_reason = verify_bundle_authenticity(
         bundle,
         expected_run_id=expected_run_id,
+        expected_engagement_id=expected_engagement_id,
     )
     if not authentic:
         return _reject(
@@ -664,6 +664,19 @@ def _evaluate_reportability(
             SuppressionReason.INCOMPLETE_EVIDENCE,
             "Evidence timestamps are missing or malformed.",
         )
+    endpoint_url = urlparse(_text(_get(bundle, "endpoint")))
+    target_url = urlparse(_text(_get(bundle, "target")))
+    if (
+        not endpoint_url.scheme
+        or not endpoint_url.netloc
+        or not target_url.scheme
+        or not target_url.netloc
+        or endpoint_url.hostname != target_url.hostname
+    ):
+        return _reject(
+            SuppressionReason.EVIDENCE_MISMATCH,
+            "The affected endpoint is not bound to the authenticated target asset.",
+        )
 
     run_id = _text(_get(protocol, "run_id"))
     engagement_id = _text(_get(protocol, "engagement_id"))
@@ -688,6 +701,16 @@ def _evaluate_reportability(
                 SuppressionReason.ARTIFACT_VERIFICATION_FAILED,
                 f"Artifact verification failed: {artifact_reason}.",
             )
+    if (
+        _text(_get(bundle, "notes"))
+        or _items(bundle, "oob_interactions")
+        or _items(bundle, "screenshots")
+    ):
+        return _reject(
+            SuppressionReason.UNBOUND_CUSTOMER_CONTENT,
+            "Free-form notes and legacy artifact lists are internal-only; "
+            "customer evidence must come from the authenticated protocol.",
+        )
 
     customer_projection = _get(bundle, "customer_projection")
     if (
@@ -949,6 +972,7 @@ def evaluate_reportability(
     evidence_bundle: Any = None,
     *,
     expected_run_id: str = "",
+    expected_engagement_id: str = "",
 ) -> ReportabilityDecision:
     """Return a structured, fail-closed decision for every possible input."""
     try:
@@ -956,6 +980,7 @@ def evaluate_reportability(
             finding,
             evidence_bundle,
             expected_run_id=expected_run_id,
+            expected_engagement_id=expected_engagement_id,
         )
     except Exception:
         return _reject(
@@ -975,6 +1000,7 @@ def is_reportable(
     evidence_bundle: Any = None,
     *,
     expected_run_id: str = "",
+    expected_engagement_id: str = "",
 ) -> bool:
     """The single boolean predicate customer-facing code must use."""
     try:
@@ -982,6 +1008,7 @@ def is_reportable(
             finding,
             evidence_bundle,
             expected_run_id=expected_run_id,
+            expected_engagement_id=expected_engagement_id,
         ).reportable
     except Exception:
         # Policy errors are suppression, never promotion.
@@ -992,6 +1019,7 @@ def partition_reportable(
     findings: Iterable[Any],
     *,
     expected_run_id: str = "",
+    expected_engagement_id: str = "",
 ) -> tuple[list[Any], list[tuple[Any, ReportabilityDecision]]]:
     confirmed: list[Any] = []
     suppressed: list[tuple[Any, ReportabilityDecision]] = []
@@ -1000,6 +1028,7 @@ def partition_reportable(
             decision = evaluate_reportability(
                 finding,
                 expected_run_id=expected_run_id,
+                expected_engagement_id=expected_engagement_id,
             )
         except Exception:
             decision = _reject(

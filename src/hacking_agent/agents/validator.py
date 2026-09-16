@@ -95,15 +95,14 @@ token and session cookie are refreshed together), then submit.
 5. final=True ends iteration. You MUST set final=True before returning
    confirmed=True - i.e. you can only confirm AFTER finishing all probes.
 6. Every next_probe MUST include probe_kind. On the final response, provide
-   attempt_results referencing real executed attempt indexes. Confirmation
-   requires two replay/fresh_context_replay results with outcome
-   vulnerable_effect and one control result with outcome control_no_effect.
+   attempt_results only as your advisory interpretation. Your outcomes,
+   behavioral signals, notes, context IDs, and proof metadata NEVER establish
+   reportability. The control plane independently captures requests/responses,
+   derives supported structured effects, creates context/capture IDs, and
+   authenticates two replays plus a matched control.
 7. Supply validation_context, exact reproduction_steps, and class-specific
-   proof_type/proof_metadata. XSS needs browser execution; injection needs a
-   payload-specific oracle; blind SSRF/XXE needs fresh attributable correlation
-   or direct sensitive-resource proof; authz needs a controlled identity and
-   ownership matrix; upload/traversal/cache/race/business logic/OAuth needs a
-   concrete exploit effect and matched control.
+   proof_type/proof_metadata for operator diagnostics only. Unsupported
+   executor evidence is suppressed even when you claim confirmed=True.
 
 # OUTPUT
 A SINGLE ValidationOutput JSON. While iterating, supply next_probe and

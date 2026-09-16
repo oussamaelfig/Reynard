@@ -39,7 +39,10 @@ from hacking_agent.core.finding_validation import (
     is_reportable,
     partition_reportable,
 )
-from hacking_agent.core.validation_provenance import verify_protocol
+from hacking_agent.core.validation_provenance import (
+    public_evidence_bundle,
+    verify_protocol,
+)
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
 from hacking_agent.core.schemas import AgentResult, AgentTask
 
@@ -542,7 +545,7 @@ def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
         "references": list(finding.references),
         "engagement_id": finding.engagement_id,
         "evidence": list(finding.evidence),
-        "evidence_bundle": dict(finding.evidence_bundle),
+        "evidence_bundle": public_evidence_bundle(finding.evidence_bundle),
     }
 
 

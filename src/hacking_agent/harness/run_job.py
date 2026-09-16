@@ -120,8 +120,15 @@ def main(argv: list[str] | None = None) -> int:
         results.append(row)
 
     try:
-        report_md, report_json = build_consolidated_report(engagement, targets, results)
-        (run_dir / "report.md").write_text(report_md, encoding="utf-8")
+        _report_md, report_json = build_consolidated_report(
+            engagement, targets, results,
+        )
+        from hacking_agent.harness.submission import render_stored_report_markdown
+        safe_markdown = render_stored_report_markdown(
+            report_json,
+            expected_run_id=run_dir.name,
+        )
+        (run_dir / "report.md").write_text(safe_markdown, encoding="utf-8")
         (run_dir / "report.json").write_text(
             json.dumps(report_json, indent=2, default=str), encoding="utf-8")
         findings_count = int(report_json.get("finding_count", 0) or 0)

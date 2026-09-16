@@ -53,6 +53,18 @@ from hacking_agent.core.validation_provenance import (
 console = Console()
 
 
+def _engagement_binding(engagement: Engagement) -> str:
+    return "engagement:" + sha256_text(canonical_json({
+        "name": engagement.engagement_name,
+        "authorized_domains": sorted(engagement.authorized_domains),
+        "authorized_cidrs": sorted(engagement.authorized_cidrs),
+        "authorized_url_prefixes": sorted(
+            engagement.authorized_url_prefixes
+        ),
+        "out_of_scope": sorted(engagement.out_of_scope),
+    }))[:24]
+
+
 def authorized_targets(
     engagement: Engagement,
     explicit: list[str] | None = None,
@@ -164,6 +176,7 @@ def run_target(
                 objective=run_objective,
                 scope_domains=list(engagement.authorized_domains),
                 scope_cidrs=list(engagement.authorized_cidrs),
+                engagement_id=_engagement_binding(engagement),
                 # An authorized engagement is always a PRODUCTION assessment:
                 # no lab assumptions, evidence-gated findings only.
                 mission_mode="production",
@@ -295,11 +308,7 @@ def build_consolidated_report(
     run_id = os.getenv("REYNARD_RUN_ID") or f"assessment:{uuid.uuid4().hex}"
     engagement_id = (
         os.getenv("REYNARD_ENGAGEMENT_ID")
-        or "engagement:"
-        + sha256_text(canonical_json({
-            "name": meta.get("engagement_name", ""),
-            "targets": meta.get("targets", []),
-        }))[:16]
+        or _engagement_binding(engagement)
     )
     report_json["report_authenticity"] = attest_report(
         report_json,

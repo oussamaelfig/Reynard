@@ -54,6 +54,7 @@ from hacking_agent.core.validation_provenance import (  # noqa: E402
 from hacking_agent.harness.submission import (  # noqa: E402
     UnreportableFindingError,
     build_submission_markdown,
+    finding_from_dict,
     iter_report_findings,
     render_stored_report_markdown,
     sanitize_report_json,
@@ -606,6 +607,10 @@ def test_mutated_content_is_rejected_from_every_outward_path(field, tmp_path):
     assert marker not in str(safe)
     assert iter_report_findings(report) == []
     assert marker not in render_stored_report_markdown(report)
+    assert marker not in render_assessment_report(
+        {},
+        [finding_from_dict(item)],
+    )
     with pytest.raises(UnreportableFindingError):
         build_submission_markdown(item)
 
@@ -628,6 +633,20 @@ def test_unknown_signature_key_and_run_binding_fail_closed():
     assert decision.reason_code == (
         SuppressionReason.EVIDENCE_AUTHENTICITY_FAILED.value
     )
+
+
+def test_report_engagement_binding_cannot_mix_valid_findings():
+    finding = finding_for(valid_bundle())
+    report = signed_report(finding)
+    report["report_authenticity"] = attest_report(
+        report,
+        run_id=RUN_ID,
+        engagement_id="engagement:other",
+        validator_instance_id="reporter:test-instance",
+    )
+    safe = sanitize_report_json(report)
+    assert safe["confirmed_count"] == 0
+    assert iter_report_findings(report) == []
 
 
 def test_model_proof_metadata_and_notes_cannot_change_trusted_outcome():
@@ -690,6 +709,20 @@ def test_arbitrary_suppression_reason_keys_never_cross_customer_boundary():
     assert safe["suppressed_count"] == 2
     assert "suppression_reasons" not in safe
     assert "Bearer secret" not in render_stored_report_markdown(report)
+
+
+def test_internal_bundle_diagnostics_and_unknown_prose_are_not_serialized():
+    finding = finding_for(valid_bundle())
+    finding.evidence_bundle["suppression_reason_code"] = "arbitrary-key"
+    finding.evidence_bundle["suppression_rationale"] = "INTERNAL PROSE"
+    finding.evidence_bundle["unknown_candidate_prose"] = "UNRELATED PROSE"
+    assert is_reportable(finding)
+    exported = finding_to_report_dict(finding)
+    serialized = exported["evidence_bundle"]
+    assert "suppression_reason_code" not in serialized
+    assert "suppression_rationale" not in serialized
+    assert "unknown_candidate_prose" not in serialized
+    assert "INTERNAL PROSE" not in str(exported)
 
 
 def test_reports_json_markdown_iterator_and_submission_share_gate():
