@@ -90,6 +90,12 @@ def artifact_root() -> Path:
     return _state_dir() / "artifacts"
 
 
+def _host_exec_enabled() -> bool:
+    return os.getenv("REYNARD_HOST_EXEC", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _decode_env_key(raw: str) -> bytes:
     text = raw.strip()
     try:
@@ -105,6 +111,11 @@ def _decode_env_key(raw: str) -> bytes:
 
 
 def _read_key(*, create: bool) -> bytes:
+    if _host_exec_enabled():
+        raise PermissionError(
+            "validation authority disabled while model tools can execute on "
+            "the host (REYNARD_HOST_EXEC)"
+        )
     supplied = os.getenv("REYNARD_VALIDATION_HMAC_KEY", "")
     if supplied:
         return _decode_env_key(supplied)
@@ -187,6 +198,19 @@ def sign_payload(
     engagement_id: str,
     validator_instance_id: str,
 ) -> dict[str, Any]:
+    bindings = {
+        "run_id": str(run_id or ""),
+        "engagement_id": str(engagement_id or ""),
+        "validator_instance_id": str(validator_instance_id or ""),
+    }
+    invalid = [
+        name for name, value in bindings.items()
+        if not _BINDING_RE.fullmatch(value)
+    ]
+    if invalid:
+        raise ValueError(
+            "missing or unsafe authenticity binding: " + ", ".join(invalid)
+        )
     key = _read_key(create=True)
     envelope = _envelope_core(
         kind=kind,
@@ -215,12 +239,22 @@ def verify_payload(
         return False, "missing_authenticity"
     core = dict(envelope)
     signature = str(core.pop("signature", "") or "")
+    expected_keys = {
+        "schema_version", "authority", "algorithm", "key_id", "kind",
+        "run_id", "engagement_id", "validator_instance_id", "issued_at",
+    }
     if (
-        core.get("schema_version") != AUTHORITY_SCHEMA_VERSION
+        set(core) != expected_keys
+        or core.get("schema_version") != AUTHORITY_SCHEMA_VERSION
         or core.get("authority") != AUTHORITY_NAME
         or core.get("algorithm") != "HMAC-SHA256"
         or core.get("kind") != kind
         or len(signature) != 64
+        or any(
+            not _BINDING_RE.fullmatch(str(core.get(key) or ""))
+            for key in ("run_id", "engagement_id", "validator_instance_id")
+        )
+        or not _valid_timestamp(core.get("issued_at"))
     ):
         return False, "invalid_authenticity_envelope"
     if expected_run_id and core.get("run_id") != expected_run_id:
@@ -331,26 +365,9 @@ def derive_executor_effect(
             "fingerprint": sha256_text("angular_evaluated:true"),
             "details": {"analyzer": "response_analyzer"},
         }
-    if tool == "oob_poll":
-        interactions = parsed.get("interactions")
-        if isinstance(interactions, list) and interactions:
-            stable = [
-                {
-                    "id": item.get("full_id") or item.get("id"),
-                    "protocol": item.get("protocol"),
-                    "timestamp": item.get("timestamp"),
-                }
-                for item in interactions if isinstance(item, dict)
-            ]
-            if stable:
-                return {
-                    "kind": "oob_callback",
-                    "fingerprint": sha256_text(canonical_json(stable)),
-                    "details": {"interaction_count": len(stable)},
-                    "artifact_content": canonical_json(stable).encode("utf-8"),
-                    "artifact_kind": "oob_interaction_trace",
-                    "artifact_media_type": "application/json",
-                }
+    # A poll can return the same callback repeatedly.  Until the executor can
+    # bind two independently minted/delivered correlation tokens, polling output
+    # alone is not a replay and deliberately cannot mint an OOB effect.
     return {}
 
 
@@ -393,17 +410,44 @@ def store_artifact(
         str(run_id), digest[:2], f"{digest}{extension}",
     )
     root = artifact_root()
-    path = root.joinpath(*relative.parts)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        os.chmod(path.parent, 0o700)
+        os.chmod(root, 0o700)
     except OSError:
         pass
-    if path.exists():
-        if not path.is_file() or path.is_symlink() or path.read_bytes() != content:
+    try:
+        root_resolved = root.resolve(strict=True)
+        if root.is_symlink():
+            raise ValueError("artifact root is a symlink")
+        parent_resolved = root_resolved
+        for part in relative.parts[:-1]:
+            child = parent_resolved / part
+            if child.is_symlink():
+                raise ValueError("artifact parent path contains a symlink")
+            child.mkdir(mode=0o700, exist_ok=True)
+            resolved_child = child.resolve(strict=True)
+            resolved_child.relative_to(root_resolved)
+            if not resolved_child.is_dir():
+                raise ValueError("artifact parent is not a directory")
+            parent_resolved = resolved_child
+    except (OSError, ValueError) as exc:
+        raise ValueError("artifact parent escapes the evidence root") from exc
+    try:
+        os.chmod(parent_resolved, 0o700)
+    except OSError:
+        pass
+    candidate = parent_resolved / relative.name
+    if candidate.exists() or candidate.is_symlink():
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or candidate.read_bytes() != content
+        ):
             raise ValueError("content-addressed artifact path is not immutable")
     else:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(candidate, flags, 0o600)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
@@ -484,18 +528,24 @@ def verify_artifact(
         root_resolved = root.resolve(strict=True)
     except OSError:
         return False, "artifact_unreadable"
+    if root.is_symlink():
+        return False, "artifact_path_escape"
     if _path_has_symlink(root_resolved, relative):
         return False, "artifact_symlink_rejected"
     candidate = root_resolved.joinpath(*relative.parts)
     try:
         resolved = candidate.resolve(strict=True)
         resolved.relative_to(root_resolved)
-        info = resolved.stat()
+    except FileNotFoundError:
+        return False, "artifact_unreadable"
     except (OSError, ValueError):
         return False, "artifact_path_escape"
+    try:
+        info = candidate.lstat()
+    except OSError:
+        return False, "artifact_unreadable"
     if (
         not stat.S_ISREG(info.st_mode)
-        or candidate.is_symlink()
         or not isinstance(data.get("size"), int)
         or isinstance(data.get("size"), bool)
         or info.st_size != data.get("size")
@@ -513,10 +563,16 @@ def verify_artifact(
         return False, "artifact_hash_mismatch"
     kind = str(data.get("kind") or "")
     media_type = str(data.get("media_type") or "")
+    expected_path = PurePosixPath(
+        expected_run_id,
+        actual_digest[:2],
+        f"{actual_digest}{_artifact_extension(media_type)}",
+    )
     if (
         kind not in _ARTIFACT_MEDIA
         or media_type not in _ARTIFACT_MEDIA[kind]
         or resolved.suffix.lower() != _artifact_extension(media_type)
+        or relative != expected_path
     ):
         return False, "malformed_artifact_manifest"
     if media_type == "application/json":
@@ -712,10 +768,35 @@ def _protocol_payload(
 
     capture_ids = [str(item.get("capture_id") or "") for item in selected]
     contexts = [str(item.get("context_id") or "") for item in selected]
-    if len(set(capture_ids)) != 3 or len(set(contexts)) != 3:
+    attempt_indices = [int(item.get("attempt_index") or 0) for item in selected]
+    if (
+        len(set(capture_ids)) != 3
+        or len(set(contexts)) != 3
+        or len(set(attempt_indices)) != 3
+        or attempt_indices != sorted(attempt_indices)
+    ):
         return None, "duplicate_executor_provenance"
     positives = selected[:2]
     control = selected[2]
+    positive_match_keys = ("tool", "url", "method", "identity")
+    positive_match = tuple(
+        str(positives[0].get(key) or "") for key in positive_match_keys
+    )
+    if any(
+        tuple(str(item.get(key) or "") for key in positive_match_keys)
+        != positive_match
+        for item in positives[1:]
+    ) or positives[0].get("request_sha256") != positives[1].get(
+        "request_sha256"
+    ):
+        return None, "unmatched_replay_capture"
+    control_match_keys = ("tool", "url", "method")
+    if tuple(
+        str(control.get(key) or "") for key in control_match_keys
+    ) != tuple(
+        str(positives[0].get(key) or "") for key in control_match_keys
+    ):
+        return None, "unmatched_control_capture"
     effect_kind = str(positives[0].get("effect_kind") or "")
     effect_fingerprint = str(positives[0].get("effect_fingerprint") or "")
     if (
@@ -731,11 +812,18 @@ def _protocol_payload(
         or control.get("effect_fingerprint")
     ):
         return None, "executor_effect_not_reproduced"
-    control_pair = (
-        control.get("request_sha256"), control.get("response_sha256"),
-    )
+    positive_identity = str(positives[0].get("identity") or "")
+    control_identity = str(control.get("identity") or "")
+    authorization_effect = effect_kind in {
+        "unauthorized_access", "unauthorized_action",
+    }
+    if (
+        (authorization_effect and control_identity == positive_identity)
+        or (not authorization_effect and control_identity != positive_identity)
+    ):
+        return None, "unmatched_control_identity"
     if any(
-        control_pair == (item.get("request_sha256"), item.get("response_sha256"))
+        control.get("request_sha256") == item.get("request_sha256")
         for item in positives
     ):
         return None, "duplicated_control_capture"

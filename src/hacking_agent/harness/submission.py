@@ -241,9 +241,12 @@ def report_meta(report_json: dict[str, Any]) -> dict[str, Any]:
 
 
 def _raw_candidate_count(source: dict[str, Any]) -> int:
+    rows = source.get("targets_assessed")
+    if not isinstance(rows, list):
+        return 0
     return sum(
         len(row.get("findings") or [])
-        for row in (source.get("targets_assessed") or [])
+        for row in rows
         if isinstance(row, dict) and isinstance(row.get("findings"), list)
     )
 
@@ -276,8 +279,10 @@ def sanitize_report_json(
     )
     if not report_ok:
         return _invalid_report_projection(source)
+    report_authenticity = source.get("report_authenticity") or {}
+    report_run_id = str(report_authenticity.get("run_id") or "")
     report_engagement_id = str(
-        (source.get("report_authenticity") or {}).get("engagement_id") or ""
+        report_authenticity.get("engagement_id") or ""
     )
 
     safe: dict[str, Any] = report_meta(source)
@@ -302,7 +307,7 @@ def sanitize_report_json(
                 malformed += 1
         confirmed, suppressed = partition_reportable(
             candidates,
-            expected_run_id=expected_run_id,
+            expected_run_id=expected_run_id or report_run_id,
             expected_engagement_id=report_engagement_id,
         )
         rejected_here += malformed

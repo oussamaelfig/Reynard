@@ -28,6 +28,7 @@ from fastapi.responses import (
 from hacking_agent.harness.jobs import JobManager
 from hacking_agent.harness.models import RunRequest
 from hacking_agent.harness.store import RunStore
+from hacking_agent.core.finding_validation import REPORTABILITY_SCHEMA_VERSION
 from hacking_agent.harness.submission import (
     UnreportableFindingError,
     build_submission_markdown,
@@ -208,7 +209,12 @@ def create_app(store: Optional[RunStore] = None,
         if not INDEX_HTML.exists():
             return HTMLResponse(
                 "<h1>Reynard harness</h1><p>UI missing.</p>",
-                headers={"Cache-Control": "no-store"},
+                headers={
+                    "Cache-Control": "no-store, max-age=0",
+                    "Pragma": "no-cache",
+                    "X-Reynard-Revision": app.state.revision,
+                    "X-Reynard-UI-SHA256": app.state.ui_fingerprint,
+                },
             )
         html = INDEX_HTML.read_text(encoding="utf-8")
         # Inject the token so the localhost operator's browser can call the API.
@@ -227,7 +233,7 @@ def create_app(store: Optional[RunStore] = None,
             "auth_required": bool(token),
             "revision": app.state.revision,
             "ui_sha256": app.state.ui_fingerprint,
-            "reportability_policy_version": 2,
+            "reportability_policy_version": REPORTABILITY_SCHEMA_VERSION,
         }
 
     # ---- runs ----------------------------------------------------------

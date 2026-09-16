@@ -352,12 +352,14 @@ class Orchestrator:
         exploit_server_url: str = "",
         mission_mode: str | None = None,
         engagement_id: str = "",
+        run_id: str = "",
     ):
         self.target_url = target_url
         self.objective = objective
         self.exploit_server_url = (exploit_server_url or "").strip()
         self.validation_run_id = (
             os.getenv("REYNARD_RUN_ID")
+            or run_id
             or f"standalone-run:{uuid.uuid4().hex}"
         )
         self.validation_engagement_id = (

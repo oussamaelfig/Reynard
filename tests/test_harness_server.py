@@ -274,7 +274,8 @@ def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
 @pytest.mark.parametrize(
     "field",
     [
-        "title", "vuln_type", "endpoint", "severity", "description",
+        "finding_id", "vuln_id", "title", "vuln_type", "endpoint",
+        "severity", "description",
         "impact", "remediation", "parameter", "cwe", "cvss_vector",
         "cvss_score", "target", "engagement_id", "reproduction_steps",
         "references", "evidence",

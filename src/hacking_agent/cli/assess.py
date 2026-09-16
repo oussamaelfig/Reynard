@@ -149,6 +149,7 @@ def run_target(
     max_iterations: int,
     per_target_timeout: float,
     objective: str | None = None,
+    run_id: str = "",
 ) -> dict[str, Any]:
     """Run the Orchestrator against a single authorized target under the RoE.
 
@@ -177,6 +178,7 @@ def run_target(
                 scope_domains=list(engagement.authorized_domains),
                 scope_cidrs=list(engagement.authorized_cidrs),
                 engagement_id=_engagement_binding(engagement),
+                run_id=run_id,
                 # An authorized engagement is always a PRODUCTION assessment:
                 # no lab assumptions, evidence-gated findings only.
                 mission_mode="production",
@@ -229,6 +231,9 @@ def build_consolidated_report(
     engagement: Engagement,
     targets: list[str],
     target_results: list[dict[str, Any]],
+    *,
+    run_id: str = "",
+    engagement_id: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Aggregate per-target results into a consolidated report (md + json)."""
     meta = _engagement_meta(engagement, targets)
@@ -305,15 +310,20 @@ def build_consolidated_report(
         ),
         "targets_assessed": serialized_rows,
     }
-    run_id = os.getenv("REYNARD_RUN_ID") or f"assessment:{uuid.uuid4().hex}"
-    engagement_id = (
+    report_run_id = (
+        os.getenv("REYNARD_RUN_ID")
+        or run_id
+        or f"assessment:{uuid.uuid4().hex}"
+    )
+    report_engagement_id = (
         os.getenv("REYNARD_ENGAGEMENT_ID")
+        or engagement_id
         or _engagement_binding(engagement)
     )
     report_json["report_authenticity"] = attest_report(
         report_json,
-        run_id=run_id,
-        engagement_id=engagement_id,
+        run_id=report_run_id,
+        engagement_id=report_engagement_id,
         validator_instance_id=f"reporter:{uuid.uuid4().hex}",
     )
     return report_md, report_json
@@ -336,7 +346,7 @@ def write_reports(
     )
 
     safe_json = sanitize_report_json(report_json)
-    safe_markdown = render_stored_report_markdown(safe_json)
+    safe_markdown = render_stored_report_markdown(report_json)
     if out_dir:
         base = Path(out_dir)
         base.mkdir(parents=True, exist_ok=True)
@@ -398,6 +408,14 @@ def run_assessment(args: argparse.Namespace) -> int:
     console.print(f"[bold]Engagement:[/] {engagement.summary()}")
     console.print(f"[bold]Targets:[/] {targets}")
 
+    assessment_run_id = (
+        os.getenv("REYNARD_RUN_ID")
+        or f"assessment:{uuid.uuid4().hex}"
+    )
+    assessment_engagement_id = (
+        os.getenv("REYNARD_ENGAGEMENT_ID")
+        or _engagement_binding(engagement)
+    )
     target_results: list[dict[str, Any]] = []
     if args.dry_run:
         console.print("[yellow]--dry-run: skipping live testing.[/]")
@@ -409,11 +427,16 @@ def run_assessment(args: argparse.Namespace) -> int:
                     target,
                     max_iterations=args.max_iterations,
                     per_target_timeout=args.per_target_timeout,
+                    run_id=assessment_run_id,
                 )
             )
 
     report_md, report_json = build_consolidated_report(
-        engagement, targets, target_results
+        engagement,
+        targets,
+        target_results,
+        run_id=assessment_run_id,
+        engagement_id=assessment_engagement_id,
     )
     md_path, json_path = write_reports(report_md, report_json, args.out)
     console.print(f"[green bold]📄 Consolidated report:[/] {md_path}")

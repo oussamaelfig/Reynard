@@ -36,6 +36,12 @@ Reports moved to another host require the matching authority key and artifact
 store; otherwise they remain useful as untrusted records but yield zero
 confirmed findings.
 
+Reynard refuses to create or verify receipts while `REYNARD_HOST_EXEC` is
+enabled. In that mode an LLM-selected shell command runs as the host account and
+could read either a file-backed or environment-provided key, so a persistent
+local HMAC would not separate model actions from the signing authority. Use the
+isolated container executor for authenticated reports.
+
 Artifacts live under the same state directory in `artifacts/<run-id>/`, using
 content-addressed filenames. Their signed manifests, not path strings, are
 embedded in evidence.
@@ -53,4 +59,6 @@ malicious code running as the same OS account, theft of the authority key, or
 an operator deliberately minting false receipts. It reduces false-positive
 promotion paths; it does not promise zero false positives. Unsupported effect
 forms and missing adapters are intentionally suppressed, which can create false
-negatives.
+negatives. In particular, repeated OOB polling is not treated as independent
+replay evidence; an OOB finding remains suppressed until an executor adapter can
+bind separately minted and delivered correlation tokens.

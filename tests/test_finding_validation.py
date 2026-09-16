@@ -25,6 +25,7 @@ from hacking_agent.agents.reporter import (  # noqa: E402
     finding_to_report_dict,
     render_assessment_report,
 )
+from hacking_agent.core.analyzer import ResponseAnalyzer  # noqa: E402
 from hacking_agent.core.evidence_bundle import (  # noqa: E402
     ControlTest,
     EvidenceBundle,
@@ -44,6 +45,7 @@ from hacking_agent.core.validation_provenance import (  # noqa: E402
     artifact_root,
     attest_report,
     capture_observation,
+    derive_executor_effect,
     issue_protocol_receipt,
     sha256_bytes,
     sha256_text,
@@ -409,6 +411,54 @@ def test_self_attested_responses_notes_and_claimed_contexts_are_rejected():
     )
 
 
+def test_model_payload_cannot_execute_python_in_control_plane(tmp_path):
+    marker = tmp_path / "must-not-exist"
+    payload = (
+        "{{__import__('pathlib').Path("
+        f"{str(marker)!r}"
+        ").touch()}}"
+    )
+    signals = ResponseAnalyzer().analyze(
+        response_text="HTTP/1.1 200 OK\n\nordinary response",
+        payload=payload,
+    )
+    assert not marker.exists()
+    assert signals["angular_evaluated"] is False
+    assert ResponseAnalyzer().analyze(
+        response_text="HTTP/1.1 200 OK\n\n49",
+        payload="{{7*7}}",
+    )["angular_evaluated"] is True
+
+
+def test_host_execution_mode_disables_persistent_authority(monkeypatch):
+    report = signed_report(finding_for(valid_bundle()))
+    monkeypatch.setenv("REYNARD_HOST_EXEC", "1")
+    with pytest.raises(PermissionError, match="model tools can execute"):
+        sign_payload(
+            "customer_report",
+            {"value": "test"},
+            run_id=RUN_ID,
+            engagement_id=ENGAGEMENT_ID,
+            validator_instance_id="reporter:test-instance",
+        )
+    assert sanitize_report_json(report)["confirmed_count"] == 0
+
+
+def test_repeated_oob_poll_is_not_independent_replay_evidence():
+    raw = json.dumps({
+        "interactions": [{
+            "full_id": "same-callback",
+            "protocol": "http",
+            "timestamp": utc_now(),
+        }],
+    })
+    assert derive_executor_effect(
+        tool="oob_poll",
+        raw_result=raw,
+        signals={},
+    ) == {}
+
+
 def test_legitimate_trusted_record_without_semantic_artifact_is_reportable():
     finding = finding_for(valid_bundle())
     assert finding.evidence_bundle["artifacts"] == []
@@ -435,7 +485,15 @@ def test_nonexistent_required_artifact_fails_closed():
         proof_type="browser_execution",
     )
     record = bundle.artifacts[0]
-    artifact_root().joinpath(*Path(record["path"]).parts).unlink()
+    artifact_path = artifact_root().joinpath(*Path(record["path"]).parts)
+    artifact_path.unlink()
+    ok, reason = verify_artifact(
+        record,
+        expected_run_id=RUN_ID,
+        expected_engagement_id=ENGAGEMENT_ID,
+        expected_validator_instance_id=VALIDATOR_ID,
+    )
+    assert not ok and reason == "artifact_unreadable"
     decision = evaluate_reportability(finding_for(bundle))
     assert not decision.reportable
     assert decision.reason_code == (
@@ -555,10 +613,70 @@ def test_duplicate_replay_or_control_provenance_is_rejected():
     assert reason == "duplicated_control_capture"
 
 
+def test_replays_and_control_must_match_executor_request_context():
+    protocol = valid_bundle().validation_protocol
+    observations = deepcopy(protocol["observations"])
+    changed_replay = capture_observation(
+        attempt_index=2,
+        probe_kind="fresh_context_replay",
+        tool=observations[0]["tool"],
+        request="GET /different HTTP/1.1\nHost: app.example.test",
+        response=observations[0]["response"],
+        status_code=200,
+        identity=observations[0]["identity"],
+        url=observations[0]["url"],
+        method=observations[0]["method"],
+        captured_at=utc_now(),
+        run_id=RUN_ID,
+        engagement_id=ENGAGEMENT_ID,
+        validator_instance_id=VALIDATOR_ID,
+        trusted_effect={
+            "kind": observations[0]["effect_kind"],
+            "fingerprint": observations[0]["effect_fingerprint"],
+        },
+    )
+    receipt, reason = issue_protocol_receipt(
+        [observations[0], changed_replay, observations[2]],
+        run_id=RUN_ID,
+        engagement_id=ENGAGEMENT_ID,
+        validator_instance_id=VALIDATOR_ID,
+        validator_version=VALIDATOR_VERSION,
+    )
+    assert receipt is None
+    assert reason == "unmatched_replay_capture"
+
+    changed_control = capture_observation(
+        attempt_index=3,
+        probe_kind="control",
+        tool="different_executor",
+        request=observations[2]["request"],
+        response=observations[2]["response"],
+        status_code=200,
+        identity=observations[2]["identity"],
+        url=observations[2]["url"],
+        method=observations[2]["method"],
+        captured_at=utc_now(),
+        run_id=RUN_ID,
+        engagement_id=ENGAGEMENT_ID,
+        validator_instance_id=VALIDATOR_ID,
+        trusted_effect={},
+    )
+    receipt, reason = issue_protocol_receipt(
+        [observations[0], observations[1], changed_control],
+        run_id=RUN_ID,
+        engagement_id=ENGAGEMENT_ID,
+        validator_instance_id=VALIDATOR_ID,
+        validator_version=VALIDATOR_VERSION,
+    )
+    assert receipt is None
+    assert reason == "unmatched_control_capture"
+
+
 @pytest.mark.parametrize(
     "field",
     [
-        "title", "vuln_type", "endpoint", "severity", "description",
+        "finding_id", "vuln_id", "title", "vuln_type", "endpoint",
+        "severity", "description",
         "impact", "remediation", "parameter", "cwe", "cvss_vector",
         "cvss_score", "target", "engagement_id", "reproduction_steps",
         "references", "evidence",
@@ -584,7 +702,8 @@ def test_every_customer_visible_finding_field_is_bound(field):
 @pytest.mark.parametrize(
     "field",
     [
-        "title", "vuln_type", "endpoint", "severity", "description",
+        "finding_id", "vuln_id", "title", "vuln_type", "endpoint",
+        "severity", "description",
         "impact", "remediation", "parameter", "cwe", "cvss_vector",
         "cvss_score", "target", "engagement_id", "reproduction_steps",
         "references", "evidence",
@@ -647,6 +766,33 @@ def test_report_engagement_binding_cannot_mix_valid_findings():
     safe = sanitize_report_json(report)
     assert safe["confirmed_count"] == 0
     assert iter_report_findings(report) == []
+
+
+def test_report_run_binding_cannot_mix_valid_findings():
+    finding = finding_for(valid_bundle(run_id="bundle-run"))
+    report = signed_report(finding, run_id="report-run")
+    safe = sanitize_report_json(report)
+    assert safe["confirmed_count"] == 0
+    assert safe["suppressed_count"] == 1
+    assert iter_report_findings(report) == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "engagement_name", "client", "tester", "targets",
+        "authorized_domains", "authorized_cidrs", "out_of_scope",
+        "generated_at", "testing_window",
+    ],
+)
+def test_every_report_metadata_field_is_authenticity_bound(field):
+    report = signed_report(finding_for(valid_bundle()))
+    report[field] = [f"MUTATED-{field}"] if isinstance(report[field], list) else (
+        f"MUTATED-{field}"
+    )
+    safe = sanitize_report_json(report)
+    assert safe["confirmed_count"] == 0
+    assert f"MUTATED-{field}" not in str(safe)
 
 
 def test_model_proof_metadata_and_notes_cannot_change_trusted_outcome():
