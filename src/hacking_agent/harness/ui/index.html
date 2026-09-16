@@ -653,7 +653,7 @@
       const tgt = r.targets && r.targets.length ? r.targets.join(", ") : (r.description || "—");
       const err = r.error ? `<span class="fchip" style="color:var(--red)">${esc(r.error).slice(0, 60)}</span>` : "";
       const f = (r.status === "completed" || r.status === "failed")
-        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} suppressed</span>`
+        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} report-gate suppressions</span>`
         : "";
       return `<div class="run ${r.id === selected ? "active" : ""}" data-id="${r.id}">
         <span class="rid">${esc(r.id)}</span>
@@ -799,7 +799,7 @@
         const rows = [];
         targets.forEach((t) => (t.findings || []).forEach((f) => rows.push(
           `<tr><td>${esc(t.target || "")}</td><td>${esc(f.title || f.name || "")}</td><td>${esc(f.severity || "")}</td><td>${esc(f.verification_status || f.status || "")}</td></tr>`)));
-        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${j.target_count ?? "-"}</dd><dt>Confirmed findings</dt><dd>${j.confirmed_count ?? j.finding_count ?? "-"}</dd><dt>Suppressed candidates</dt><dd>${j.suppressed_count ?? 0}</dd></dl>` +
+        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${j.target_count ?? "-"}</dd><dt>Confirmed findings</dt><dd>${j.confirmed_count ?? j.finding_count ?? "-"}</dd><dt>Report-gate suppressions</dt><dd>${j.suppressed_count ?? 0}</dd></dl>` +
           (rows.length ? `<table><thead><tr><th>Target</th><th>Confirmed finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<p class="hint" style="color:var(--text-faint)">No independently validated vulnerabilities were found.</p>`);
       } catch (e) { el.innerHTML = emptyState("No evidence yet", "Evidence bundles appear after the run completes."); }
     }
@@ -939,7 +939,7 @@
       let data;
       try { data = await api("/api/findings"); } catch (e) { return; }
       findingsCache = data.findings || [];
-      $("f-count").textContent = `${data.confirmed_count || 0} confirmed · ${data.suppressed_count || 0} suppressed`;
+      $("f-count").textContent = `${data.confirmed_count || 0} confirmed · ${data.suppressed_count || 0} report-gate suppressions`;
       // Only re-render when the set actually changed, so a background refresh
       // never reflows the list or steals focus while you're reading.
       const sig = findingsCache.map((f) => f.finding_id).join("|");

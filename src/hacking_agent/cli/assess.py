@@ -22,6 +22,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -37,10 +38,17 @@ from hacking_agent.agents.reporter import (
 )
 from hacking_agent.core.engagement import Engagement, EngagementError, load_engagement
 from hacking_agent.core.finding_validation import (
+    REPORTABILITY_SCHEMA_VERSION,
     emit_suppression,
     partition_reportable,
 )
+from hacking_agent.core.evidence_bundle import sanitize_text
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
+from hacking_agent.core.validation_provenance import (
+    attest_report,
+    canonical_json,
+    sha256_text,
+)
 
 console = Console()
 
@@ -102,15 +110,23 @@ def _engagement_meta(engagement: Engagement, targets: list[str]) -> dict[str, An
     if engagement.testing_window_start or engagement.testing_window_end:
         window = f"{engagement.testing_window_start or '...'} → {engagement.testing_window_end or '...'}"
     return {
-        "engagement_name": engagement.engagement_name or "Authorized Assessment",
-        "client": engagement.client,
-        "tester": engagement.tester,
+        "engagement_name": sanitize_text(
+            engagement.engagement_name or "Authorized Assessment"
+        ),
+        "client": sanitize_text(engagement.client),
+        "tester": sanitize_text(engagement.tester),
         "generated_at": datetime.utcnow().isoformat(),
-        "targets": targets,
-        "authorized_domains": engagement.authorized_domains,
-        "authorized_cidrs": engagement.authorized_cidrs,
-        "out_of_scope": engagement.out_of_scope,
-        "testing_window": window,
+        "targets": [sanitize_text(str(value)) for value in targets],
+        "authorized_domains": [
+            sanitize_text(str(value)) for value in engagement.authorized_domains
+        ],
+        "authorized_cidrs": [
+            sanitize_text(str(value)) for value in engagement.authorized_cidrs
+        ],
+        "out_of_scope": [
+            sanitize_text(str(value)) for value in engagement.out_of_scope
+        ],
+        "testing_window": sanitize_text(window),
     }
 
 
@@ -207,11 +223,7 @@ def build_consolidated_report(
     for row in target_results:
         all_candidates.extend(row.get("findings", []))
     all_findings, suppressed = partition_reportable(all_candidates)
-    reason_counts: dict[str, int] = {}
     for finding, decision in suppressed:
-        reason_counts[decision.reason_code] = (
-            reason_counts.get(decision.reason_code, 0) + 1
-        )
         emit_suppression(finding, decision)
 
     target_summaries = []
@@ -226,7 +238,7 @@ def build_consolidated_report(
             else "assessed"
         )
         target_summaries.append({
-            "target": row.get("target", ""),
+            "target": sanitize_text(str(row.get("target", ""))),
             "status": status,
             "confirmed_count": len(confirmed_row),
             "suppressed_count": len(suppressed_row),
@@ -238,34 +250,63 @@ def build_consolidated_report(
         all_candidates,
     )
 
-    report_json = {
+    serialized_rows: list[dict[str, Any]] = []
+    for row in target_results:
+        row_confirmed, row_suppressed = partition_reportable(
+            row.get("findings", [])
+        )
+        verdict_text = str(row.get("verdict") or "").lower()
+        verdict = (
+            "error" if verdict_text.startswith("error:")
+            else "timeout" if verdict_text.startswith("timeout")
+            else "assessed" if verdict_text == "assessed"
+            else "failed" if verdict_text == "failed"
+            else "cancelled" if verdict_text == "cancelled"
+            else "unknown"
+        )
+        serialized = [finding_to_report_dict(item) for item in row_confirmed]
+        serialized_rows.append({
+            "target": (
+                serialized[0]["target"] if serialized
+                else sanitize_text(str(row.get("target") or ""))
+            ),
+            "verdict": verdict,
+            "wall_clock_seconds": max(
+                0.0, float(row.get("wall_clock_seconds", 0) or 0)
+            ),
+            "findings": serialized,
+            "confirmed_count": len(serialized),
+            "suppressed_count": len(row_suppressed),
+        })
+
+    report_json: dict[str, Any] = {
         **meta,
-        "reportability_policy_version": 1,
+        "reportability_policy_version": REPORTABILITY_SCHEMA_VERSION,
         "target_count": len(targets),
         "finding_count": len(all_findings),
         "verified_count": len(all_findings),
         "confirmed_count": len(all_findings),
         "suppressed_count": len(suppressed),
-        "suppression_reasons": reason_counts,
-        "targets_assessed": [
-            {
-                "target": row["target"],
-                "verdict": row["verdict"],
-                "wall_clock_seconds": row["wall_clock_seconds"],
-                "findings": [
-                    finding_to_report_dict(f)
-                    for f in partition_reportable(row.get("findings", []))[0]
-                ],
-                "confirmed_count": len(
-                    partition_reportable(row.get("findings", []))[0]
-                ),
-                "suppressed_count": len(
-                    partition_reportable(row.get("findings", []))[1]
-                ),
-            }
-            for row in target_results
-        ],
+        "suppression_semantics": (
+            "report candidates rejected by the customer export gate"
+        ),
+        "targets_assessed": serialized_rows,
     }
+    run_id = os.getenv("REYNARD_RUN_ID") or f"assessment:{uuid.uuid4().hex}"
+    engagement_id = (
+        os.getenv("REYNARD_ENGAGEMENT_ID")
+        or "engagement:"
+        + sha256_text(canonical_json({
+            "name": meta.get("engagement_name", ""),
+            "targets": meta.get("targets", []),
+        }))[:16]
+    )
+    report_json["report_authenticity"] = attest_report(
+        report_json,
+        run_id=run_id,
+        engagement_id=engagement_id,
+        validator_instance_id=f"reporter:{uuid.uuid4().hex}",
+    )
     return report_md, report_json
 
 

@@ -9,7 +9,9 @@ off to the JobManager (subprocess per run).
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -38,6 +40,31 @@ from hacking_agent.harness.submission import (
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
+def _build_revision() -> str:
+    configured = os.getenv("REYNARD_BUILD_REVISION", "").strip()
+    if configured:
+        return configured[:80]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=Path(__file__).resolve().parents[3],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        return completed.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _ui_fingerprint() -> str:
+    try:
+        return hashlib.sha256(INDEX_HTML.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return "missing"
+
+
 def _read_report_json(store: RunStore, run_id: str) -> dict[str, Any]:
     _, json_path = store.report_paths(run_id)
     if not json_path.exists():
@@ -55,10 +82,12 @@ def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
         rj = _read_report_json(store, rec.id)
         if not rj:
             continue
-        meta = report_meta(rj)
-        for idx, f in enumerate(iter_report_findings(rj)):
+        for idx, f in enumerate(iter_report_findings(
+            rj,
+            expected_run_id=rec.id,
+        )):
             try:
-                submission = build_submission_markdown(f, meta)
+                submission = build_submission_markdown(f)
             except (UnreportableFindingError, ValueError, TypeError):
                 continue
             out.append({
@@ -86,7 +115,10 @@ def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
 def _suppressed_count(store: RunStore) -> int:
     total = 0
     for rec in store.list(limit=500):
-        safe = sanitize_report_json(_read_report_json(store, rec.id))
+        safe = sanitize_report_json(
+            _read_report_json(store, rec.id),
+            expected_run_id=rec.id,
+        )
         total += max(0, int(safe.get("suppressed_count", 0) or 0))
     return total
 
@@ -160,6 +192,8 @@ def create_app(store: Optional[RunStore] = None,
     app.state.store = store
     app.state.jobs = jobs
     app.state.token = token
+    app.state.revision = _build_revision()
+    app.state.ui_fingerprint = _ui_fingerprint()
 
     def _check(supplied: str) -> None:
         if token and supplied != token:
@@ -172,15 +206,29 @@ def create_app(store: Optional[RunStore] = None,
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         if not INDEX_HTML.exists():
-            return HTMLResponse("<h1>Reynard harness</h1><p>UI missing.</p>")
+            return HTMLResponse(
+                "<h1>Reynard harness</h1><p>UI missing.</p>",
+                headers={"Cache-Control": "no-store"},
+            )
         html = INDEX_HTML.read_text(encoding="utf-8")
         # Inject the token so the localhost operator's browser can call the API.
         html = html.replace("__HARNESS_TOKEN__", token)
-        return HTMLResponse(html)
+        return HTMLResponse(html, headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Reynard-Revision": app.state.revision,
+            "X-Reynard-UI-SHA256": app.state.ui_fingerprint,
+        })
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "auth_required": bool(token)}
+        return {
+            "ok": True,
+            "auth_required": bool(token),
+            "revision": app.state.revision,
+            "ui_sha256": app.state.ui_fingerprint,
+            "reportability_policy_version": 2,
+        }
 
     # ---- runs ----------------------------------------------------------
     @app.post("/api/runs")
@@ -232,9 +280,15 @@ def create_app(store: Optional[RunStore] = None,
                 report_json = json.loads(json_path.read_text(encoding="utf-8"))
             except Exception:
                 report_json = {}
-        safe_json = sanitize_report_json(report_json)
+        safe_json = sanitize_report_json(
+            report_json,
+            expected_run_id=run_id,
+        )
         return {
-            "markdown": render_stored_report_markdown(safe_json),
+            "markdown": render_stored_report_markdown(
+                report_json,
+                expected_run_id=run_id,
+            ),
             "json": safe_json,
         }
 
@@ -259,12 +313,13 @@ def create_app(store: Optional[RunStore] = None,
                 "No independently confirmed findings were found. No "
                 "independently validated vulnerabilities met the strict "
                 "evidence gate.\n\n"
-                f"Suppressed internal candidates: {suppressed}.\n"
+                f"Report-candidate suppressions: {suppressed}. This is not a "
+                "count of all hypotheses or reconnaissance observations.\n"
             )
         else:
             parts = [
                 f"# Reynard confirmed findings — {len(items)} submission(s)\n\n"
-                f"Suppressed internal candidates: {suppressed}.\n"
+                f"Report-candidate suppressions: {suppressed}.\n"
             ]
             parts += [it["submission"] for it in items]
             body = "\n\n---\n\n".join(parts)
@@ -279,7 +334,10 @@ def create_app(store: Optional[RunStore] = None,
             raise HTTPException(status_code=404, detail="report not ready")
         report_json = _read_report_json(store, run_id)
         return PlainTextResponse(
-            render_stored_report_markdown(report_json),
+            render_stored_report_markdown(
+                report_json,
+                expected_run_id=run_id,
+            ),
             headers={"Content-Disposition":
                      f'attachment; filename="reynard-report-{run_id}.md"'})
 
@@ -305,7 +363,8 @@ def create_app(store: Optional[RunStore] = None,
             raise HTTPException(status_code=404, detail="evidence not ready")
         try:
             return sanitize_report_json(
-                json.loads(json_path.read_text(encoding="utf-8"))
+                json.loads(json_path.read_text(encoding="utf-8")),
+                expected_run_id=run_id,
             )
         except Exception:
             raise HTTPException(status_code=500, detail="evidence unreadable")

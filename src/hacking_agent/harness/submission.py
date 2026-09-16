@@ -23,8 +23,13 @@ from hacking_agent.agents.reporter import (
 )
 from hacking_agent.core.evidence_bundle import sanitize_text
 from hacking_agent.core.finding_validation import (
+    REPORTABILITY_SCHEMA_VERSION,
     evaluate_reportability,
     partition_reportable,
+)
+from hacking_agent.core.validation_provenance import (
+    report_signing_payload,
+    verify_report_authenticity,
 )
 
 # A few high-signal references by CWE (extend as needed).
@@ -87,7 +92,8 @@ def finding_from_dict(d: dict[str, Any]) -> Finding:
         vuln_id=str(d.get("vuln_id") or d.get("finding_id") or ""),
         vuln_type=sanitize_text(str(d.get("vuln_type") or "")),
         severity=str(d.get("severity") or "medium").lower(),
-        endpoint=sanitize_text(str(d.get("endpoint") or d.get("target") or "")),
+        target=sanitize_text(str(d.get("target") or "")),
+        endpoint=sanitize_text(str(d.get("endpoint") or "")),
         parameter=sanitize_text(str(d.get("parameter") or "")),
         description=sanitize_text(str(d.get("description") or "")),
         impact=sanitize_text(str(d.get("impact") or "")),
@@ -95,16 +101,22 @@ def finding_from_dict(d: dict[str, Any]) -> Finding:
         cwe=str(d.get("cwe") or ""),
         cvss_vector=str(d.get("cvss_vector") or ""),
         cvss_score=float(d.get("cvss_score") or 0.0),
+        reproduction_steps=[
+            sanitize_text(str(item))
+            for item in (d.get("reproduction_steps") or [])
+        ],
+        references=[
+            sanitize_text(str(item))
+            for item in (d.get("references") or [])
+        ],
+        engagement_id=str(d.get("engagement_id") or ""),
         verified=bool(d.get("verified")),
-        # The top-level evidence field is an unsealed compatibility projection.
-        # Always regenerate it from the integrity-checked bundle.
-        evidence=_bundle_evidence(bundle),
+        evidence=list(d.get("evidence") or []),
         verification_status=str(d.get("verification_status") or ""),
         evidence_bundle=bundle,
         suppression_reason_code=str(d.get("suppression_reason_code") or ""),
         suppression_rationale=str(d.get("suppression_rationale") or ""),
     )
-    f.ensure_scored()
     return f
 
 
@@ -153,13 +165,8 @@ def build_submission_markdown(finding: dict[str, Any],
         raise UnreportableFindingError(
             f"submission suppressed: {decision.reason_code}"
         )
-    target = sanitize_text(
-        str(finding.get("target") or meta.get("target") or "")
-    ).strip()
+    target = f.target
     asset = f.endpoint or target or "the in-scope asset"
-    program = sanitize_text(
-        str(meta.get("engagement_name") or meta.get("program") or "")
-    ).strip()
     severity = f.severity.capitalize()
     cvss = "N/A" if (not f.cvss_score or f.cvss_vector == "N/A") else \
         f"{f.cvss_score} (`{f.cvss_vector}`)"
@@ -178,8 +185,6 @@ def build_submission_markdown(finding: dict[str, Any],
         f"- **Weakness:** {weakness}" + (f" — {cwe_url}" if cwe_url else ""),
         f"- **Status:** {status}",
     ]
-    if program:
-        meta_rows.insert(0, f"- **Program:** {program}")
     lines += [r for r in meta_rows if r]
 
     lines += ["", "## Summary", "",
@@ -200,11 +205,7 @@ def build_submission_markdown(finding: dict[str, Any],
     lines += ["", "## Remediation", "",
               f.remediation or _default_remediation(f.vuln_type)]
 
-    refs = []
-    if cwe_url:
-        refs.append(f"- {weakness}: {cwe_url}")
-    if owasp:
-        refs.append(f"- OWASP: {owasp}")
+    refs = [f"- {reference}" for reference in f.references]
     if refs:
         lines += ["", "## References", ""] + refs
 
@@ -214,26 +215,22 @@ def build_submission_markdown(finding: dict[str, Any],
     return "\n".join(lines)
 
 
-def iter_report_findings(report_json: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten only centrally reportable findings from a report document."""
-    out: list[dict[str, Any]] = []
-    for t in report_json.get("targets_assessed", []) or []:
-        if not isinstance(t, dict):
-            continue
-        target = t.get("target", "")
-        for f in t.get("findings", []) or []:
-            if not isinstance(f, dict):
-                continue
-            try:
-                finding = finding_from_dict(f)
-                if evaluate_reportability(finding).reportable:
-                    out.append({
-                        **finding_to_report_dict(finding),
-                        "target": sanitize_text(str(target or "")),
-                    })
-            except (TypeError, ValueError):
-                continue
-    return out
+def iter_report_findings(
+    report_json: dict[str, Any],
+    *,
+    expected_run_id: str = "",
+) -> list[dict[str, Any]]:
+    """Flatten findings only after report and bundle authenticity checks."""
+    safe = sanitize_report_json(
+        report_json,
+        expected_run_id=expected_run_id,
+    )
+    return [
+        dict(item)
+        for row in safe.get("targets_assessed", [])
+        for item in row.get("findings", [])
+        if isinstance(item, dict)
+    ]
 
 
 def report_meta(report_json: dict[str, Any]) -> dict[str, Any]:
@@ -243,22 +240,47 @@ def report_meta(report_json: dict[str, Any]) -> dict[str, Any]:
     return {k: report_json.get(k) for k in keys if k in report_json}
 
 
-def sanitize_report_json(report_json: dict[str, Any]) -> dict[str, Any]:
-    """Re-gate a stored report and return a customer-safe strict document."""
-    source = report_json if isinstance(report_json, dict) else {}
-    safe: dict[str, Any] = report_meta(source)
-    safe["reportability_policy_version"] = 1
-    safe["target_count"] = _safe_int(source.get("target_count", 0))
+def _raw_candidate_count(source: dict[str, Any]) -> int:
+    return sum(
+        len(row.get("findings") or [])
+        for row in (source.get("targets_assessed") or [])
+        if isinstance(row, dict) and isinstance(row.get("findings"), list)
+    )
 
-    declared_suppressed = _safe_int(source.get("suppressed_count", 0))
-    raw_reasons = source.get("suppression_reasons") or {}
-    reasons = {
-        str(key): value
-        for key, value in (
-            raw_reasons.items() if isinstance(raw_reasons, dict) else []
-        )
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+def _invalid_report_projection(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "reportability_policy_version": REPORTABILITY_SCHEMA_VERSION,
+        "target_count": 0,
+        "finding_count": 0,
+        "verified_count": 0,
+        "confirmed_count": 0,
+        "suppressed_count": _raw_candidate_count(source),
+        "suppression_semantics": (
+            "report candidates rejected by the customer export gate"
+        ),
+        "targets_assessed": [],
     }
+
+
+def sanitize_report_json(
+    report_json: dict[str, Any],
+    *,
+    expected_run_id: str = "",
+) -> dict[str, Any]:
+    """Verify and re-gate a stored report into an allowlisted projection."""
+    source = report_json if isinstance(report_json, dict) else {}
+    report_ok, _ = verify_report_authenticity(
+        source,
+        expected_run_id=expected_run_id,
+    )
+    if not report_ok:
+        return _invalid_report_projection(source)
+
+    safe: dict[str, Any] = report_meta(source)
+    safe["reportability_policy_version"] = REPORTABILITY_SCHEMA_VERSION
+    safe["target_count"] = _safe_int(source.get("target_count", 0))
+    declared_suppressed = _safe_int(source.get("suppressed_count", 0))
     rejected_here = 0
     targets: list[dict[str, Any]] = []
     for target_row in source.get("targets_assessed", []) or []:
@@ -276,16 +298,20 @@ def sanitize_report_json(report_json: dict[str, Any]) -> dict[str, Any]:
             except (TypeError, ValueError):
                 malformed += 1
         confirmed, suppressed = partition_reportable(candidates)
+        if expected_run_id:
+            confirmed, suppressed = partition_reportable(
+                candidates,
+                expected_run_id=expected_run_id,
+            )
         rejected_here += malformed
-        if malformed:
-            key = "malformed_evidence"
-            reasons[key] = reasons.get(key, 0) + malformed
         for _finding, decision in suppressed:
             rejected_here += 1
-            reasons[decision.reason_code] = reasons.get(decision.reason_code, 0) + 1
         serialized = [finding_to_report_dict(finding) for finding in confirmed]
         targets.append({
-            "target": sanitize_text(str(target_row.get("target") or "")),
+            "target": (
+                serialized[0]["target"] if serialized
+                else sanitize_text(str(target_row.get("target") or ""))
+            ),
             "verdict": _safe_verdict(target_row.get("verdict")),
             "wall_clock_seconds": _safe_seconds(
                 target_row.get("wall_clock_seconds", 0)
@@ -306,13 +332,27 @@ def sanitize_report_json(report_json: dict[str, Any]) -> dict[str, Any]:
     safe["verified_count"] = confirmed_count
     safe["confirmed_count"] = confirmed_count
     safe["suppressed_count"] = declared_suppressed + rejected_here
-    safe["suppression_reasons"] = reasons
+    safe["suppression_semantics"] = (
+        "report candidates rejected by the customer export gate"
+    )
+    if report_signing_payload(safe) != report_signing_payload(source):
+        return _invalid_report_projection(source)
+    safe["report_authenticity"] = dict(
+        source.get("report_authenticity") or {}
+    )
     return safe
 
 
-def render_stored_report_markdown(report_json: dict[str, Any]) -> str:
+def render_stored_report_markdown(
+    report_json: dict[str, Any],
+    *,
+    expected_run_id: str = "",
+) -> str:
     """Render stored JSON after re-gating; never trust stored Markdown."""
-    safe = sanitize_report_json(report_json)
+    safe = sanitize_report_json(
+        report_json,
+        expected_run_id=expected_run_id,
+    )
     findings = [
         finding_from_dict(item)
         for row in safe.get("targets_assessed", [])
@@ -332,5 +372,4 @@ def render_stored_report_markdown(report_json: dict[str, Any]) -> str:
     # Preserve the aggregate suppression count in the deterministic renderer
     # without exposing candidate titles/details.
     meta["external_suppressed_count"] = safe.get("suppressed_count", 0)
-    meta["external_suppression_reasons"] = safe.get("suppression_reasons", {})
     return render_assessment_report(meta, findings)

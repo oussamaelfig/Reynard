@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -56,6 +57,7 @@ from hacking_agent.agents import (
     ReporterAgent,
     ValidatorAgent,
 )
+from hacking_agent.agents.reporter import finalize_bundle_for_reporting
 from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
@@ -94,6 +96,7 @@ from hacking_agent.core.subagents import BoundedSubagentScheduler, SubagentPolic
 from hacking_agent.core import sessions as session_mod
 from hacking_agent.core import lab_intel as lab_intel_mod
 from hacking_agent.core.tool_selector import render_recommendations
+from hacking_agent.core.validation_provenance import sha256_text
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.integrations import caido_local as caido_local_mod
@@ -352,6 +355,14 @@ class Orchestrator:
         self.target_url = target_url
         self.objective = objective
         self.exploit_server_url = (exploit_server_url or "").strip()
+        self.validation_run_id = (
+            os.getenv("REYNARD_RUN_ID")
+            or f"standalone-run:{uuid.uuid4().hex}"
+        )
+        self.validation_engagement_id = (
+            os.getenv("REYNARD_ENGAGEMENT_ID")
+            or f"engagement:{sha256_text(target_url)[:16]}"
+        )
 
         # ---- mission mode: benchmark (labs) vs production (real assessment) --
         # Lab-specific behaviour (PortSwigger profile seeding, "solved" banner
@@ -2578,6 +2589,11 @@ class Orchestrator:
                 if existing:
                     bundle.id = existing[-1].id
                 bundle.finding_id = vuln_id
+                finalize_bundle_for_reporting(
+                    bundle,
+                    parameter=parameter,
+                    extra_secrets=secrets,
+                )
                 self.bundles.add(bundle)
                 decision = evaluate_reportability(evidence_bundle=bundle)
                 attrs["reportability_reason_code"] = decision.reason_code
@@ -2678,6 +2694,8 @@ class Orchestrator:
                 "active_session": active_session,
                 "session_authenticated": session_authenticated,
                 "credential_hint": self.memory.get_fact("credential_hint", ""),
+                "run_id": self.validation_run_id,
+                "engagement_id": self.validation_engagement_id,
             },
         )
         try:

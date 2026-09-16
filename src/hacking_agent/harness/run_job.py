@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     run_dir = Path(argv[0]).resolve()
+    os.environ["REYNARD_RUN_ID"] = run_dir.name
+    os.environ["REYNARD_ENGAGEMENT_ID"] = f"harness:{run_dir.name}"
     try:
         config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     except Exception as exc:
