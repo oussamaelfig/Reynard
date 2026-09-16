@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from hacking_agent.agents.reporter import (
     Finding,
+    _bundle_evidence,
     _default_remediation,
     _reproduction_steps,
     cvss_for_severity,
@@ -20,7 +21,7 @@ from hacking_agent.agents.reporter import (
     finding_to_report_dict,
     render_assessment_report,
 )
-from hacking_agent.core.evidence_bundle import sanitize_structure, sanitize_text
+from hacking_agent.core.evidence_bundle import sanitize_text
 from hacking_agent.core.finding_validation import (
     evaluate_reportability,
     partition_reportable,
@@ -51,13 +52,14 @@ class UnreportableFindingError(ValueError):
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
-        return int(value or 0)
+        return max(0, int(value or 0))
     except (TypeError, ValueError):
-        return default
+        return max(0, default)
 
 
 def finding_from_dict(d: dict[str, Any]) -> Finding:
-    raw_evidence = sanitize_structure(list(d.get("evidence") or []))
+    raw_bundle = d.get("evidence_bundle")
+    bundle = dict(raw_bundle) if isinstance(raw_bundle, dict) else {}
     f = Finding(
         title=sanitize_text(
             str(d.get("title") or d.get("vuln_type") or "Security finding")
@@ -75,9 +77,11 @@ def finding_from_dict(d: dict[str, Any]) -> Finding:
         cvss_vector=str(d.get("cvss_vector") or ""),
         cvss_score=float(d.get("cvss_score") or 0.0),
         verified=bool(d.get("verified")),
-        evidence=raw_evidence if isinstance(raw_evidence, list) else [],
+        # The top-level evidence field is an unsealed compatibility projection.
+        # Always regenerate it from the integrity-checked bundle.
+        evidence=_bundle_evidence(bundle),
         verification_status=str(d.get("verification_status") or ""),
-        evidence_bundle=dict(d.get("evidence_bundle") or {}),
+        evidence_bundle=bundle,
         suppression_reason_code=str(d.get("suppression_reason_code") or ""),
         suppression_rationale=str(d.get("suppression_rationale") or ""),
     )
@@ -199,8 +203,17 @@ def iter_report_findings(report_json: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         target = t.get("target", "")
         for f in t.get("findings", []) or []:
-            if isinstance(f, dict) and evaluate_reportability(f).reportable:
-                out.append({**f, "target": target})
+            if not isinstance(f, dict):
+                continue
+            try:
+                finding = finding_from_dict(f)
+                if evaluate_reportability(finding).reportable:
+                    out.append({
+                        **finding_to_report_dict(finding),
+                        "target": sanitize_text(str(target or "")),
+                    })
+            except (TypeError, ValueError):
+                continue
     return out
 
 
@@ -295,6 +308,7 @@ def render_stored_report_markdown(report_json: dict[str, Any]) -> str:
     # without exposing candidate titles/details.
     meta["external_suppressed_count"] = safe.get("suppressed_count", 0)
     meta["external_suppression_reasons"] = safe.get("suppression_reasons", {})
+    meta["_trusted_aggregate_recon_summary"] = True
     return render_assessment_report(
         meta,
         findings,

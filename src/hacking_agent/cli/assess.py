@@ -223,7 +223,11 @@ def build_consolidated_report(
     ]
     recon_summary = "\n".join(recon_summary_parts) or "No targets assessed."
 
-    report_md = render_assessment_report(meta, all_candidates, recon_summary)
+    report_md = render_assessment_report(
+        {**meta, "_trusted_aggregate_recon_summary": True},
+        all_candidates,
+        recon_summary,
+    )
 
     report_json = {
         **meta,

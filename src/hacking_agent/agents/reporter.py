@@ -305,25 +305,31 @@ def _bundle_evidence(bundle: Any) -> list[dict]:
     rows: list[dict] = []
     if bundle is None:
         return rows
-    for exchange in getattr(bundle, "test_exchanges", []) or []:
+
+    def value(obj: Any, key: str, default: Any = "") -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    for exchange in value(bundle, "test_exchanges", []) or []:
         rows.append({
             "verdict": "success",
             "payload": "",
-            "request": sanitize_text(str(exchange.request or "")),
-            "response": sanitize_text(str(exchange.response or "")),
+            "request": sanitize_text(str(value(exchange, "request") or "")),
+            "response": sanitize_text(str(value(exchange, "response") or "")),
             "agent": "validator",
-            "timestamp": str(exchange.timestamp or ""),
-            "label": str(exchange.label or "replay"),
+            "timestamp": str(value(exchange, "timestamp") or ""),
+            "label": str(value(exchange, "label") or "replay"),
         })
-    for control in getattr(bundle, "control_tests", []) or []:
-        exchange = getattr(control, "exchange", None)
+    for control in value(bundle, "control_tests", []) or []:
+        exchange = value(control, "exchange", None)
         rows.append({
             "verdict": "control",
             "payload": "",
-            "request": sanitize_text(str(getattr(exchange, "request", "") or "")),
-            "response": sanitize_text(str(getattr(exchange, "response", "") or "")),
+            "request": sanitize_text(str(value(exchange, "request") or "")),
+            "response": sanitize_text(str(value(exchange, "response") or "")),
             "agent": "validator",
-            "timestamp": str(getattr(exchange, "timestamp", "") or ""),
+            "timestamp": str(value(exchange, "timestamp") or ""),
             "label": "control",
         })
     return rows
@@ -353,6 +359,9 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
         )
         severity = str(attrs.get("severity") or "medium").lower()
         pocs = evidence.get_by_vuln(vuln_id)
+        title = f"{vuln_type}" + (
+            f" via `{parameter}`" if parameter else ""
+        )
         bundle = None
         if evidence_bundles is not None:
             try:
@@ -370,7 +379,7 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
                     "refuted": V_REFUTED,
                 }.get(state, V_UNVERIFIED),
                 vuln_type=vuln_type,
-                title=vuln_type,
+                title=title,
                 severity=severity,
                 target=str(getattr(memory, "target_url", "") or endpoint),
                 endpoint=str(endpoint),
@@ -381,7 +390,6 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
             bundle.id = f"bundle:{vuln_id}"
             bundle.finding_id = vuln_id
             bundle.seal()
-        title = f"{vuln_type}" + (f" via `{parameter}`" if parameter else "")
         finding = Finding(
             title=title.strip() or vuln_type,
             finding_id=vuln_id,
@@ -391,9 +399,21 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
             endpoint=sanitize_text(str(endpoint)),
             parameter=parameter,
             description=sanitize_text(
-                str(attrs.get("hypothesis") or attrs.get("notes") or "")
+                str(
+                    attrs.get("hypothesis")
+                    or attrs.get("notes")
+                    or bundle.causal_signal
+                    or ""
+                )
             ),
-            impact=sanitize_text(str(attrs.get("impact") or "")),
+            impact=sanitize_text(str(
+                attrs.get("impact")
+                or (
+                    f"Independent validation demonstrated this exploit effect: "
+                    f"{bundle.causal_signal}"
+                    if bundle.causal_signal else ""
+                )
+            )),
             remediation=sanitize_text(
                 str(attrs.get("remediation") or _default_remediation(vuln_type))
             ),
@@ -442,7 +462,9 @@ def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
         "description": finding.description,
         "impact": finding.impact,
         "remediation": finding.remediation,
-        "evidence": list(finding.evidence),
+        # Never trust a parallel, mutable evidence projection from stored JSON.
+        # Rebuild it from the sealed bundle accepted by the central policy.
+        "evidence": _bundle_evidence(finding.evidence_bundle),
         "evidence_bundle": dict(finding.evidence_bundle),
     }
 
@@ -501,8 +523,9 @@ def render_finding_section(finding: Finding, index: int) -> str:
     for i, step in enumerate(_reproduction_steps(finding), 1):
         lines.append(f"{i}. {step}")
     lines += ["", "**Evidence**", ""]
-    if finding.evidence:
-        for ev in finding.evidence:
+    report_evidence = _bundle_evidence(finding.evidence_bundle)
+    if report_evidence:
+        for ev in report_evidence:
             lines.append(
                 f"- [{str(ev.get('verdict', '')).upper()}] "
                 f"payload: `{(ev.get('payload') or '')[:160]}`"
@@ -544,6 +567,12 @@ def render_assessment_report(
     """
     generated_at = meta.get("generated_at") or datetime.utcnow().isoformat()
     verified, suppressed = partition_reportable(findings)
+    if meta.get("_trusted_aggregate_recon_summary") is not True:
+        recon_summary = (
+            "Reconnaissance, response anomalies, and candidate observations "
+            "were retained for internal review. Only independently confirmed "
+            "findings are described in this customer report."
+        )
     tally = _severity_tally(verified)
     external_suppressed = int(meta.get("external_suppressed_count", 0) or 0)
     suppressed_total = len(suppressed) + external_suppressed
@@ -676,8 +705,9 @@ class ReporterAgent(BaseAgent):
         )
         meta = dict(task.context.get("engagement_meta") or {})
         meta.setdefault("targets", [self.memory.target_url] if self.memory.target_url else [])
-        recon_summary = task.context.get("recon_summary") or self.kg_summary()
-        return render_assessment_report(meta, findings, recon_summary)
+        # Incremental KG context contains unverified candidate detail and is
+        # never suitable for a customer report.
+        return render_assessment_report(meta, findings)
 
     def _execute_assessment(self, task: AgentTask) -> AgentResult:
         try:
@@ -739,7 +769,7 @@ class ReporterAgent(BaseAgent):
         return (
             f"{report_md}\n\n---\n\n"
             "# Evidence Appendix (machine-generated, verbatim)\n\n"
-            "The following reproducible evidence bundles back the verified "
+            "The following reproducible evidence bundles back the confirmed "
             "findings above. Secrets are redacted; each bundle includes the "
             "test exchange, control comparison, and reproduction steps.\n\n"
             f"{appendix}\n"

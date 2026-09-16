@@ -2561,10 +2561,15 @@ class Orchestrator:
                 endpoint = str(
                     attrs.get("endpoint") or attrs.get("url") or self.target_url
                 )
+                vuln_type = str(attrs.get("vuln_type", ""))
+                parameter = str(attrs.get("parameter") or "")
+                title = vuln_type + (
+                    f" via `{parameter}`" if parameter else ""
+                )
                 bundle = build_bundle_from_pocs(
                     vuln_id, pocs, verification_status=vstatus,
-                    vuln_type=str(attrs.get("vuln_type", "")),
-                    title=str(attrs.get("vuln_type", "")) or "finding",
+                    vuln_type=vuln_type,
+                    title=title or "finding",
                     severity=str(attrs.get("severity", "info")),
                     target=self.target_url, endpoint=endpoint,
                     identity=active_identity, extra_secrets=secrets,

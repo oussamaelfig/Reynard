@@ -29,6 +29,8 @@ class SuppressionReason(str, Enum):
     REPORTABLE = "reportable"
     MISSING_EVIDENCE_BUNDLE = "missing_evidence_bundle"
     MALFORMED_EVIDENCE = "malformed_evidence"
+    INCOMPLETE_FINDING = "incomplete_finding"
+    EVIDENCE_MISMATCH = "evidence_mismatch"
     LEGACY_OR_MISSING_STATUS = "legacy_or_missing_status"
     NOT_INDEPENDENTLY_VALIDATED = "not_independently_validated"
     VALIDATOR_ERROR = "validator_error"
@@ -116,6 +118,16 @@ def _substantive(value: Any, *, minimum: int = 3) -> bool:
     return not bool(_TEMPLATE_RE.search(text))
 
 
+def _positive_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
 def _valid_timestamp(value: Any) -> bool:
     text = _text(value)
     if not _ISO_PREFIX_RE.match(text):
@@ -144,7 +156,8 @@ def _has_unsanitized_secret(value: Any, key: str = "") -> bool:
     sensitive_keys = {
         "authorization", "cookie", "set-cookie", "x-api-key", "x-auth-token",
         "password", "passwd", "client_secret", "access_token",
-        "refresh_token", "api_key",
+        "refresh_token", "api_key", "apikey", "token", "session",
+        "session_id", "csrf", "csrf_token", "bearer",
     }
     if isinstance(value, Mapping):
         for raw_key, item in value.items():
@@ -184,12 +197,38 @@ def _complete_exchange(exchange: Any, *, endpoint: str) -> bool:
     request = _text(_get(exchange, "request"))
     response = _text(_get(exchange, "response"))
     url = _text(_get(exchange, "url")) or endpoint
+    method = _text(_get(exchange, "method")).upper()
+    status_code = _get(exchange, "status_code")
+    status_valid = (
+        isinstance(status_code, int)
+        and not isinstance(status_code, bool)
+        and 100 <= status_code <= 599
+    )
     return (
         _substantive(request, minimum=5)
         and _substantive(response, minimum=2)
         and _substantive(url, minimum=4)
+        and url.rstrip("/") == endpoint.rstrip("/")
+        and method in {
+            "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS",
+            "CONNECT", "TRACE",
+        }
+        and status_valid
+        and _substantive(_get(exchange, "identity"), minimum=3)
+        and _substantive(_get(exchange, "context_id"), minimum=4)
+        and _positive_int(_get(exchange, "attempt_index")) > 0
         and _valid_timestamp(_get(exchange, "timestamp"))
     )
+
+
+_ARTIFACT_RE = re.compile(
+    r"(?i)(?:^|[/\\])[^/\\]+\.(?:png|jpe?g|webp|gif|har|json|zip|pdf)$"
+)
+
+
+def _artifact_reference(value: Any) -> bool:
+    text = _text(value)
+    return _substantive(text, minimum=5) and bool(_ARTIFACT_RE.search(text))
 
 
 def _proof_xss(bundle: Any, proof_type: str,
@@ -205,8 +244,8 @@ def _proof_xss(bundle: Any, proof_type: str,
         or not _substantive(canary, minimum=6)
         or canary not in signal
         or context not in {"dom", "script", "event_handler", "javascript_url"}
-        or not (any(_substantive(s, minimum=4) for s in screenshots)
-                or _substantive(artifact, minimum=4))
+        or not (any(_artifact_reference(s) for s in screenshots)
+                or _artifact_reference(artifact))
     ):
         return _reject(
             SuppressionReason.XSS_EXECUTION_NOT_PROVEN,
@@ -375,7 +414,7 @@ def _proof_concrete_effect(vuln_class: str, proof_type: str,
     valid = (
         proof_type == "concrete_exploit_effect"
         and _substantive(proof.get("effect"), minimum=8)
-        and _substantive(proof.get("artifact"), minimum=5)
+        and _artifact_reference(proof.get("artifact"))
         and proof.get("control_effect_absent") is True
     )
     class_requirements: dict[str, tuple[str, ...]] = {
@@ -436,7 +475,7 @@ def _classify(vuln_type: str) -> str:
     return ""
 
 
-def evaluate_reportability(
+def _evaluate_reportability(
     finding: Any = None,
     evidence_bundle: Any = None,
 ) -> ReportabilityDecision:
@@ -451,6 +490,11 @@ def evaluate_reportability(
     if bundle is None and finding is not None:
         bundle = _get(finding, "evidence_bundle")
     if bundle is None:
+        return _reject(
+            SuppressionReason.MISSING_EVIDENCE_BUNDLE,
+            "No structured EvidenceBundle accompanies this candidate.",
+        )
+    if isinstance(bundle, Mapping) and not bundle:
         return _reject(
             SuppressionReason.MISSING_EVIDENCE_BUNDLE,
             "No structured EvidenceBundle accompanies this candidate.",
@@ -486,11 +530,13 @@ def evaluate_reportability(
             "Missing, unknown, or legacy verification state fails closed.",
         )
 
-    validator_identity = _text(_get(bundle, "validator_identity"))
-    discovered_by = _text(_get(bundle, "discovered_by"))
+    validator_identity = _text(_get(bundle, "validator_identity")).lower()
+    discovered_by = _text(_get(bundle, "discovered_by")).lower()
     if (
         validator_identity != "validator"
-        or (discovered_by and discovered_by == validator_identity)
+        or not _substantive(discovered_by)
+        or discovered_by == validator_identity
+        or _text(_get(bundle, "verified_by")).lower() != validator_identity
     ):
         return _reject(
             SuppressionReason.NOT_INDEPENDENTLY_VALIDATED,
@@ -524,14 +570,22 @@ def evaluate_reportability(
         )
 
     required_text = (
-        "id", "title", "vuln_type", "target", "endpoint", "identity",
-        "created_at", "updated_at", "causal_signal",
+        "id", "finding_id", "vuln_id", "title", "vuln_type", "severity",
+        "target", "endpoint", "identity", "created_at", "updated_at",
+        "causal_signal", "discovered_by",
     )
     if any(not _substantive(_get(bundle, key), minimum=3) for key in required_text):
         return _reject(
             SuppressionReason.INCOMPLETE_EVIDENCE,
             "Bundle metadata, endpoint/asset, identity context, and causal "
             "signal must be complete.",
+        )
+    if _text(_get(bundle, "severity")).lower() not in {
+        "critical", "high", "medium", "low", "info",
+    }:
+        return _reject(
+            SuppressionReason.INCOMPLETE_EVIDENCE,
+            "Evidence severity is missing or outside the supported vocabulary.",
         )
     if not (
         _valid_timestamp(_get(bundle, "created_at"))
@@ -541,6 +595,52 @@ def evaluate_reportability(
             SuppressionReason.INCOMPLETE_EVIDENCE,
             "Evidence timestamps are missing or malformed.",
         )
+
+    if finding is not None:
+        finding_id = (
+            _text(_get(finding, "finding_id"))
+            or _text(_get(finding, "vuln_id"))
+            or _text(_get(finding, "id"))
+        )
+        bundle_finding_id = _text(_get(bundle, "finding_id"))
+        finding_fields = {
+            "title": 3,
+            "vuln_type": 3,
+            "endpoint": 5,
+            "description": 5,
+            "impact": 5,
+            "remediation": 5,
+        }
+        if (
+            not _substantive(finding_id)
+            or any(
+                not _substantive(_get(finding, key), minimum=minimum)
+                for key, minimum in finding_fields.items()
+            )
+            or _text(_get(finding, "severity")).lower() not in {
+                "critical", "high", "medium", "low", "info",
+            }
+        ):
+            return _reject(
+                SuppressionReason.INCOMPLETE_FINDING,
+                "The customer finding projection is incomplete.",
+            )
+        if (
+            finding_id != bundle_finding_id
+            or _text(_get(finding, "vuln_id")) != _text(_get(bundle, "vuln_id"))
+            or _text(_get(finding, "title")) != _text(_get(bundle, "title"))
+            or _text(_get(finding, "vuln_type")).lower()
+            != _text(_get(bundle, "vuln_type")).lower()
+            or _text(_get(finding, "endpoint")).rstrip("/")
+            != _text(_get(bundle, "endpoint")).rstrip("/")
+            or _text(_get(finding, "severity")).lower()
+            != _text(_get(bundle, "severity")).lower()
+        ):
+            return _reject(
+                SuppressionReason.EVIDENCE_MISMATCH,
+                "Finding identity, title, endpoint, type, or severity does not "
+                "match its sealed evidence bundle.",
+            )
 
     reproduction = _items(bundle, "reproduction_steps")
     if (
@@ -610,24 +710,67 @@ def evaluate_reportability(
         and _substantive(_get(result, "context_id"), minimum=4)
     ]
     attempt_ids = {
-        _get(result, "attempt_index") for result in positive_replays + negative_controls
+        _positive_int(_get(result, "attempt_index"))
+        for result in positive_replays + negative_controls
     }
     exchange_attempt_ids = {
-        _get(exchange, "attempt_index") for exchange in replay_exchanges
+        _positive_int(_get(exchange, "attempt_index"))
+        for exchange in replay_exchanges
     }
     control_attempt_ids = {
-        _get(_get(control, "exchange"), "attempt_index") for control in controls
+        _positive_int(_get(_get(control, "exchange"), "attempt_index"))
+        for control in controls
     }
+    positive_contexts = {
+        _text(_get(result, "context_id")) for result in positive_replays
+    }
+    exchanges_by_attempt = {
+        _positive_int(_get(exchange, "attempt_index")): exchange
+        for exchange in replay_exchanges
+    }
+    controls_by_attempt = {
+        _positive_int(_get(_get(control, "exchange"), "attempt_index")): control
+        for control in controls
+    }
+    correlated = True
+    for result in positive_replays:
+        signal = _text(_get(result, "behavioral_signal")).lower()
+        exchange = exchanges_by_attempt.get(
+            _positive_int(_get(result, "attempt_index"))
+        )
+        transcript = " ".join(
+            _text(_get(exchange, key))
+            for key in ("request", "response", "notes")
+        ).lower()
+        correlated = correlated and _substantive(signal) and signal in transcript
+    for result in negative_controls:
+        signal = _text(_get(result, "behavioral_signal")).lower()
+        control = controls_by_attempt.get(
+            _positive_int(_get(result, "attempt_index"))
+        )
+        exchange = _get(control, "exchange")
+        transcript = " ".join((
+            _text(_get(exchange, "request")),
+            _text(_get(exchange, "response")),
+            _text(_get(exchange, "notes")),
+            _text(_get(control, "result")),
+        )).lower()
+        correlated = correlated and _substantive(signal) and signal in transcript
     if (
         replay_count_int < 2
         or len(positive_replays) < 2
         or len(negative_controls) < 1
         or len(attempt_ids) < 3
+        or 0 in attempt_ids
+        or len(positive_contexts) < 2
+        or not correlated
         or not {
-            _get(result, "attempt_index") for result in positive_replays
+            _positive_int(_get(result, "attempt_index"))
+            for result in positive_replays
         }.issubset(exchange_attempt_ids)
         or not {
-            _get(result, "attempt_index") for result in negative_controls
+            _positive_int(_get(result, "attempt_index"))
+            for result in negative_controls
         }.issubset(control_attempt_ids)
     ):
         return _reject(
@@ -637,12 +780,6 @@ def evaluate_reportability(
         )
 
     vuln_type = _text(_get(bundle, "vuln_type"))
-    if finding is not None and _substantive(_get(finding, "vuln_type")):
-        if _text(_get(finding, "vuln_type")).lower() != vuln_type.lower():
-            return _reject(
-                SuppressionReason.MALFORMED_EVIDENCE,
-                "Finding and evidence vulnerability classes do not match.",
-            )
     vuln_class = _classify(vuln_type)
     if not vuln_class:
         return _reject(
@@ -673,6 +810,20 @@ def evaluate_reportability(
         "Independent replay, matched controls, complete sealed evidence, and "
         "vulnerability-specific behavioural proof all passed.",
     )
+
+
+def evaluate_reportability(
+    finding: Any = None,
+    evidence_bundle: Any = None,
+) -> ReportabilityDecision:
+    """Return a structured, fail-closed decision for every possible input."""
+    try:
+        return _evaluate_reportability(finding, evidence_bundle)
+    except Exception:
+        return _reject(
+            SuppressionReason.MALFORMED_EVIDENCE,
+            "Unexpected policy evaluation error; candidate suppressed.",
+        )
 
 
 def hmac_compare(left: str, right: str) -> bool:
@@ -714,16 +865,18 @@ def emit_suppression(finding: Any, decision: ReportabilityDecision) -> None:
     """Emit a secret-free operator event for a rejected candidate."""
     if decision.reportable:
         return
-    payload = {
-        "finding_id": _text(_get(finding, "finding_id"))
-        or _text(_get(finding, "vuln_id"))
-        or _text(_get(finding, "id")),
-        "title": _text(_get(finding, "title"))[:160],
-        "reason_code": decision.reason_code,
-        "rationale": decision.rationale[:240],
-    }
     try:
+        from hacking_agent.core.evidence_bundle import sanitize_text
         from hacking_agent.core.events import emit
+        payload = {
+            "finding_id": sanitize_text(
+                _text(_get(finding, "finding_id"))
+                or _text(_get(finding, "vuln_id"))
+                or _text(_get(finding, "id"))
+            )[:160],
+            "title": sanitize_text(_text(_get(finding, "title")))[:160],
+            "reason_code": decision.reason_code,
+        }
         emit("finding_suppressed", payload)
     except Exception:
         # Observability must never alter gate behaviour.

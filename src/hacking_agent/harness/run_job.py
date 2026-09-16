@@ -21,7 +21,12 @@ from typing import Any
 
 
 def _write_result(run_dir: Path, **fields: Any) -> None:
-    payload = {"findings_count": 0, "verified_count": 0, "error": ""}
+    payload = {
+        "findings_count": 0,
+        "verified_count": 0,
+        "suppressed_count": 0,
+        "error": "",
+    }
     payload.update(fields)
     try:
         (run_dir / "result.json").write_text(
@@ -119,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(report_json, indent=2, default=str), encoding="utf-8")
         findings_count = int(report_json.get("finding_count", 0) or 0)
         verified_count = int(report_json.get("verified_count", 0) or 0)
+        suppressed_count = int(report_json.get("suppressed_count", 0) or 0)
     except Exception as exc:
         _write_result(run_dir, error=f"report generation failed: {exc}")
         emit("run_end", {"error": str(exc)[:300]})
@@ -129,14 +135,20 @@ def main(argv: list[str] | None = None) -> int:
     if fatal:
         err = " | ".join(fatal)[:500]
         _write_result(run_dir, findings_count=findings_count,
-                      verified_count=verified_count, error=err)
+                      verified_count=verified_count,
+                      suppressed_count=suppressed_count, error=err)
         emit("run_end", {"findings": findings_count, "verified": verified_count,
-                         "error": err})
+                         "suppressed": suppressed_count, "error": err})
         return 1
 
     _write_result(run_dir, findings_count=findings_count,
-                  verified_count=verified_count)
-    emit("run_end", {"findings": findings_count, "verified": verified_count})
+                  verified_count=verified_count,
+                  suppressed_count=suppressed_count)
+    emit("run_end", {
+        "findings": findings_count,
+        "verified": verified_count,
+        "suppressed": suppressed_count,
+    })
     return 0
 
 

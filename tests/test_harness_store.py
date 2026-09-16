@@ -28,10 +28,11 @@ def test_create_get_update_list(tmp_path):
     assert got.status is RunStatus.running and got.pid == 4321
 
     store.update(rec.id, status=RunStatus.completed, findings_count=3,
-                 verified_count=2, exit_code=0)
+                 verified_count=2, suppressed_count=4, exit_code=0)
     got = store.get(rec.id)
     assert got.status is RunStatus.completed
     assert got.findings_count == 3 and got.verified_count == 2
+    assert got.suppressed_count == 4
 
     # newest-first listing
     rec2 = store.create(_req(description="second"))

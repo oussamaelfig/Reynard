@@ -648,7 +648,9 @@
     function runRow(r) {
       const tgt = r.targets && r.targets.length ? r.targets.join(", ") : (r.description || "—");
       const err = r.error ? `<span class="fchip" style="color:var(--red)">${esc(r.error).slice(0, 60)}</span>` : "";
-      const f = (r.status === "completed" || r.status === "failed") ? `<span class="fchip">${r.findings_count} finding(s)</span>` : "";
+      const f = (r.status === "completed" || r.status === "failed")
+        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} suppressed</span>`
+        : "";
       return `<div class="run ${r.id === selected ? "active" : ""}" data-id="${r.id}">
         <span class="rid">${esc(r.id)}</span>
         <span class="rtime">${esc(relTime(r.created_at))}</span>

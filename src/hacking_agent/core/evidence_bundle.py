@@ -555,6 +555,7 @@ class EvidenceBundleStore:
         for bd in (d or {}).get("bundles", []):
             try:
                 b = EvidenceBundle.from_dict(bd)
+                b.apply_reportability()
             except Exception:
                 continue
             with self._lock:

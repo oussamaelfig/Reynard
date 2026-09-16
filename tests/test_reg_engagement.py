@@ -228,13 +228,16 @@ class AssessmentReportTests(unittest.TestCase):
             ))
         return mem, ev
 
-    def test_extract_findings_scores_and_gates(self):
+    def test_exploitation_success_alone_does_not_pass_report_gate(self):
         from hacking_agent.agents.reporter import extract_findings
         mem, ev = self._memory_with_finding(verified=True)
         findings = extract_findings(mem, ev)
         self.assertEqual(len(findings), 1)
         f = findings[0]
-        self.assertTrue(f.verified)
+        self.assertFalse(f.verified)
+        self.assertEqual(
+            f.suppression_reason_code, "legacy_or_missing_status"
+        )
         self.assertEqual(f.cwe, "CWE-79")
         self.assertGreater(f.cvss_score, 0.0)
         self.assertEqual(f.parameter, "search")
@@ -246,7 +249,7 @@ class AssessmentReportTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertFalse(findings[0].verified)
 
-    def test_report_contains_required_sections(self):
+    def test_report_suppresses_unvalidated_candidate_details(self):
         from hacking_agent.agents.reporter import (
             extract_findings,
             render_assessment_report,
@@ -264,10 +267,11 @@ class AssessmentReportTests(unittest.TestCase):
         md = render_assessment_report(meta, findings, "recon notes")
         for section in (
             "Executive Summary", "Scope", "Methodology",
-            "Verified Vulnerabilities", "Remediation", "Reproduction steps",
-            "CVSS v3.1", "CWE-79", "Acme Corp",
+            "Confirmed Vulnerabilities", "Validation Gate Summary", "Acme Corp",
         ):
             self.assertIn(section, md, section)
+        self.assertNotIn("search reflects unencoded input", md)
+        self.assertIn("No independently validated vulnerabilities", md)
 
 
 class AssessCliTests(unittest.TestCase):
@@ -321,8 +325,11 @@ class AssessCliTests(unittest.TestCase):
             eng, ["https://example.com/"], rows
         )
         self.assertIn("Executive Summary", md)
-        self.assertEqual(js["finding_count"], 1)
-        self.assertEqual(js["verified_count"], 1)
+        # A caller cannot bypass the policy by assigning verified=True.
+        self.assertEqual(js["finding_count"], 0)
+        self.assertEqual(js["verified_count"], 0)
+        self.assertEqual(js["suppressed_count"], 1)
+        self.assertNotIn("Reflected XSS", md)
 
 
 if __name__ == "__main__":

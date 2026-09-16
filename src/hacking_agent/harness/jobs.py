@@ -116,11 +116,14 @@ class JobManager:
             status = RunStatus.completed
         else:
             status = RunStatus.failed
-        findings_count, verified_count = self._strict_report_counts(run_id)
+        findings_count, verified_count, suppressed_count = (
+            self._strict_report_counts(run_id)
+        )
         self.store.update(
             run_id, status=status, exit_code=rc,
             findings_count=findings_count,
             verified_count=verified_count,
+            suppressed_count=suppressed_count,
             error=str(result.get("error", ""))[:500],
         )
         self._drain()
@@ -134,19 +137,20 @@ class JobManager:
         except Exception:
             return {}
 
-    def _strict_report_counts(self, run_id: str) -> tuple[int, int]:
+    def _strict_report_counts(self, run_id: str) -> tuple[int, int, int]:
         """Recompute customer counts from re-gated report evidence."""
         _md, path = self.store.report_paths(run_id)
         if not path.exists():
-            return 0, 0
+            return 0, 0, 0
         try:
             from hacking_agent.harness.submission import sanitize_report_json
             raw = json.loads(path.read_text(encoding="utf-8"))
             safe = sanitize_report_json(raw)
             count = int(safe.get("confirmed_count", 0) or 0)
-            return count, count
+            suppressed = int(safe.get("suppressed_count", 0) or 0)
+            return count, count, max(0, suppressed)
         except Exception:
-            return 0, 0
+            return 0, 0, 0
 
     # ---- cancellation ----------------------------------------------------
 

@@ -46,11 +46,12 @@ class BundleTests(unittest.TestCase):
                                   result="403 Forbidden"))
         b.set_verification(eb.V_VERIFIED, verified_by="validator",
                            causal_signal="userA reads userB record cross-identity")
-        md = b.render_markdown()
+        md = b.render_markdown(internal=True)
         self.assertIn("IDOR", md)
         self.assertIn("Control", md)
         self.assertNotIn("session=abc", md)  # sanitized
-        self.assertTrue(b.is_verified)
+        # A status string plus a control is still legacy/incomplete evidence.
+        self.assertFalse(b.is_verified)
         self.assertTrue(b.has_concrete_evidence())
 
     def test_roundtrip(self):
@@ -86,7 +87,8 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(bundles.persist(store, "x.com", "x.com"))
         loaded = EvidenceBundleStore()
         self.assertEqual(loaded.load(store, "x.com", "x.com"), 1)
-        self.assertEqual(len(loaded.verified()), 1)
+        self.assertEqual(len(loaded.all()), 1)
+        self.assertEqual(len(loaded.verified()), 0)
 
 
 class BuildFromPocsTests(unittest.TestCase):
@@ -106,7 +108,7 @@ class BuildFromPocsTests(unittest.TestCase):
         self.assertEqual(len(bundle.test_exchanges), 1)
         self.assertEqual(len(bundle.control_tests), 1)
         self.assertTrue(bundle.reproduction_steps)
-        self.assertTrue(bundle.is_verified)
+        self.assertFalse(bundle.is_verified)
 
     def test_sanitizes_live_cookie_in_pocs(self):
         pocs = [PoC(payload="x", request_summary="GET /a\nCookie: session=LIVEVAL999",
@@ -129,7 +131,7 @@ class OrchestratorEvidenceTests(unittest.TestCase):
                                 objective="test", subagents_enabled=False,
                                 max_iterations=5, mission_mode="production")
 
-    def test_assemble_bundles_from_pocs_records_surface_finding(self):
+    def test_exploitation_only_bundle_stays_suppressed_on_surface(self):
         orch = self._orch()
         try:
             vuln = orch.memory.add_entity("Vulnerability", {
@@ -143,11 +145,11 @@ class OrchestratorEvidenceTests(unittest.TestCase):
             orch._assemble_evidence_bundles()
             bundles = orch.bundles.by_vuln(vuln.id)
             self.assertEqual(len(bundles), 1)
-            self.assertTrue(bundles[0].is_verified)
+            self.assertFalse(bundles[0].is_verified)
             # A finding is recorded on the attack surface, evidence-linked.
             findings = orch.surface.findings()
             self.assertTrue(any(f.evidence_bundle_id == bundles[0].id
-                                and f.status == "verified" for f in findings))
+                                and f.status == "theoretical" for f in findings))
         finally:
             orch.logger.close()
 

@@ -82,6 +82,15 @@ def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
                             -float(r.get("cvss_score") or 0)))
     return out
 
+
+def _suppressed_count(store: RunStore) -> int:
+    total = 0
+    for rec in store.list(limit=500):
+        safe = sanitize_report_json(_read_report_json(store, rec.id))
+        total += max(0, int(safe.get("suppressed_count", 0) or 0))
+    return total
+
+
 UI_DIR = Path(__file__).parent / "ui"
 INDEX_HTML = UI_DIR / "index.html"
 
@@ -232,10 +241,7 @@ def create_app(store: Optional[RunStore] = None,
     @app.get("/api/findings")
     def list_findings(_: None = Depends(require_token)) -> dict[str, Any]:
         items = _collect_findings(store)
-        suppressed = 0
-        for rec in store.list(limit=500):
-            safe = sanitize_report_json(_read_report_json(store, rec.id))
-            suppressed += int(safe.get("suppressed_count", 0) or 0)
+        suppressed = _suppressed_count(store)
         return {
             "count": len(items),
             "confirmed_count": len(items),
@@ -246,14 +252,17 @@ def create_app(store: Optional[RunStore] = None,
     @app.get("/api/findings.md", response_class=PlainTextResponse)
     def findings_markdown(_: None = Depends(require_token)) -> PlainTextResponse:
         items = _collect_findings(store)
+        suppressed = _suppressed_count(store)
         if not items:
             body = (
                 "# Confirmed findings only\n\n"
-                "No independently validated vulnerabilities were found.\n"
+                "No independently validated vulnerabilities were found.\n\n"
+                f"Suppressed internal candidates: {suppressed}.\n"
             )
         else:
             parts = [
-                f"# Reynard confirmed findings — {len(items)} submission(s)\n"
+                f"# Reynard confirmed findings — {len(items)} submission(s)\n\n"
+                f"Suppressed internal candidates: {suppressed}.\n"
             ]
             parts += [it["submission"] for it in items]
             body = "\n\n---\n\n".join(parts)

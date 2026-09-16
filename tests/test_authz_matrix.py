@@ -130,7 +130,8 @@ class EvidenceAndRenderTests(unittest.TestCase):
         bundles = m.to_evidence_bundles(target="https://x.com")
         self.assertTrue(bundles)
         b = bundles[0]
-        self.assertTrue(b.is_verified)
+        self.assertFalse(b.is_verified)
+        self.assertEqual(b.verification_status, "unverified")
         self.assertTrue(b.test_exchanges)
         self.assertTrue(b.control_tests)
         self.assertTrue(b.reproduction_steps)
