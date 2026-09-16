@@ -495,6 +495,10 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
             verification_status=str(bundle.verification_status or ""),
             evidence_bundle=bundle.to_dict(),
         )
+        # Deterministic scoring is useful for internal triage. It cannot promote
+        # the candidate because the complete outward projection must still
+        # match the authenticated bundle exactly.
+        finding.ensure_scored()
         decision = evaluate_reportability(finding)
         finding.verified = decision.reportable
         if not decision.reportable:
