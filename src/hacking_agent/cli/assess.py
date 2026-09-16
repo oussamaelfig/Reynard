@@ -214,19 +214,28 @@ def build_consolidated_report(
         )
         emit_suppression(finding, decision)
 
-    recon_summary_parts = [
-        f"- `{row['target']}`: {row['verdict']} "
-        f"({len(partition_reportable(row.get('findings', []))[0])} confirmed "
-        f"finding(s), {len(partition_reportable(row.get('findings', []))[1])} "
-        f"suppressed candidate(s), {row['wall_clock_seconds']}s)"
-        for row in target_results
-    ]
-    recon_summary = "\n".join(recon_summary_parts) or "No targets assessed."
+    target_summaries = []
+    for row in target_results:
+        confirmed_row, suppressed_row = partition_reportable(
+            row.get("findings", [])
+        )
+        verdict = str(row.get("verdict") or "").lower()
+        status = (
+            "error" if verdict.startswith("error:")
+            else "timeout" if verdict.startswith("timeout")
+            else "assessed"
+        )
+        target_summaries.append({
+            "target": row.get("target", ""),
+            "status": status,
+            "confirmed_count": len(confirmed_row),
+            "suppressed_count": len(suppressed_row),
+            "wall_clock_seconds": row.get("wall_clock_seconds", 0),
+        })
 
     report_md = render_assessment_report(
-        {**meta, "_trusted_aggregate_recon_summary": True},
+        {**meta, "target_summaries": target_summaries},
         all_candidates,
-        recon_summary,
     )
 
     report_json = {
@@ -265,7 +274,19 @@ def write_reports(
     report_json: dict[str, Any],
     out_dir: str | None,
 ) -> tuple[Path, Path]:
-    """Write the consolidated report to ``out_dir`` (default logs/)."""
+    """Re-gate and write the consolidated report (default ``logs/``).
+
+    ``report_md`` is retained in the signature for compatibility, but the
+    customer Markdown is deterministically rebuilt from the sanitized JSON so
+    a stale or caller-supplied Markdown body cannot bypass the finding gate.
+    """
+    from hacking_agent.harness.submission import (
+        render_stored_report_markdown,
+        sanitize_report_json,
+    )
+
+    safe_json = sanitize_report_json(report_json)
+    safe_markdown = render_stored_report_markdown(safe_json)
     if out_dir:
         base = Path(out_dir)
         base.mkdir(parents=True, exist_ok=True)
@@ -275,8 +296,8 @@ def write_reports(
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     md_path = base / f"assessment_{ts}.md"
     json_path = base / f"assessment_{ts}.json"
-    md_path.write_text(report_md, encoding="utf-8")
-    json_path.write_text(json.dumps(report_json, indent=2), encoding="utf-8")
+    md_path.write_text(safe_markdown, encoding="utf-8")
+    json_path.write_text(json.dumps(safe_json, indent=2), encoding="utf-8")
     return md_path, json_path
 
 

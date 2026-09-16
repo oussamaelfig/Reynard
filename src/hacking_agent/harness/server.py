@@ -256,7 +256,9 @@ def create_app(store: Optional[RunStore] = None,
         if not items:
             body = (
                 "# Confirmed findings only\n\n"
-                "No independently validated vulnerabilities were found.\n\n"
+                "No independently confirmed findings were found. No "
+                "independently validated vulnerabilities met the strict "
+                "evidence gate.\n\n"
                 f"Suppressed internal candidates: {suppressed}.\n"
             )
         else:

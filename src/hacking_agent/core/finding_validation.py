@@ -521,8 +521,11 @@ def _evaluate_reportability(
                 "Finding lacks the explicit strict verification status.",
             )
 
+    schema_version = _get(bundle, "validation_schema_version")
     if (
-        _get(bundle, "validation_schema_version") != REPORTABILITY_SCHEMA_VERSION
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != REPORTABILITY_SCHEMA_VERSION
         or _text(_get(bundle, "verification_status")) != "verified"
     ):
         return _reject(

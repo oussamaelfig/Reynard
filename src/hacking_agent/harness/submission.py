@@ -53,8 +53,27 @@ class UnreportableFindingError(ValueError):
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return max(0, default)
+
+
+def _safe_seconds(value: Any) -> float:
+    try:
+        parsed = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return parsed if 0 <= parsed < float("inf") else 0.0
+
+
+def _safe_verdict(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text.startswith("error"):
+        return "error"
+    if text.startswith("timeout"):
+        return "timeout"
+    if text in {"assessed", "failed", "cancelled"}:
+        return text
+    return "unknown"
 
 
 def finding_from_dict(d: dict[str, Any]) -> Finding:
@@ -238,7 +257,7 @@ def sanitize_report_json(report_json: dict[str, Any]) -> dict[str, Any]:
         for key, value in (
             raw_reasons.items() if isinstance(raw_reasons, dict) else []
         )
-        if isinstance(value, int) and value >= 0
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
     }
     rejected_here = 0
     targets: list[dict[str, Any]] = []
@@ -267,8 +286,10 @@ def sanitize_report_json(report_json: dict[str, Any]) -> dict[str, Any]:
         serialized = [finding_to_report_dict(finding) for finding in confirmed]
         targets.append({
             "target": sanitize_text(str(target_row.get("target") or "")),
-            "verdict": sanitize_text(str(target_row.get("verdict") or "")),
-            "wall_clock_seconds": target_row.get("wall_clock_seconds", 0),
+            "verdict": _safe_verdict(target_row.get("verdict")),
+            "wall_clock_seconds": _safe_seconds(
+                target_row.get("wall_clock_seconds", 0)
+            ),
             "findings": serialized,
             "confirmed_count": len(serialized),
             "suppressed_count": (
@@ -298,19 +319,18 @@ def render_stored_report_markdown(report_json: dict[str, Any]) -> str:
         for item in row.get("findings", [])
     ]
     meta = report_meta(safe)
-    target_lines = [
-        f"- `{row.get('target', '')}`: {row.get('verdict', '')} "
-        f"({row.get('confirmed_count', 0)} confirmed finding(s), "
-        f"{row.get('suppressed_count', 0)} suppressed candidate(s))"
+    meta["target_summaries"] = [
+        {
+            "target": row.get("target", ""),
+            "status": row.get("verdict", ""),
+            "confirmed_count": row.get("confirmed_count", 0),
+            "suppressed_count": row.get("suppressed_count", 0),
+            "wall_clock_seconds": row.get("wall_clock_seconds", 0),
+        }
         for row in safe.get("targets_assessed", [])
     ]
     # Preserve the aggregate suppression count in the deterministic renderer
     # without exposing candidate titles/details.
     meta["external_suppressed_count"] = safe.get("suppressed_count", 0)
     meta["external_suppression_reasons"] = safe.get("suppression_reasons", {})
-    meta["_trusted_aggregate_recon_summary"] = True
-    return render_assessment_report(
-        meta,
-        findings,
-        "\n".join(target_lines) or "No targets assessed.",
-    )
+    return render_assessment_report(meta, findings)

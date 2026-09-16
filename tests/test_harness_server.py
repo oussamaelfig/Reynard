@@ -212,6 +212,9 @@ def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
     store, c = _client(tmp_path)
     rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
     raw = deepcopy(_STRICT_REPORT)
+    raw["targets_assessed"][0]["verdict"] = (
+        "error: SUPPRESSED CUSTOMER SECRET prose-only anomaly detail"
+    )
     raw["targets_assessed"][0]["findings"].append({
         "title": "SUPPRESSED CUSTOMER SECRET",
         "description": "prose-only anomaly detail",

@@ -554,6 +554,41 @@ def _severity_tally(findings: list[Finding]) -> dict[str, int]:
     return tally
 
 
+def _target_summary(meta: dict[str, Any]) -> str:
+    """Render only structured aggregate target state, never free-form notes."""
+    lines: list[str] = []
+    rows = meta.get("target_summaries")
+    if not isinstance(rows, list):
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        target = sanitize_text(str(row.get("target") or "")).strip()
+        status = str(row.get("status") or "assessed").strip().lower()
+        if status not in {"assessed", "timeout", "error", "failed", "cancelled"}:
+            status = "unknown"
+        try:
+            confirmed = max(0, int(row.get("confirmed_count", 0) or 0))
+            suppressed = max(0, int(row.get("suppressed_count", 0) or 0))
+            seconds = max(0.0, float(row.get("wall_clock_seconds", 0) or 0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(seconds):
+            seconds = 0.0
+        lines.append(
+            f"- `{target or 'N/A'}`: {status} "
+            f"({confirmed} confirmed finding(s), {suppressed} suppressed "
+            f"candidate(s), {seconds:g}s)"
+        )
+    if lines:
+        return "\n".join(lines)
+    return (
+        "Reconnaissance, response anomalies, and candidate observations were "
+        "retained for internal review. Only independently confirmed findings "
+        "are described in this customer report."
+    )
+
+
 def render_assessment_report(
     meta: dict,
     findings: list[Finding],
@@ -567,12 +602,10 @@ def render_assessment_report(
     """
     generated_at = meta.get("generated_at") or datetime.utcnow().isoformat()
     verified, suppressed = partition_reportable(findings)
-    if meta.get("_trusted_aggregate_recon_summary") is not True:
-        recon_summary = (
-            "Reconnaissance, response anomalies, and candidate observations "
-            "were retained for internal review. Only independently confirmed "
-            "findings are described in this customer report."
-        )
+    # ``recon_summary`` remains in the signature for API compatibility, but
+    # arbitrary KG/model prose can contain suppressed candidate details.
+    # Customer output is reconstructed from structured aggregate rows only.
+    recon_summary = _target_summary(meta)
     tally = _severity_tally(verified)
     external_suppressed = int(meta.get("external_suppressed_count", 0) or 0)
     suppressed_total = len(suppressed) + external_suppressed
@@ -647,7 +680,7 @@ def render_assessment_report(
         )
     if not verified:
         lines.append(
-            "| — | No independently validated vulnerabilities found | "
+            "| — | No independently confirmed findings found | "
             "— | — | — | — |"
         )
 
@@ -657,9 +690,9 @@ def render_assessment_report(
             lines.append(render_finding_section(f, i))
     else:
         lines.append(
-            "No independently validated vulnerabilities were found. Scanner, "
-            "model, and other candidate observations that did not pass the "
-            "strict evidence gate are intentionally excluded."
+            "No independently confirmed findings were found. No independently "
+            "validated vulnerabilities met the strict evidence gate. Scanner, "
+            "model, and other candidate observations are intentionally excluded."
         )
 
     lines += ["", "## 6. Validation Gate Summary", ""]

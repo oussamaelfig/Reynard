@@ -1,6 +1,7 @@
 """Adversarial regression tests for the customer finding report gate."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime
 
@@ -346,6 +347,18 @@ def test_complete_independent_payload_oracle_is_reportable():
     assert evaluate_reportability(finding).reason_code == "reportable"
 
 
+def test_empty_customer_report_states_no_independently_confirmed_findings():
+    candidate = Finding(
+        title="Unverified candidate",
+        vuln_type="SQL injection",
+        severity="critical",
+        verified=True,
+    )
+    markdown = render_assessment_report({}, [candidate])
+    assert "No independently confirmed findings were found." in markdown
+    assert "Unverified candidate" not in markdown
+
+
 def test_integrity_tampering_fails_closed():
     finding = finding_for(valid_bundle())
     finding.evidence_bundle["causal_signal"] = "tampered after validation"
@@ -405,6 +418,7 @@ def test_reports_json_harness_iterator_and_submissions_share_gate():
     report_md = render_assessment_report(
         {"targets": ["https://app.example.test/"]},
         [confirmed, suppressed],
+        "NOISY SECRET CANDIDATE prose-only anomaly detail",
     )
     assert "Confirmed SQL injection" in report_md
     assert "NOISY SECRET CANDIDATE" not in report_md
@@ -447,3 +461,37 @@ def test_reports_json_harness_iterator_and_submissions_share_gate():
     submission = build_submission_markdown(tampered)
     assert "customer-secret" not in submission
     assert "forged proof" not in submission
+
+
+def test_report_file_writer_regates_json_and_ignores_stale_markdown(tmp_path):
+    from hacking_agent.cli.assess import write_reports
+
+    confirmed = finding_to_report_dict(finding_for(valid_bundle()))
+    raw = {
+        "targets_assessed": [{
+            "target": "https://app.example.test/",
+            "verdict": "assessed",
+            "findings": [
+                confirmed,
+                {
+                    "title": "SUPPRESSED FILE CANDIDATE",
+                    "description": "unverified detail",
+                    "vuln_type": "SQL injection",
+                    "severity": "critical",
+                    "verified": True,
+                },
+            ],
+        }],
+    }
+    md_path, json_path = write_reports(
+        "# stale\nSUPPRESSED FILE CANDIDATE\nunverified detail",
+        raw,
+        str(tmp_path),
+    )
+    markdown = md_path.read_text(encoding="utf-8")
+    safe = json.loads(json_path.read_text(encoding="utf-8"))
+    assert "SUPPRESSED FILE CANDIDATE" not in markdown
+    assert "unverified detail" not in markdown
+    assert safe["confirmed_count"] == 1
+    assert safe["suppressed_count"] == 1
+    assert "SUPPRESSED FILE CANDIDATE" not in str(safe)
