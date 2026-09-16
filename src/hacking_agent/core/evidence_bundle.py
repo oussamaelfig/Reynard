@@ -668,7 +668,7 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
         EXECUTOR_SOURCE,
         verify_protocol,
     )
-    protocol_valid, protocol_reason = verify_protocol(validation_protocol)
+    protocol_valid, _ = verify_protocol(validation_protocol)
     strict_status = verification_status
     if strict_status == V_VERIFIED and not protocol_valid:
         strict_status = V_UNVERIFIED
@@ -705,10 +705,7 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
         ),
         validation_protocol=validation_protocol,
         artifacts=list(validation_protocol.get("artifacts") or []),
-        validation_error=(
-            str(validation_meta.get("validation_error") or "")
-            or ("" if protocol_valid else protocol_reason)
-        ),
+        validation_error=str(validation_meta.get("validation_error") or ""),
         causal_signal=str(validation_protocol.get("causal_signal") or ""),
         verified_by=(protocol_identity.get("role", "") if protocol_valid else ""),
     )
