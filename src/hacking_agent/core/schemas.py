@@ -206,6 +206,11 @@ class PoC(BaseModel):
     verdict: ExploitVerdict
     agent_name: AgentName = "exploitation"
     timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    # Populated only by the independent Validator.  Discovery agents may carry
+    # arbitrary confidence, but cannot make a finding reportable by setting
+    # this field: the validator and central reportability policy both verify
+    # the protocol transcript.
+    validation_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # =============================================================================
@@ -291,6 +296,19 @@ class ValidationProbe(BaseModel):
     next_action: Optional[ToolDecision] = None
 
 
+class ValidationAttemptResult(BaseModel):
+    """Validator adjudication of one probe that was actually executed."""
+    attempt_index: int = Field(..., ge=1)
+    probe_kind: Literal[
+        "replay", "fresh_context_replay", "control", "vary",
+    ]
+    outcome: Literal[
+        "vulnerable_effect", "control_no_effect", "inconclusive", "error",
+    ]
+    behavioral_signal: str = ""
+    context_id: str = ""
+
+
 class ValidationOutput(BaseModel):
     """Output of one validator iteration.
 
@@ -314,10 +332,26 @@ class ValidationOutput(BaseModel):
         None,
         description="Optional next probe to run. None = stop iterating.",
     )
+    probe_kind: Optional[Literal[
+        "replay", "fresh_context_replay", "control", "vary",
+    ]] = Field(
+        None,
+        description="Kind of the next probe. Required whenever next_probe is set.",
+    )
     final: bool = Field(
         False, description="True when the validator is done iterating."
     )
     reasoning: str = ""
+    attempt_results: list[ValidationAttemptResult] = Field(default_factory=list)
+    validation_context: Literal[
+        "", "fresh_session", "isolated_browser", "controlled_replay",
+        "identity_matrix", "fresh_oob_token", "clean_client",
+    ] = ""
+    proof_type: str = ""
+    proof_metadata: dict[str, Any] = Field(default_factory=dict)
+    reproduction_steps: list[str] = Field(default_factory=list)
+    oob_interactions: list[str] = Field(default_factory=list)
+    screenshots: list[str] = Field(default_factory=list)
 
 
 class ReporterOutput(BaseModel):

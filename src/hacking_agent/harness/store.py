@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS runs (
     description     TEXT,
     findings_count  INTEGER NOT NULL DEFAULT 0,
     verified_count  INTEGER NOT NULL DEFAULT 0,
+    suppressed_count INTEGER NOT NULL DEFAULT 0,
     error           TEXT,
     pid             INTEGER,
     exit_code       INTEGER
@@ -56,6 +57,14 @@ class RunStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            columns = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(runs)")
+            }
+            if "suppressed_count" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE runs ADD COLUMN suppressed_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
             self._conn.commit()
 
     # ---- paths ----------------------------------------------------------
@@ -96,10 +105,12 @@ class RunStore:
         with self._lock:
             self._conn.execute(
                 """INSERT INTO runs (id, status, created_at, updated_at, targets,
-                       description, findings_count, verified_count, error, pid, exit_code)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                       description, findings_count, verified_count,
+                       suppressed_count, error, pid, exit_code)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (rec.id, rec.status.value, rec.created_at, rec.updated_at,
-                 json.dumps(rec.targets), rec.description, 0, 0, "", None, None),
+                 json.dumps(rec.targets), rec.description, 0, 0, 0, "",
+                 None, None),
             )
             self._conn.commit()
         return rec
@@ -149,6 +160,7 @@ class RunStore:
             description=row["description"] or "",
             findings_count=row["findings_count"] or 0,
             verified_count=row["verified_count"] or 0,
+            suppressed_count=row["suppressed_count"] or 0,
             error=row["error"] or "", pid=row["pid"], exit_code=row["exit_code"],
         )
 

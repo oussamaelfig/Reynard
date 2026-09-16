@@ -102,6 +102,7 @@ class RunRecord(BaseModel):
     description: str = ""
     findings_count: int = 0
     verified_count: int = 0
+    suppressed_count: int = 0
     error: str = ""
     pid: Optional[int] = None
     exit_code: Optional[int] = None

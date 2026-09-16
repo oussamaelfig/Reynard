@@ -32,9 +32,14 @@ from rich.console import Console
 from hacking_agent.agents.reporter import (
     Finding,
     extract_findings,
+    finding_to_report_dict,
     render_assessment_report,
 )
 from hacking_agent.core.engagement import Engagement, EngagementError, load_engagement
+from hacking_agent.core.finding_validation import (
+    emit_suppression,
+    partition_reportable,
+)
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
 
 console = Console()
@@ -168,7 +173,10 @@ def run_target(
     findings: list[Finding] = []
     if orch is not None:
         try:
-            findings = extract_findings(orch.memory, orch.evidence)
+            orch._assemble_evidence_bundles()
+            findings = extract_findings(
+                orch.memory, orch.evidence, orch.bundles,
+            )
         except Exception:  # noqa: BLE001 - defensive snapshot
             findings = []
 
@@ -195,57 +203,65 @@ def build_consolidated_report(
 ) -> tuple[str, dict[str, Any]]:
     """Aggregate per-target results into a consolidated report (md + json)."""
     meta = _engagement_meta(engagement, targets)
-    all_findings: list[Finding] = []
+    all_candidates: list[Finding] = []
     for row in target_results:
-        all_findings.extend(row.get("findings", []))
+        all_candidates.extend(row.get("findings", []))
+    all_findings, suppressed = partition_reportable(all_candidates)
+    reason_counts: dict[str, int] = {}
+    for finding, decision in suppressed:
+        reason_counts[decision.reason_code] = (
+            reason_counts.get(decision.reason_code, 0) + 1
+        )
+        emit_suppression(finding, decision)
 
-    recon_summary_parts = [
-        f"- `{row['target']}`: {row['verdict']} "
-        f"({len(row.get('findings', []))} finding(s), {row['wall_clock_seconds']}s)"
-        for row in target_results
-    ]
-    recon_summary = "\n".join(recon_summary_parts) or "No targets assessed."
+    target_summaries = []
+    for row in target_results:
+        confirmed_row, suppressed_row = partition_reportable(
+            row.get("findings", [])
+        )
+        verdict = str(row.get("verdict") or "").lower()
+        status = (
+            "error" if verdict.startswith("error:")
+            else "timeout" if verdict.startswith("timeout")
+            else "assessed"
+        )
+        target_summaries.append({
+            "target": row.get("target", ""),
+            "status": status,
+            "confirmed_count": len(confirmed_row),
+            "suppressed_count": len(suppressed_row),
+            "wall_clock_seconds": row.get("wall_clock_seconds", 0),
+        })
 
-    report_md = render_assessment_report(meta, all_findings, recon_summary)
+    report_md = render_assessment_report(
+        {**meta, "target_summaries": target_summaries},
+        all_candidates,
+    )
 
     report_json = {
         **meta,
+        "reportability_policy_version": 1,
         "target_count": len(targets),
         "finding_count": len(all_findings),
-        "verified_count": sum(1 for f in all_findings if f.verified),
+        "verified_count": len(all_findings),
+        "confirmed_count": len(all_findings),
+        "suppressed_count": len(suppressed),
+        "suppression_reasons": reason_counts,
         "targets_assessed": [
             {
                 "target": row["target"],
                 "verdict": row["verdict"],
                 "wall_clock_seconds": row["wall_clock_seconds"],
                 "findings": [
-                    {
-                        "title": f.title,
-                        "vuln_type": f.vuln_type,
-                        "severity": f.severity,
-                        "cwe": f.cwe,
-                        "cvss_vector": f.cvss_vector,
-                        "cvss_score": f.cvss_score,
-                        "endpoint": f.endpoint,
-                        "parameter": f.parameter,
-                        "verified": f.verified,
-                        # Full detail so the harness can build a copy-paste
-                        # bug-bounty submission without re-running anything.
-                        "description": f.description,
-                        "impact": f.impact,
-                        "remediation": f.remediation,
-                        "evidence": [
-                            {
-                                "verdict": ev.get("verdict", ""),
-                                "payload": str(ev.get("payload") or "")[:400],
-                                "request": str(ev.get("request") or "")[:600],
-                                "response": str(ev.get("response") or "")[:1200],
-                            }
-                            for ev in (f.evidence or [])
-                        ],
-                    }
-                    for f in row.get("findings", [])
+                    finding_to_report_dict(f)
+                    for f in partition_reportable(row.get("findings", []))[0]
                 ],
+                "confirmed_count": len(
+                    partition_reportable(row.get("findings", []))[0]
+                ),
+                "suppressed_count": len(
+                    partition_reportable(row.get("findings", []))[1]
+                ),
             }
             for row in target_results
         ],
@@ -258,7 +274,19 @@ def write_reports(
     report_json: dict[str, Any],
     out_dir: str | None,
 ) -> tuple[Path, Path]:
-    """Write the consolidated report to ``out_dir`` (default logs/)."""
+    """Re-gate and write the consolidated report (default ``logs/``).
+
+    ``report_md`` is retained in the signature for compatibility, but the
+    customer Markdown is deterministically rebuilt from the sanitized JSON so
+    a stale or caller-supplied Markdown body cannot bypass the finding gate.
+    """
+    from hacking_agent.harness.submission import (
+        render_stored_report_markdown,
+        sanitize_report_json,
+    )
+
+    safe_json = sanitize_report_json(report_json)
+    safe_markdown = render_stored_report_markdown(safe_json)
     if out_dir:
         base = Path(out_dir)
         base.mkdir(parents=True, exist_ok=True)
@@ -268,8 +296,8 @@ def write_reports(
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     md_path = base / f"assessment_{ts}.md"
     json_path = base / f"assessment_{ts}.json"
-    md_path.write_text(report_md, encoding="utf-8")
-    json_path.write_text(json.dumps(report_json, indent=2), encoding="utf-8")
+    md_path.write_text(safe_markdown, encoding="utf-8")
+    json_path.write_text(json.dumps(safe_json, indent=2), encoding="utf-8")
     return md_path, json_path
 
 

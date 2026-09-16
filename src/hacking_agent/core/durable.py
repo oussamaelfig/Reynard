@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS pocs (
     verdict         TEXT,
     agent_name      TEXT,
     timestamp       TEXT,
+    validation_metadata TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (target, lab_class, poc_id)
 );
 CREATE TABLE IF NOT EXISTS techniques (
@@ -114,6 +115,14 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
+def _json_dict(raw: Any) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+
 class DurableStore:
     """Thread-safe SQLite wrapper for cross-run persistence."""
 
@@ -123,6 +132,16 @@ class DurableStore:
         self.path = path
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            # Additive migration for databases created before strict validator
+            # transcripts were persisted.
+            columns = {
+                row[1] for row in self._conn.execute("PRAGMA table_info(pocs)")
+            }
+            if "validation_metadata" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE pocs ADD COLUMN validation_metadata "
+                    "TEXT NOT NULL DEFAULT '{}'"
+                )
             self._conn.commit()
 
     # ---- knowledge graph -----------------------------------------------
@@ -239,12 +258,13 @@ class DurableStore:
                     """INSERT OR REPLACE INTO pocs
                        (target, lab_class, poc_id, vuln_id, payload,
                         request_summary, response_excerpt, verdict,
-                        agent_name, timestamp)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        agent_name, timestamp, validation_metadata)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (target, lab_class, r.get("id", ""), r.get("vuln_id", ""),
                      r.get("payload", ""), r.get("request_summary", ""),
                      r.get("response_excerpt", ""), r.get("verdict", ""),
-                     r.get("agent_name", ""), r.get("timestamp", _now())),
+                     r.get("agent_name", ""), r.get("timestamp", _now()),
+                     json.dumps(r.get("validation_metadata") or {}, default=str)),
                 )
             self._conn.commit()
 
@@ -252,14 +272,16 @@ class DurableStore:
         with self._lock:
             cur = self._conn.execute(
                 """SELECT poc_id, vuln_id, payload, request_summary,
-                          response_excerpt, verdict, agent_name, timestamp
+                          response_excerpt, verdict, agent_name, timestamp,
+                          validation_metadata
                    FROM pocs WHERE target=? AND lab_class=?""",
                 (target, lab_class),
             )
             return [
                 {"id": r[0], "vuln_id": r[1], "payload": r[2],
                  "request_summary": r[3], "response_excerpt": r[4],
-                 "verdict": r[5], "agent_name": r[6], "timestamp": r[7]}
+                 "verdict": r[5], "agent_name": r[6], "timestamp": r[7],
+                 "validation_metadata": _json_dict(r[8])}
                 for r in cur.fetchall()
             ]
 

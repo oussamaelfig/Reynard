@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from copy import deepcopy
 
 import pytest
 
@@ -11,24 +12,42 @@ pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from hacking_agent.agents.reporter import finding_to_report_dict  # noqa: E402
 from hacking_agent.harness.jobs import JobManager  # noqa: E402
 from hacking_agent.harness.models import RunRequest, RunStatus  # noqa: E402
 from hacking_agent.harness.server import create_app  # noqa: E402
 from hacking_agent.harness.store import RunStore  # noqa: E402
+from test_finding_validation import finding_for, valid_bundle  # noqa: E402
 
 TOKEN = "secret-token"
 AUTH = {"x-harness-token": TOKEN}
 
-# Fake worker: emits events, a report, and result.json, then exits 0.
+_STRICT_FINDING = finding_to_report_dict(
+    finding_for(valid_bundle(), title="SQL injection via `id`")
+)
+_STRICT_REPORT = {
+    "engagement_name": "worker-test",
+    "targets": ["https://x/"],
+    "target_count": 1,
+    "finding_count": 1,
+    "verified_count": 1,
+    "confirmed_count": 1,
+    "suppressed_count": 0,
+    "targets_assessed": [{
+        "target": "https://x/",
+        "verdict": "assessed",
+        "findings": [_STRICT_FINDING],
+    }],
+}
+
+# Fake worker: emits events, a strict report, and result.json, then exits 0.
 _WORKER = (
     "import sys,json,pathlib;p=pathlib.Path(sys.argv[1]);"
     "(p/'events.jsonl').write_text("
     "json.dumps({'id':1,'type':'run_start','payload':{},'ts':1})+chr(10)+"
     "json.dumps({'id':2,'type':'finding','payload':{'summary':'sqli'},'ts':2})+chr(10));"
     "(p/'report.md').write_text('# Report\\n\\n## Findings\\n- SQLi in id');"
-    "(p/'report.json').write_text(json.dumps({'finding_count':1,'verified_count':1,"
-    "'target_count':1,'targets_assessed':[{'target':'https://x/','findings':["
-    "{'title':'SQLi','severity':'high','verification_status':'verified'}]}]}));"
+    f"(p/'report.json').write_text({json.dumps(json.dumps(_STRICT_REPORT))});"
     "(p/'result.json').write_text(json.dumps({'findings_count':1,'verified_count':1}))"
 )
 
@@ -88,7 +107,7 @@ def test_create_run_completes_report_and_evidence(tmp_path):
     assert rec["status"] == "completed" and rec["findings_count"] == 1
 
     rep = c.get(f"/api/runs/{run_id}/report", headers=AUTH).json()
-    assert "SQLi" in rep["markdown"] and rep["json"]["finding_count"] == 1
+    assert "SQL injection" in rep["markdown"] and rep["json"]["finding_count"] == 1
 
     ev = c.get(f"/api/runs/{run_id}/evidence", headers=AUTH).json()
     assert ev["finding_count"] == 1 and ev["target_count"] == 1
@@ -155,17 +174,8 @@ def test_cancel_endpoint(tmp_path):
 
 def _seed_report(store, run_id):
     md = "# Security Assessment Report\n\n## Findings\n\n- SQLi\n"
-    js = {"engagement_name": "harness-run", "targets": ["https://x/"],
-          "target_count": 1, "finding_count": 1, "verified_count": 1,
-          "targets_assessed": [{"target": "https://x/", "findings": [{
-              "title": "SQL injection via `id`", "vuln_type": "sql injection",
-              "severity": "high", "cwe": "CWE-89", "cvss_score": 7.5,
-              "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
-              "endpoint": "https://x/api/users", "parameter": "id",
-              "verified": True, "description": "id is concatenated into SQL.",
-              "impact": "DB read.", "remediation": "Parameterize.",
-              "evidence": [{"verdict": "success", "payload": "1' OR '1'='1",
-                            "request": "GET /api/users?id=1", "response": "200 OK"}]}]}]}
+    js = dict(_STRICT_REPORT)
+    js["engagement_name"] = "harness-run"
     md_path, json_path = store.report_paths(run_id)
     md_path.write_text(md, encoding="utf-8")
     json_path.write_text(json.dumps(js), encoding="utf-8")
@@ -198,6 +208,50 @@ def test_findings_markdown_download(tmp_path):
     assert "SQL injection" in r.text and "## Proof of Concept" in r.text
 
 
+def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    raw = deepcopy(_STRICT_REPORT)
+    raw["targets_assessed"][0]["verdict"] = (
+        "error: SUPPRESSED CUSTOMER SECRET prose-only anomaly detail"
+    )
+    raw["targets_assessed"][0]["findings"].append({
+        "title": "SUPPRESSED CUSTOMER SECRET",
+        "description": "prose-only anomaly detail",
+        "vuln_type": "SQL injection",
+        "severity": "critical",
+        "confidence": 1.0,
+        "verified": True,
+        "verification_status": "verified",
+    })
+    md_path, json_path = store.report_paths(rec.id)
+    md_path.write_text(
+        "# stale report\nSUPPRESSED CUSTOMER SECRET\nprose-only anomaly detail",
+        encoding="utf-8",
+    )
+    json_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    responses = [
+        c.get(f"/api/runs/{rec.id}/report", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/report.md", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/evidence", headers=AUTH),
+        c.get("/api/findings", headers=AUTH),
+        c.get("/api/findings.md", headers=AUTH),
+    ]
+    assert all(response.status_code == 200 for response in responses)
+    for response in responses:
+        assert "SUPPRESSED CUSTOMER SECRET" not in response.text
+        assert "prose-only anomaly detail" not in response.text
+
+    report = responses[0].json()
+    assert report["json"]["confirmed_count"] == 1
+    assert report["json"]["suppressed_count"] == 1
+    aggregate = responses[3].json()
+    assert aggregate["confirmed_count"] == aggregate["count"] == 1
+    assert aggregate["suppressed_count"] == 1
+    assert "Suppressed internal candidates: 1." in responses[4].text
+
+
 def test_report_md_download(tmp_path):
     store, c = _client(tmp_path)
     rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
@@ -215,3 +269,4 @@ def test_index_injects_token(tmp_path):
     assert 'const TOKEN = "secret-token"' in html
     assert "__HARNESS_TOKEN__" not in html
     assert "Launch run" in html
+    assert "confirmed ·" in html and "suppressed" in html
