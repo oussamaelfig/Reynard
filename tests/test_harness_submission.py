@@ -11,7 +11,7 @@ from hacking_agent.harness.submission import (
     iter_report_findings,
     report_meta,
 )
-from test_finding_validation import finding_for, valid_bundle
+from test_finding_validation import finding_for, signed_report, valid_bundle
 
 RICH = finding_to_report_dict(
     finding_for(valid_bundle(), title="SQL injection via `id`")
@@ -33,9 +33,8 @@ def test_submission_has_all_bugbounty_sections():
     assert "CVSS v3.1:** 7.5" in md
     assert "CWE-89" in md                      # mapped weakness
     assert "cwe.mitre.org" in md               # reference link
-    assert "Program:** Acme BBP" in md
     assert "app.example.test/items" in md
-    assert "OR%201=1" in md                    # validated request included
+    assert "id=payload" in md                  # validated request included
     assert "```http" in md                     # request/response fences
 
 
@@ -49,20 +48,19 @@ def test_submission_sparse_finding_fills_defaults():
         })
 
 
-def test_finding_from_dict_scores_when_missing():
+def test_finding_from_dict_does_not_invent_unbound_scores():
     f = finding_from_dict({"title": "SSRF", "vuln_type": "ssrf", "severity": "high"})
-    assert f.cwe == "CWE-918"
-    assert f.cvss_score > 0
+    assert f.cwe == ""
+    assert f.cvss_score == 0
+    assert not f.is_reportable
 
 
-def test_iter_report_findings_annotates_target():
-    rj = {"targets_assessed": [
-        {"target": "https://a/", "findings": [RICH]},
-        {"target": "https://b/", "findings": [{"title": "suppressed"}]},
-    ]}
+def test_iter_report_findings_uses_authenticated_bound_target():
+    finding = finding_for(valid_bundle(), title="SQL injection via `id`")
+    rj = signed_report(finding)
     items = iter_report_findings(rj)
     assert [i["title"] for i in items] == ["SQL injection via `id`"]
-    assert items[0]["target"] == "https://a/"
+    assert items[0]["target"] == "https://app.example.test/"
 
 
 def test_report_meta_extracts_header():
