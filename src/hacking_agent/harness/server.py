@@ -27,9 +27,12 @@ from hacking_agent.harness.jobs import JobManager
 from hacking_agent.harness.models import RunRequest
 from hacking_agent.harness.store import RunStore
 from hacking_agent.harness.submission import (
+    UnreportableFindingError,
     build_submission_markdown,
     iter_report_findings,
+    render_stored_report_markdown,
     report_meta,
+    sanitize_report_json,
 )
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -54,6 +57,10 @@ def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
             continue
         meta = report_meta(rj)
         for idx, f in enumerate(iter_report_findings(rj)):
+            try:
+                submission = build_submission_markdown(f, meta)
+            except (UnreportableFindingError, ValueError, TypeError):
+                continue
             out.append({
                 "finding_id": f"{rec.id}:{idx}",
                 "run_id": rec.id,
@@ -67,11 +74,11 @@ def _collect_findings(store: RunStore) -> list[dict[str, Any]]:
                 "cvss_vector": f.get("cvss_vector", ""),
                 "endpoint": f.get("endpoint", ""),
                 "parameter": f.get("parameter", ""),
-                "verified": bool(f.get("verified")),
-                "submission": build_submission_markdown(f, meta),
+                "verification_status": "verified",
+                "verified": True,
+                "submission": submission,
             })
-    out.sort(key=lambda r: (0 if r["verified"] else 1,
-                            _SEVERITY_RANK.get(r["severity"], 5),
+    out.sort(key=lambda r: (_SEVERITY_RANK.get(r["severity"], 5),
                             -float(r.get("cvss_score") or 0)))
     return out
 
@@ -216,21 +223,38 @@ def create_app(store: Optional[RunStore] = None,
                 report_json = json.loads(json_path.read_text(encoding="utf-8"))
             except Exception:
                 report_json = {}
-        return {"markdown": md_path.read_text(encoding="utf-8"),
-                "json": report_json}
+        safe_json = sanitize_report_json(report_json)
+        return {
+            "markdown": render_stored_report_markdown(safe_json),
+            "json": safe_json,
+        }
 
     @app.get("/api/findings")
     def list_findings(_: None = Depends(require_token)) -> dict[str, Any]:
         items = _collect_findings(store)
-        return {"count": len(items), "findings": items}
+        suppressed = 0
+        for rec in store.list(limit=500):
+            safe = sanitize_report_json(_read_report_json(store, rec.id))
+            suppressed += int(safe.get("suppressed_count", 0) or 0)
+        return {
+            "count": len(items),
+            "confirmed_count": len(items),
+            "suppressed_count": suppressed,
+            "findings": items,
+        }
 
     @app.get("/api/findings.md", response_class=PlainTextResponse)
     def findings_markdown(_: None = Depends(require_token)) -> PlainTextResponse:
         items = _collect_findings(store)
         if not items:
-            body = "# Findings\n\nNo findings recorded yet.\n"
+            body = (
+                "# Confirmed findings only\n\n"
+                "No independently validated vulnerabilities were found.\n"
+            )
         else:
-            parts = [f"# Reynard findings — {len(items)} submission(s)\n"]
+            parts = [
+                f"# Reynard confirmed findings — {len(items)} submission(s)\n"
+            ]
             parts += [it["submission"] for it in items]
             body = "\n\n---\n\n".join(parts)
         return PlainTextResponse(body, headers={
@@ -242,8 +266,9 @@ def create_app(store: Optional[RunStore] = None,
         md_path, _j = store.report_paths(run_id)
         if not md_path.exists():
             raise HTTPException(status_code=404, detail="report not ready")
+        report_json = _read_report_json(store, run_id)
         return PlainTextResponse(
-            md_path.read_text(encoding="utf-8"),
+            render_stored_report_markdown(report_json),
             headers={"Content-Disposition":
                      f'attachment; filename="reynard-report-{run_id}.md"'})
 
@@ -268,7 +293,9 @@ def create_app(store: Optional[RunStore] = None,
         if not json_path.exists():
             raise HTTPException(status_code=404, detail="evidence not ready")
         try:
-            return json.loads(json_path.read_text(encoding="utf-8"))
+            return sanitize_report_json(
+                json.loads(json_path.read_text(encoding="utf-8"))
+            )
         except Exception:
             raise HTTPException(status_code=500, detail="evidence unreadable")
 

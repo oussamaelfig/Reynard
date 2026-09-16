@@ -354,7 +354,7 @@ class AuthorizationMatrix:
                             extra_secrets: tuple[str, ...] = ()) -> list[Any]:
         """Convert anomalies into EvidenceBundles with control-vs-test proof."""
         from hacking_agent.core.evidence_bundle import (
-            EvidenceBundle, SanitizedExchange, ControlTest, V_VERIFIED,
+            EvidenceBundle, SanitizedExchange, ControlTest, V_UNVERIFIED,
         )
         bundles: list[Any] = []
         for anomaly in self.analyze():
@@ -363,9 +363,12 @@ class AuthorizationMatrix:
                 title=f"{anomaly.kind.upper()} on {anomaly.resource}",
                 severity=anomaly.severity, target=target,
                 endpoint=anomaly.resource, identity=anomaly.offending_identity,
-                verification_status=V_VERIFIED,
+                # Matrix anomalies are high-quality candidates, but this
+                # component discovered them and therefore cannot independently
+                # validate them for a customer report.
+                verification_status=V_UNVERIFIED,
                 causal_signal=anomaly.detail,
-                verified_by="authz_matrix",
+                discovered_by="authz_matrix",
             )
             if anomaly.test_obs:
                 b.add_test(SanitizedExchange.build(

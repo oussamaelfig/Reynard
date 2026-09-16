@@ -64,6 +64,9 @@ from hacking_agent.core.evidence_bundle import (
     V_VERIFIED, V_REFUTED, V_UNVERIFIED,
 )
 from hacking_agent.core.events import emit
+from hacking_agent.core.finding_validation import (
+    emit_suppression, evaluate_reportability,
+)
 from hacking_agent.core.expert_playbooks import enrich_lab_profile, render_playbook_context
 from hacking_agent.core.failure import classify_failure
 from hacking_agent.core.lab_corpus import normalize_lab_level
@@ -530,12 +533,14 @@ class Orchestrator:
                 state_machine=self.sm,
                 evidence=self.evidence,
                 tool_executor=self.tool_executor,
+                evidence_bundles=self.bundles,
             ),
             "reporter": ReporterAgent(
                 provider=self.registry.get("reporter"),
                 memory=self.memory,
                 state_machine=self.sm,
                 evidence=self.evidence,
+                evidence_bundles=self.bundles,
             ),
         }
 
@@ -960,17 +965,9 @@ class Orchestrator:
             for poc in result.pocs_recorded:
                 if poc.verdict != "success" or not poc.vuln_id:
                     continue
-                if poc.request_summary.startswith("FAST_PATH_VALIDATED:"):
-                    self.logger.log(
-                        f"Skipping validator for {poc.id} "
-                        "(deterministic fast-path already compared baseline/probe)"
-                    )
-                    continue
-                if not self.sm.can_call_tool("http_request"):
-                    # Don't burn the last drop of budget on validation -
-                    # better to ship the unvalidated PoC than nothing.
-                    self.logger.log(f"Skipping validator for {poc.id} (budget tight)")
-                    continue
+                # Fast paths and exhausted budgets are not exceptions to
+                # independent validation.  If probes cannot run, the Validator
+                # records a fail-closed suppression instead of shipping the PoC.
                 self._dispatch_validator(poc.id, poc.vuln_id)
 
         # Check for lab_solved in global facts. This is a BENCHMARK-only
@@ -1897,22 +1894,26 @@ class Orchestrator:
     def _hypothesis_has_verified_evidence(self, h: Hypothesis) -> bool:
         try:
             if h.target_entity_id:
-                ent = self.memory.get_entity(h.target_entity_id)
-                if ent and ent.attrs.get("status") == "verified":
-                    return True
                 if self.evidence.is_verified(h.target_entity_id):
                     return True
         except Exception:
             pass
-        return bool(self.memory.get_fact("lab_solved"))
+        return bool(
+            self.mission.is_benchmark and self.memory.get_fact("lab_solved")
+        )
 
     def _has_verified_evidence(self) -> bool:
         try:
-            if any(p.verdict == "success" for p in self.evidence.all_pocs()):
+            if any(
+                self.evidence.is_verified(vuln.id)
+                for vuln in self.memory.query("Vulnerability")
+            ):
                 return True
         except Exception:
             pass
-        return bool(self.memory.get_fact("lab_solved"))
+        return bool(
+            self.mission.is_benchmark and self.memory.get_fact("lab_solved")
+        )
 
     # ---- tiered model escalation (strong reasoning tier) ----------------
 
@@ -2549,8 +2550,6 @@ class Orchestrator:
                 pass
             state_to_status = {"verified": V_VERIFIED, "refuted": V_REFUTED,
                                "unverified": V_UNVERIFIED}
-            surface_status = {V_VERIFIED: "verified", V_REFUTED: "false_positive",
-                              V_UNVERIFIED: "theoretical"}
             for entity in self.memory.query("Vulnerability"):
                 vuln_id = entity.id
                 pocs = self.evidence.get_by_vuln(vuln_id)
@@ -2559,8 +2558,9 @@ class Orchestrator:
                 vstatus = state_to_status.get(
                     self.evidence.verification_state(vuln_id), V_UNVERIFIED)
                 attrs = entity.attrs
-                endpoint = str(attrs.get("parameter") or attrs.get("endpoint")
-                               or self.target_url)
+                endpoint = str(
+                    attrs.get("endpoint") or attrs.get("url") or self.target_url
+                )
                 bundle = build_bundle_from_pocs(
                     vuln_id, pocs, verification_status=vstatus,
                     vuln_type=str(attrs.get("vuln_type", "")),
@@ -2569,14 +2569,38 @@ class Orchestrator:
                     target=self.target_url, endpoint=endpoint,
                     identity=active_identity, extra_secrets=secrets,
                 )
+                existing = self.bundles.by_vuln(vuln_id)
+                if existing:
+                    bundle.id = existing[-1].id
+                bundle.finding_id = vuln_id
                 self.bundles.add(bundle)
+                decision = evaluate_reportability(evidence_bundle=bundle)
+                attrs["reportability_reason_code"] = decision.reason_code
+                attrs["reportability_rationale"] = decision.rationale
+                if not decision.reportable:
+                    emit_suppression(bundle, decision)
                 try:
                     self.surface.record_finding(
                         title=bundle.title, vuln_type=bundle.vuln_type,
                         severity=bundle.severity,
-                        status=surface_status.get(vstatus, "theoretical"),
+                        status=(
+                            "verified" if decision.reportable
+                            else (
+                                "false_positive"
+                                if vstatus == V_REFUTED
+                                else "theoretical"
+                            )
+                        ),
                         evidence_bundle_id=bundle.id,
                         source="orchestrator/evidence",
+                        finding_id=vuln_id,
+                        data={
+                            "reportable": decision.reportable,
+                            "suppression_reason_code": (
+                                "" if decision.reportable
+                                else decision.reason_code
+                            ),
+                        },
                     )
                 except Exception:
                     pass
@@ -2656,7 +2680,33 @@ class Orchestrator:
         except Exception as e:
             console.print(f"[red]Validator crashed: {e}[/]")
             self.logger.log(f"Validator crash: {e}")
-            return AgentResult(success=False, summary=f"Validator crashed: {e}")
+            target_poc = next(
+                (p for p in self.evidence.all_pocs() if p.id == poc_id), None,
+            )
+            vuln_entity = self.memory.get_entity(vuln_id)
+            if target_poc is not None and vuln_entity is not None:
+                res = validator._record_validation_error(
+                    target_poc,
+                    vuln_entity,
+                    f"validator_exception: {type(e).__name__}: {e}",
+                )
+            else:
+                res = AgentResult(
+                    success=False,
+                    summary=f"Validator crashed: {type(e).__name__}: {e}",
+                )
+
+        if not res.success and not res.pocs_recorded:
+            target_poc = next(
+                (p for p in self.evidence.all_pocs() if p.id == poc_id), None,
+            )
+            vuln_entity = self.memory.get_entity(vuln_id)
+            if target_poc is not None and vuln_entity is not None:
+                res = validator._record_validation_error(
+                    target_poc,
+                    vuln_entity,
+                    f"validator_incomplete: {res.summary[:300]}",
+                )
 
         self.logger.log(
             f"[VALIDATED] poc_id={poc_id} -> success={res.success} "
@@ -2757,7 +2807,12 @@ class Orchestrator:
     def _print_summary(self) -> None:
         duration = time.time() - self.session_start
         all_pocs = self.evidence.all_pocs()
-        verified = sum(1 for p in all_pocs if p.verdict == "success")
+        validator_confirmed = sum(
+            1 for p in all_pocs
+            if p.agent_name == "validator"
+            and p.verdict == "success"
+            and bool((p.validation_metadata or {}).get("protocol_valid"))
+        )
         snap = self._token_cost_snapshot()
         cost_line = (
             f"[bold]Est. cost:[/] ${snap['estimated_cost_usd']}\n"
@@ -2770,7 +2825,9 @@ class Orchestrator:
             f"[bold]Tool calls:[/] {sum(self.sm.tool_calls.values())}\n"
             f"[bold]Agent dispatches:[/] {json.dumps(self.sm.agent_dispatches)}\n"
             f"[bold]KG entities:[/] {len(self.memory.entities)}\n"
-            f"[bold]PoCs recorded:[/] {len(all_pocs)} ({verified} verified)\n"
+            f"[bold]PoCs recorded:[/] {len(all_pocs)} "
+            f"({validator_confirmed} passed Validator protocol; final report "
+            "gate may still suppress class-specific proof)\n"
             f"[bold]Tokens:[/] {snap['total_tokens']} "
             f"(prompt {snap['prompt_tokens']} / completion {snap['completion_tokens']}, "
             f"{snap['llm_calls']} LLM calls)\n"

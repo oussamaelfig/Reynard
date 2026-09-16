@@ -267,6 +267,11 @@ class Observation:
     at: str = field(default_factory=_now)
     data: dict[str, Any] = field(default_factory=dict)
 
+    def is_reportable(self, evidence_bundle: Any = None) -> bool:
+        """Delegate promotion to the central policy; status is never enough."""
+        from hacking_agent.core.finding_validation import is_reportable
+        return is_reportable(self, evidence_bundle)
+
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "category": self.category, "summary": self.summary,
                 "source": self.source, "confidence": self.confidence,
