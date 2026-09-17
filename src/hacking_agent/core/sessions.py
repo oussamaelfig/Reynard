@@ -34,9 +34,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import threading
 from dataclasses import dataclass, field
+from http.cookiejar import Cookie, CookieJar, MozillaCookieJar
 from typing import Any
 
 
@@ -85,6 +88,30 @@ class AuthSession:
     role_hint: str = "unknown"     # "admin" | "user" | "tenant_a_user" | "unauth" | ...
     authenticated: bool = False    # Flipped True once a login flow populates the jar
     auth_detail: str = ""          # Human-readable note about how auth was obtained
+    http_cookies: CookieJar = field(default_factory=CookieJar, repr=False)
+
+    def to_transfer_dict(self) -> dict[str, Any]:
+        """Worker IPC only; contains credentials and must never be logged."""
+        fields = ("name", "description", "cookie_jar", "static_headers", "role_hint",
+                  "authenticated", "auth_detail")
+        cookie_fields = ("version", "name", "value", "port", "port_specified", "domain",
+                         "domain_specified", "domain_initial_dot", "path", "path_specified",
+                         "secure", "expires", "discard", "comment", "comment_url", "rfc2109")
+        result = {key: getattr(self, key) for key in fields}
+        result["http_cookies"] = [
+            {**{key: getattr(cookie, key) for key in cookie_fields}, "rest": dict(cookie._rest)}
+            for cookie in self.http_cookies
+        ]
+        return result
+
+    @classmethod
+    def from_transfer_dict(cls, data: dict[str, Any]) -> "AuthSession":
+        values = dict(data)
+        cookies = values.pop("http_cookies", [])
+        session = cls(**values)
+        for cookie in cookies:
+            session.http_cookies.set_cookie(Cookie(**cookie))
+        return session
 
     def cookie_jar_path(self) -> str:
         return self.cookie_jar or f"{SESSION_DIR}/{self.name}.cookies"
@@ -111,18 +138,20 @@ class SessionRegistry:
             cookie_jar=self.LEGACY_COOKIE_JAR,
             role_hint="unknown",
         )
-        _docker_exec(f"mkdir -p {SESSION_DIR} {os.path.dirname(self.LEGACY_COOKIE_JAR)}")
+        _docker_exec(f"mkdir -p -- {shlex.quote(SESSION_DIR)} {shlex.quote(os.path.dirname(self.LEGACY_COOKIE_JAR))}")
 
     # ---- registration ----------------------------------------------------
 
     def register(self, session: AuthSession, overwrite: bool = False) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", session.name):
+            raise ValueError("Session name must use 1–64 letters, digits, dots, underscores or hyphens")
         with self._lock:
             if session.name in self._sessions and not overwrite:
                 return f"Session '{session.name}' already registered."
             # Make sure the cookie jar path is initialised (touch the file).
             jar = session.cookie_jar_path()
             session.cookie_jar = jar
-            _docker_exec(f"mkdir -p {os.path.dirname(jar)} && touch {jar}")
+            _docker_exec(f"mkdir -p -- {shlex.quote(os.path.dirname(jar))} && touch -- {shlex.quote(jar)}")
             self._sessions[session.name] = session
             return f"Session '{session.name}' registered (jar={jar}, role={session.role_hint})."
 
@@ -175,14 +204,23 @@ class SessionRegistry:
             dom = dom if dom.startswith(".") else dom
             lines = ["# Netscape HTTP Cookie File"]
             for ck_name, ck_value in cookies.items():
+                if any(ch in str(value) for value in (dom, ck_name, ck_value) for ch in "\r\n\t"):
+                    raise ValueError("Cookie fields cannot contain control characters")
                 lines.append(
                     "\t".join([dom, "TRUE", "/", "TRUE", "0", str(ck_name), str(ck_value)])
                 )
+                sess.http_cookies.set_cookie(Cookie(
+                    version=0, name=str(ck_name), value=str(ck_value), port=None,
+                    port_specified=False, domain=dom, domain_specified=True,
+                    domain_initial_dot=dom.startswith("."), path="/", path_specified=True,
+                    secure=True, expires=None, discard=True, comment=None,
+                    comment_url=None, rest={}, rfc2109=False,
+                ))
             payload = "\n".join(lines) + "\n"
             import base64
             b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-            cmd = (f"mkdir -p {os.path.dirname(jar)} && "
-                    f"echo {b64} | base64 -d > {jar}")
+            cmd = (f"mkdir -p -- {shlex.quote(os.path.dirname(jar))} && "
+                    f"echo {b64} | base64 -d > {shlex.quote(jar)}")
             rc, _, err = _docker_exec(cmd, timeout=15)
             if rc != 0:
                 return f"Failed to write cookies into container: {err}"
@@ -198,13 +236,17 @@ class SessionRegistry:
             try:
                 with open(host_path, "rb") as f:
                     data = f.read()
-            except OSError as e:
+                imported = MozillaCookieJar(host_path)
+                imported.load(ignore_discard=True)
+                for cookie in imported:
+                    sess.http_cookies.set_cookie(cookie)
+            except (OSError, ValueError) as e:
                 return f"Could not read host cookie file: {e}"
             # Base64 to safely transit through docker exec.
             import base64
             b64 = base64.b64encode(data).decode("ascii")
-            cmd = (f"mkdir -p {os.path.dirname(jar)} && "
-                    f"echo {b64} | base64 -d > {jar}")
+            cmd = (f"mkdir -p -- {shlex.quote(os.path.dirname(jar))} && "
+                    f"echo {b64} | base64 -d > {shlex.quote(jar)}")
             rc, _, err = _docker_exec(cmd, timeout=15)
             if rc != 0:
                 return f"Failed to copy cookies into container: {err}"
@@ -246,7 +288,7 @@ class SessionRegistry:
             if not sess:
                 return {}
             jar = sess.cookie_jar_path()
-        rc, out, _ = _docker_exec(f"cat {jar} 2>/dev/null", timeout=10)
+        rc, out, _ = _docker_exec(f"cat -- {shlex.quote(jar)} 2>/dev/null", timeout=10)
         if rc != 0 or not out:
             return {}
         cookies: dict[str, str] = {}
@@ -262,9 +304,11 @@ class SessionRegistry:
         return cookies
 
     def get(self, name: str | None) -> AuthSession:
-        """Resolve a session by name, falling back to the active one."""
+        """Resolve an explicit identity; only an omitted name uses the active one."""
         with self._lock:
-            if name and name in self._sessions:
+            if name:
+                if name not in self._sessions:
+                    raise ValueError(f"Unknown auth session: {name}")
                 return self._sessions[name]
             return self._sessions[self._active]
 

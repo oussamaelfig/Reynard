@@ -26,14 +26,16 @@ boundary at runtime. That authority stays exclusively with ScopeGuard.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from hacking_agent.core.engagement import Engagement, engagement_from_dict
+from hacking_agent.core.target_address import normalize_host, parse_target, parse_url_prefix, scope_path
 
 
 class BountyScopeError(ValueError):
@@ -74,10 +76,23 @@ def normalize_scope_host(identifier: str) -> str:
 
 
 def _looks_like_cidr(value: str) -> bool:
-    return "/" in value and all(
-        part.replace(".", "").replace(":", "").isalnum()
-        for part in value.split("/", 1)
-    )
+    try:
+        ipaddress.ip_network(value, strict=False)
+        return True
+    except ValueError:
+        return False
+
+
+def _scope_bool(value: Any) -> bool:
+    """Parse explicit eligibility without treating the string 'false' as true."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise BountyScopeError(f"Invalid scope eligibility boolean: {value!r}")
 
 
 # =============================================================================
@@ -89,6 +104,7 @@ class _ScopeBuckets:
     authorized_domains: list[str]
     authorized_cidrs: list[str]
     out_of_scope: list[str]
+    authorized_url_prefixes: list[str] = field(default_factory=list)
 
 
 def parse_structured_scopes(scopes: list[dict[str, Any]]) -> _ScopeBuckets:
@@ -101,6 +117,7 @@ def parse_structured_scopes(scopes: list[dict[str, Any]]) -> _ScopeBuckets:
     domains: list[str] = []
     cidrs: list[str] = []
     denied: list[str] = []
+    prefixes: list[str] = []
 
     def _add(bucket: list[str], value: str) -> None:
         if value and value not in bucket:
@@ -115,17 +132,36 @@ def parse_structured_scopes(scopes: list[dict[str, Any]]) -> _ScopeBuckets:
         eligible = entry.get("eligible_for_submission")
         if eligible is None:
             eligible = entry.get("in_scope", True)
-        eligible = bool(eligible)
+        eligible = _scope_bool(eligible)
+        if entry.get("eligible_for_testing") is not None:
+            eligible = eligible and _scope_bool(entry["eligible_for_testing"])
 
         if asset_type in _CIDR_ASSET_TYPES or _looks_like_cidr(identifier):
-            value = identifier.strip()
+            try:
+                value = str(ipaddress.ip_network(identifier.strip(), strict=False))
+            except ValueError as exc:
+                raise BountyScopeError(f"Invalid scope IP/CIDR: {identifier!r}") from exc
             _add(cidrs if eligible else denied, value)
         elif asset_type in _DOMAIN_ASSET_TYPES or "." in identifier:
-            host = normalize_scope_host(identifier)
-            _add(domains if eligible else denied, host)
+            if "://" in identifier or "/" in identifier:
+                prefix = identifier if "://" in identifier else f"https://{identifier}"
+                try:
+                    _, host, _, _ = parse_url_prefix(prefix)
+                except (TypeError, ValueError, UnicodeError) as exc:
+                    raise BountyScopeError(f"Invalid or ambiguous scope URL: {identifier!r}") from exc
+                # A URL asset grants its origin/path only, including its port.
+                # URL exclusions conservatively exclude the whole host because
+                # the current deny contract models hosts/CIDRs, not paths.
+                _add(prefixes if eligible else denied, prefix if eligible else host)
+            else:
+                try:
+                    host = normalize_host(identifier.removeprefix("*.").strip())
+                except (TypeError, ValueError) as exc:
+                    raise BountyScopeError(f"Invalid scope domain: {identifier!r}") from exc
+                _add(domains if eligible else denied, host)
         # other asset types (mobile apps, source code, etc.) are ignored for
         # network scope — they are not directly testable targets here.
-    return _ScopeBuckets(domains, cidrs, denied)
+    return _ScopeBuckets(domains, cidrs, denied, prefixes)
 
 
 def _coerce_scope_entries(value: Any, *, in_scope: bool) -> list[dict[str, Any]]:
@@ -162,13 +198,14 @@ def import_scope_file(path: str | Path) -> Engagement:
 
     # Engagement format? Delegate so RoE fields (rate limits, window) are kept.
     if isinstance(raw, dict) and any(
-        k in raw for k in ("authorized_domains", "domains", "scope", "engagement")
+        k in raw for k in ("authorized_domains", "authorized_cidrs", "authorized_url_prefixes", "domains", "scope", "engagement")
     ):
         eng = engagement_from_dict(raw["engagement"] if isinstance(raw.get("engagement"), dict) else raw)
         # Also fold any structured scopes present alongside the RoE.
         extra = _extract_structured(raw)
         if extra:
             _merge_buckets(eng, extra)
+        eng.validate()
         return eng
 
     buckets = _extract_structured(raw)
@@ -178,18 +215,17 @@ def import_scope_file(path: str | Path) -> Engagement:
             "'scopes' list, or in_scope/out_of_scope lists."
         )
     meta = raw if isinstance(raw, dict) else {}
-    eng = Engagement(
-        engagement_name=str(meta.get("engagement_name") or meta.get("name")
-                            or meta.get("handle") or "bounty-program"),
-        authorized_domains=list(buckets.authorized_domains),
-        authorized_cidrs=list(buckets.authorized_cidrs),
-        out_of_scope=list(buckets.out_of_scope),
-        max_requests_per_second=float(meta.get("max_requests_per_second") or 0.0),
-        max_total_requests=int(meta.get("max_total_requests") or 0),
-        allow_destructive=bool(meta.get("allow_destructive", False)),
-        notes=str(meta.get("notes") or "Imported from bounty scope file."),
-    )
-    return eng
+    return engagement_from_dict({
+        **meta,
+        "engagement_name": str(meta.get("engagement_name") or meta.get("name")
+                               or meta.get("handle") or "bounty-program"),
+        "authorized_domains": list(buckets.authorized_domains),
+        "authorized_cidrs": list(buckets.authorized_cidrs),
+        "authorized_url_prefixes": list(buckets.authorized_url_prefixes),
+        "out_of_scope": list(buckets.out_of_scope),
+        "allow_destructive": _scope_bool(meta.get("allow_destructive", False)),
+        "notes": str(meta.get("notes") or "Imported from bounty scope file."),
+    })
 
 
 def _extract_structured(raw: Any) -> Optional[_ScopeBuckets]:
@@ -209,6 +245,9 @@ def _extract_structured(raw: Any) -> Optional[_ScopeBuckets]:
 
 
 def _merge_buckets(eng: Engagement, buckets: _ScopeBuckets) -> None:
+    for prefix in buckets.authorized_url_prefixes:
+        if prefix not in eng.authorized_url_prefixes:
+            eng.authorized_url_prefixes.append(prefix)
     for d in buckets.authorized_domains:
         if d not in eng.authorized_domains:
             eng.authorized_domains.append(d)
@@ -266,6 +305,18 @@ class HackerOneClient:
         return "Basic " + base64.b64encode(raw).decode("ascii")
 
     def _get(self, url: str) -> tuple[int, Any]:
+        try:
+            target = parse_target(url)
+            base = parse_target(self.base_url)
+            request_path = scope_path(target.path)
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise BountyScopeError("Invalid HackerOne API pagination URL") from exc
+        if (
+            not target.is_url or target.scheme != "https"
+            or (target.scheme, target.host, target.port) != (base.scheme, base.host, base.port)
+            or not request_path.startswith(base.path.rstrip("/") + "/")
+        ):
+            raise BountyScopeError("HackerOne pagination URL leaves the configured HTTPS API boundary")
         headers = {"Authorization": self._auth_header(),
                    "Accept": "application/json"}
         if self.transport is not None:
@@ -283,10 +334,16 @@ class HackerOneClient:
 
     def fetch_structured_scopes(self, handle: str) -> list[dict[str, Any]]:
         """Fetch all structured scopes for a program handle (paginated)."""
-        url = f"{self.base_url}/hackers/programs/{handle}/structured_scopes"
+        if not handle or not handle.strip():
+            raise BountyScopeError("A nonempty HackerOne program handle is required")
+        url = f"{self.base_url.rstrip('/')}/hackers/programs/{quote(handle, safe='')}/structured_scopes"
         scopes: list[dict[str, Any]] = []
         pages = 0
-        while url and pages < 50:
+        seen: set[str] = set()
+        while url:
+            if url in seen or pages >= 50:
+                raise BountyScopeError("HackerOne scope pagination is incomplete or cyclic")
+            seen.add(url)
             status, body = self._get(url)
             if status == 401 or status == 403:
                 raise BountyScopeError(
@@ -301,7 +358,13 @@ class HackerOneClient:
                 attrs = item.get("attributes", {}) if isinstance(item, dict) else {}
                 if attrs:
                     scopes.append(attrs)
-            url = ((body.get("links") or {}).get("next")) or ""
+            next_url = ((body.get("links") or {}).get("next")) or ""
+            if not isinstance(next_url, str):
+                raise BountyScopeError("Invalid HackerOne pagination link")
+            try:
+                url = urljoin(url, next_url) if next_url else ""
+            except ValueError as exc:
+                raise BountyScopeError("Invalid HackerOne pagination URL") from exc
             pages += 1
         return scopes
 
@@ -310,21 +373,24 @@ class HackerOneClient:
                          max_total_requests: int = 0) -> Engagement:
         scopes = self.fetch_structured_scopes(handle)
         buckets = parse_structured_scopes(scopes)
-        if not (buckets.authorized_domains or buckets.authorized_cidrs):
+        if not (buckets.authorized_domains or buckets.authorized_cidrs or buckets.authorized_url_prefixes):
             raise BountyScopeError(
                 f"HackerOne program '{handle}' returned no testable in-scope assets."
             )
-        return Engagement(
+        engagement = Engagement(
             engagement_name=f"hackerone:{handle}",
             client=handle,
             authorized_domains=buckets.authorized_domains,
             authorized_cidrs=buckets.authorized_cidrs,
+            authorized_url_prefixes=buckets.authorized_url_prefixes,
             out_of_scope=buckets.out_of_scope,
             max_requests_per_second=max_requests_per_second,
             max_total_requests=max_total_requests,
             allow_destructive=False,
             notes=f"Imported from HackerOne structured scopes for '{handle}'.",
         )
+        engagement.validate()
+        return engagement
 
 
 # =============================================================================

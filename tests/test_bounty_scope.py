@@ -72,7 +72,7 @@ class FileImporterTests(unittest.TestCase):
         }))
         eng = import_scope_file(p)
         self.assertIn("acme.com", eng.authorized_domains)
-        self.assertIn("api.acme.com", eng.authorized_domains)
+        self.assertIn("https://api.acme.com/", eng.authorized_url_prefixes)
         self.assertIn("careers.acme.com", eng.out_of_scope)
 
     def test_import_engagement_format_delegates(self):

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import (
-    FileResponse,
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
@@ -25,7 +26,7 @@ from fastapi.responses import (
 
 from hacking_agent.harness.jobs import JobManager
 from hacking_agent.harness.models import RunRequest
-from hacking_agent.harness.store import RunStore
+from hacking_agent.harness.store import RunPathError, RunStore
 from hacking_agent.harness.submission import (
     UnreportableFindingError,
     build_submission_markdown,
@@ -132,9 +133,13 @@ def _tail_events(store: RunStore, run_id: str, last_id: int) -> Iterator[str]:
                         ev = json.loads(stripped)
                     except Exception:
                         continue
-                    if int(ev.get("id", 0)) <= sent:
+                    if not isinstance(ev, dict) or pos <= sent:
                         continue
-                    sent = int(ev.get("id", sent))
+                    # Workers each restart their event counters; the durable
+                    # file cursor stays unique across every target subprocess.
+                    ev["source_event_id"] = ev.get("id")
+                    ev["id"] = pos
+                    sent = pos
                     yield _sse(ev)
         rec = store.get(run_id)
         if rec is not None and rec.status.is_terminal:
@@ -152,21 +157,59 @@ def create_app(store: Optional[RunStore] = None,
                jobs: Optional[JobManager] = None,
                token: Optional[str] = None) -> FastAPI:
     store = store or RunStore()
-    token = token if token is not None else (os.getenv("REYNARD_HARNESS_TOKEN") or "")
+    token = (token if token is not None else os.getenv("REYNARD_HARNESS_TOKEN")) or secrets.token_urlsafe(32)
+    session_token = secrets.token_urlsafe(32)
     jobs = jobs or JobManager(store, max_concurrency=int(
         os.getenv("REYNARD_HARNESS_MAX_CONCURRENCY", "1") or "1"))
 
-    app = FastAPI(title="Reynard Run Harness", docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        jobs.shutdown()
+
+    app = FastAPI(title="Reynard Run Harness", docs_url=None, redoc_url=None,
+                  openapi_url=None, lifespan=lifespan)
     app.state.store = store
     app.state.jobs = jobs
     app.state.token = token
 
     def _check(supplied: str) -> None:
-        if token and supplied != token:
+        if not secrets.compare_digest(supplied.encode(), token.encode()):
             raise HTTPException(status_code=401, detail="invalid or missing token")
 
     def require_token(request: Request) -> None:
+        cookie = request.cookies.get("reynard_session", "")
+        if cookie and secrets.compare_digest(cookie.encode(), session_token.encode()):
+            return
         _check(request.headers.get("x-harness-token", ""))
+
+    @app.exception_handler(RunPathError)
+    async def invalid_run_path(_request: Request, _exc: RunPathError) -> JSONResponse:
+        return JSONResponse({"detail": "invalid run identifier"}, status_code=400)
+
+    @app.middleware("http")
+    async def local_boundary(request: Request, call_next: Any) -> Any:
+        # Host checking prevents browser DNS rebinding; Origin checking prevents
+        # another local web app from using an operator's session cookie.
+        if request.url.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            return JSONResponse({"detail": "loopback Host required"}, status_code=400)
+        origin = request.headers.get("origin")
+        if origin is not None and origin != str(request.base_url).rstrip("/"):
+            return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 1048576:
+                return JSONResponse({"detail": "request body exceeds 1 MiB"}, status_code=413)
+        request._body = bytes(body)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
 
     # ---- UI ------------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -174,9 +217,22 @@ def create_app(store: Optional[RunStore] = None,
         if not INDEX_HTML.exists():
             return HTMLResponse("<h1>Reynard harness</h1><p>UI missing.</p>")
         html = INDEX_HTML.read_text(encoding="utf-8")
-        # Inject the token so the localhost operator's browser can call the API.
-        html = html.replace("__HARNESS_TOKEN__", token)
-        return HTMLResponse(html)
+        nonce = secrets.token_urlsafe(24)
+        html = html.replace("<script>", f'<script nonce="{nonce}">')
+        return HTMLResponse(html, headers={"Content-Security-Policy": (
+            f"default-src 'self'; script-src 'nonce-{nonce}'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
+            "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        )})
+
+    @app.post("/api/session")
+    def login(request: Request) -> JSONResponse:
+        _check(request.headers.get("x-harness-token", ""))
+        response = JSONResponse({"ok": True})
+        response.set_cookie("reynard_session", session_token, httponly=True,
+                            samesite="strict", secure=request.url.scheme == "https")
+        return response
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -206,9 +262,7 @@ def create_app(store: Optional[RunStore] = None,
 
     @app.get("/api/runs/{run_id}/events")
     def run_events(run_id: str, request: Request,
-                   token_q: str = Query("", alias="token")) -> StreamingResponse:
-        # EventSource can't set headers, so accept the token via query param too.
-        _check(request.headers.get("x-harness-token", "") or token_q)
+                   _: None = Depends(require_token)) -> StreamingResponse:
         if store.get(run_id) is None:
             raise HTTPException(status_code=404, detail="run not found")
         last_id = 0
@@ -350,8 +404,7 @@ def main(argv: Optional[list[str]] = None) -> int:
               "this session:")
         print(f"    {token}")
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"[reynard-harness] WARNING: binding to {args.host} exposes an "
-              "offensive-tooling control plane beyond localhost.")
+        parser.error("the harness supports loopback binding only")
 
     app = create_app(token=token)
     print(f"[reynard-harness] console: http://{args.host}:{args.port}/")

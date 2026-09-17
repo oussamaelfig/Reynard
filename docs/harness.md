@@ -14,7 +14,8 @@ Reynard is built for one run per process: the event bus, session registry, OOB
 session, token meter, and the single `reynard-kali` container + cookie jar are
 process/host-global. So each submitted run executes in its **own subprocess**
 (isolated globals). For the single-operator MVP, runs are **serialized**
-(`REYNARD_HARNESS_MAX_CONCURRENCY=1`) because they share one Kali container.
+(`REYNARD_HARNESS_MAX_CONCURRENCY=1`); other values are rejected while optional
+tools can share one Kali container. Run only one harness server per checkout.
 
 ## Install & run
 
@@ -31,18 +32,28 @@ it to each run's subprocess **via env only** — it is never written to disk.
 
 ## Security model
 
-- **Localhost + token.** The server binds `127.0.0.1` and requires
-  `REYNARD_HARNESS_TOKEN` on every API call (the SSE stream accepts it as a
-  `?token=` query param because `EventSource` cannot set headers). If no token
-  is set, one is generated and printed at startup. Binding to a non-loopback
-  host prints a warning — don't expose this endpoint.
+- **Localhost + token.** Non-loopback binds and Host headers are rejected.
+  Paste `REYNARD_HARNESS_TOKEN` into the login dialog; when unset, the CLI
+  generates and prints one. The public HTML never contains the token.
+  Login exchanges it for an HttpOnly, SameSite=Strict session cookie. API
+  clients may continue using `x-harness-token`. SSE uses the cookie or header;
+  URL query tokens are no longer accepted. Cross-origin requests are refused.
+  Responses disable caching and framing; the UI uses a nonce-based script policy.
 - **Authorization gate.** A run is refused unless it declares an authorized
   scope (domain or CIDR) **and** the operator checks "I am authorized to test
-  this scope" — mirroring `reynard-assess`. The worker rebuilds the `Engagement`
+  this scope" — mirroring `reynard-assess`. Targets outside scope or inside
+  exclusions are rejected before queueing. The worker rebuilds the `Engagement`
   and calls `ScopeGuard.attach_engagement`, so the UI can never widen scope
   beyond the submitted engagement.
-- **No secrets persisted.** The submitted `config.json` contains scope + options
-  only; API keys stay in env.
+- **Credentials are ephemeral.** Submitted cookie/header identities remain in
+  server memory until worker launch, then travel once over stdin. They are
+  excluded from `config.json`, argv, and environment variables. LLM API keys
+  stay in the process environment. Existing old configs are not migrated or
+  erased; review their retention. Operator descriptions, tool logs, responses,
+  and evidence may contain sensitive data, so protect the entire run directory.
+- **Bounded input.** Request bodies are limited to 1 MiB, target lists to 100,
+  and auth-session payloads to 256 KiB. Timeouts and budgets reject negative,
+  non-finite, and excessive values; header injection is refused.
 
 ## API surface
 
@@ -50,6 +61,7 @@ it to each run's subprocess **via env only** — it is never written to disk.
 | --- | --- | --- |
 | `GET`  | `/` | The console (single HTML page). |
 | `GET`  | `/api/health` | Liveness + whether auth is required. |
+| `POST` | `/api/session` | Exchange `x-harness-token` for a browser session cookie. |
 | `POST` | `/api/runs` | Validate authorization + scope, persist, enqueue. Returns `run_id`. |
 | `GET`  | `/api/runs` | List runs (newest first) with status + counts. |
 | `GET`  | `/api/runs/{id}` | Run detail + status. |
@@ -75,6 +87,18 @@ logs/runs/
 ```
 
 Status flow: `queued → running → completed | failed | cancelled`.
+
+Duplicate submissions cannot launch a second worker. Cancellation and shutdown
+terminate the owned host process tree, cancel queued jobs, and clear pending
+credentials. A timeout stops the remaining targets and marks the run failed;
+an empty or malformed worker result cannot become a successful run. Startup
+marks stale queued/running records failed without killing stored PIDs (PIDs
+may have been reused). Inspect previous workers after an unclean shutdown
+before resubmitting. Terminating a Docker client does not prove that every
+container-side command ended.
+
+SSE event IDs are durable file cursors, so reconnects work when target workers
+restart their internal counters. Each harness run owns its memory database.
 
 ## The submission form
 

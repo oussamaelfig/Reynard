@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import sys
 import threading
@@ -34,15 +33,8 @@ def _terminate(proc: subprocess.Popen) -> None:
     The worker is started in its own session (start_new_session=True), so on
     POSIX we can signal the whole process group; otherwise fall back to
     terminating the direct child."""
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        return
-    except Exception:
-        pass
-    try:
-        proc.terminate()
-    except Exception:
-        pass
+    from hacking_agent.core.process_control import stop_process_tree
+    stop_process_tree(proc)
 
 
 class JobManager:
@@ -50,25 +42,36 @@ class JobManager:
                  worker_cmd: Optional[WorkerCmd] = None,
                  env_extra: Optional[dict[str, str]] = None):
         self.store = store
-        self.max_concurrency = max(1, int(max_concurrency))
+        if max_concurrency != 1:
+            raise ValueError("Only max_concurrency=1 is supported while runs share a tool container")
+        self.max_concurrency = 1
         self._worker_cmd = worker_cmd or _default_worker_cmd
         self._env_extra = dict(env_extra or {})
         self._lock = threading.RLock()
         self._queue: deque[str] = deque()
         self._running: dict[str, subprocess.Popen] = {}
         self._cancelled: set[str] = set()
+        self._closed = False
+        self.store.recover_interrupted()
 
     # ---- submission ------------------------------------------------------
 
     def submit(self, run_id: str) -> None:
         with self._lock:
+            if self._closed:
+                raise RuntimeError("job manager is shut down")
+            record = self.store.get(run_id)
+            if record is None or record.status != RunStatus.queued:
+                return
+            if run_id in self._queue or run_id in self._running:
+                return
             self._queue.append(run_id)
         self._drain()
 
     def _drain(self) -> None:
         """Start queued runs up to the concurrency limit."""
         with self._lock:
-            while self._queue and len(self._running) < self.max_concurrency:
+            while not self._closed and self._queue and len(self._running) < self.max_concurrency:
                 run_id = self._queue.popleft()
                 if run_id in self._cancelled:
                     self.store.update(run_id, status=RunStatus.cancelled)
@@ -79,14 +82,23 @@ class JobManager:
         run_dir = str(self.store.run_dir(run_id))
         env = dict(os.environ)
         env.update(self._env_extra)
+        env["REYNARD_AUTH_SESSIONS_STDIN"] = "1"
+        sessions = self.store.take_auth_sessions(run_id)
         log_fh = open(self.store.worker_log_path(run_id), "w", encoding="utf-8")
         try:
             proc = subprocess.Popen(
                 self._worker_cmd(run_dir),
                 cwd=str(PROJECT_ROOT), env=env,
                 stdout=log_fh, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
                 start_new_session=True,  # own process group so cancel kills children
             )
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.write(json.dumps(sessions).encode("utf-8"))
+                    proc.stdin.close()
+                except BrokenPipeError:
+                    pass  # failed/custom worker; monitor records its outcome
         except Exception as exc:
             log_fh.close()
             self.store.update(run_id, status=RunStatus.failed,
@@ -131,11 +143,12 @@ class JobManager:
     def _read_result(self, run_id: str) -> dict[str, Any]:
         p = self.store.run_dir(run_id) / "result.json"
         if not p.exists():
-            return {}
+            return {"error": "worker exited without result.json"}
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            result = json.loads(p.read_text(encoding="utf-8"))
+            return result if isinstance(result, dict) else {"error": "invalid worker result"}
         except Exception:
-            return {}
+            return {"error": "worker result.json is unreadable"}
 
     def _strict_report_counts(self, run_id: str) -> tuple[int, int, int]:
         """Recompute customer counts from re-gated report evidence."""
@@ -156,7 +169,6 @@ class JobManager:
 
     def cancel(self, run_id: str) -> bool:
         with self._lock:
-            self._cancelled.add(run_id)
             proc = self._running.get(run_id)
             if run_id in self._queue:
                 # queued but not started -> drop + mark cancelled
@@ -165,8 +177,10 @@ class JobManager:
                 except ValueError:
                     pass
                 self.store.update(run_id, status=RunStatus.cancelled)
-                self._cancelled.discard(run_id)
+                self.store.take_auth_sessions(run_id)
                 return True
+            if proc is not None and proc.poll() is None:
+                self._cancelled.add(run_id)
         if proc is not None and proc.poll() is None:
             _terminate(proc)
             return True
@@ -178,7 +192,13 @@ class JobManager:
 
     def shutdown(self) -> None:
         with self._lock:
-            procs = list(self._running.values())
-        for p in procs:
+            self._closed = True
+            for run_id in self._queue:
+                self.store.update(run_id, status=RunStatus.cancelled)
+                self.store.take_auth_sessions(run_id)
+            self._queue.clear()
+            procs = list(self._running.items())
+            self._cancelled.update(self._running)
+        for _run_id, p in procs:
             if p.poll() is None:
                 _terminate(p)

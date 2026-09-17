@@ -19,10 +19,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
-import threading
+import subprocess
+import sys
+import tempfile
 import time
-from datetime import datetime
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -41,6 +45,8 @@ from hacking_agent.core.finding_validation import (
     partition_reportable,
 )
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
+from hacking_agent.core.process_control import stop_process_tree
+from hacking_agent.core.scope import ScopeGuard
 
 console = Console()
 
@@ -63,31 +69,40 @@ def authorized_targets(
             "Define an authorized scope before running an assessment."
         )
 
-    denied = {d.strip().lower() for d in engagement.out_of_scope if d.strip()}
-
-    def _is_denied(host: str) -> bool:
-        host = (host or "").lower()
-        return any(host == d or host.endswith(f".{d}") for d in denied)
-
+    guard = ScopeGuard.from_engagement(engagement)
     targets: list[str] = []
+
+    def _add(raw: str) -> None:
+        url = raw.strip() if "://" in raw else f"https://{raw.strip()}"
+        try:
+            parsed = urlparse(url)
+            valid = (
+                parsed.scheme in {"http", "https"}
+                and bool(parsed.hostname)
+                and parsed.username is None
+                and parsed.password is None
+                and guard.is_in_scope(url)
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            console.print(f"[yellow]Skipping invalid/out-of-scope target: {raw}[/]")
+            return
+        if url not in targets:
+            targets.append(url)
+
     if explicit:
         for raw in explicit:
-            url = raw if "://" in raw else f"https://{raw}"
-            host = (urlparse(url).hostname or "").lower()
-            if _is_denied(host):
-                console.print(f"[yellow]Skipping out-of-scope target: {raw}[/]")
-                continue
-            targets.append(url)
+            _add(raw)
     else:
         for domain in engagement.authorized_domains:
             host = domain.strip().lower()
-            if not host or _is_denied(host):
-                continue
-            targets.append(f"https://{host}/")
+            if host:
+                _add(f"https://{host}/")
         for prefix in engagement.authorized_url_prefixes:
             p = (prefix or "").strip()
             if p and p not in targets:
-                targets.append(p if "://" in p else f"https://{p}")
+                _add(p)
 
     if not targets:
         raise EngagementError(
@@ -105,7 +120,7 @@ def _engagement_meta(engagement: Engagement, targets: list[str]) -> dict[str, An
         "engagement_name": engagement.engagement_name or "Authorized Assessment",
         "client": engagement.client,
         "tester": engagement.tester,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "targets": targets,
         "authorized_domains": engagement.authorized_domains,
         "authorized_cidrs": engagement.authorized_cidrs,
@@ -122,78 +137,103 @@ def run_target(
     per_target_timeout: float,
     objective: str | None = None,
 ) -> dict[str, Any]:
-    """Run the Orchestrator against a single authorized target under the RoE.
+    """Run one target in an isolated process, joining it before returning.
 
-    Returns a per-target result row including the extracted findings. Imports
-    the orchestrator lazily so the offline scope/report logic stays importable
-    without the full agent stack + optional runtime deps. ``objective`` overrides
-    the default assessment goal (used by the run harness to pass the operator's
-    free-text description)."""
-    from hacking_agent.cli.orchestrator import Orchestrator
-
+    A timeout discards incomplete findings and terminates the owned host process
+    tree. Already submitted container/external jobs may need separate cleanup;
+    assessment callers must stop scheduling further targets on timeout.
+    """
+    if not math.isfinite(per_target_timeout) or per_target_timeout < 0:
+        raise ValueError("per_target_timeout must be finite and nonnegative")
+    target_url = authorized_targets(engagement, [target_url])[0]
+    if not engagement.is_within_window():
+        raise EngagementError("Refusing to run outside the engagement testing window")
     console.print(f"[bold cyan]▶ Assessing target:[/] {target_url}")
-    holder: dict[str, Any] = {}
-    default_objective = (
-        "Authorized security assessment: recon, enumerate, and test "
-        "the in-scope target for exploitable vulnerabilities, then "
-        "produce evidence-backed findings."
-    )
-    run_objective = (objective or "").strip() or default_objective
+    started = time.monotonic()
+    timed_out = False
+    row: dict[str, Any] = {}
+    from hacking_agent.core import sessions
 
-    def _run() -> None:
+    registry = sessions._REGISTRY
+    session_snapshot = {
+        "sessions": [asdict(registry.get(name)) for name in registry.names()],
+        "active": registry.active().name,
+    } if registry is not None else {}
+    with tempfile.TemporaryDirectory(prefix="reynard-target-") as workspace:
+        result_path = Path(workspace) / "result.json"
+        config = json.dumps({
+            "engagement": asdict(engagement),
+            "target_url": target_url,
+            "max_iterations": max_iterations,
+            "objective": objective,
+            "session_snapshot": session_snapshot,
+        })
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "hacking_agent.cli.assess_worker",
+             str(result_path)],
+            start_new_session=(os.name != "nt"),
+            stdin=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
         try:
-            orch = Orchestrator(
-                target_url=target_url,
-                max_iterations=max_iterations,
-                objective=run_objective,
-                scope_domains=list(engagement.authorized_domains),
-                scope_cidrs=list(engagement.authorized_cidrs),
-                # An authorized engagement is always a PRODUCTION assessment:
-                # no lab assumptions, evidence-gated findings only.
-                mission_mode="production",
-            )
-            # Install the rules of engagement onto the live ScopeGuard so every
-            # tool call is gated by the out-of-scope denylist, rate limit,
-            # request cap, and destructive-action policy.
-            orch.scope_guard.attach_engagement(engagement)
-            holder["orch"] = orch
-            holder["result"] = orch.run()
-        except Exception as exc:  # noqa: BLE001 - surfaced in verdict
-            holder["error"] = exc
-
-    thread = threading.Thread(target=_run, daemon=True)
-    started = time.time()
-    thread.start()
-    thread.join(per_target_timeout if per_target_timeout > 0 else None)
-    elapsed = round(time.time() - started, 1)
-    timed_out = thread.is_alive()
-
-    orch = holder.get("orch")
-    error = holder.get("error")
-    findings: list[Finding] = []
-    if orch is not None:
-        try:
-            orch._assemble_evidence_bundles()
-            findings = extract_findings(
-                orch.memory, orch.evidence, orch.bundles,
-            )
-        except Exception:  # noqa: BLE001 - defensive snapshot
-            findings = []
-
-    if timed_out:
-        verdict = f"timeout after {per_target_timeout}s"
-    elif error is not None:
-        verdict = f"error: {str(error)[:200]}"
-    else:
-        verdict = "assessed"
-
+            proc.communicate(input=config, timeout=per_target_timeout or None)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            stop_process_tree(proc)
+        except BaseException:
+            stop_process_tree(proc)
+            raise
+        if not timed_out:
+            try:
+                if proc.returncode != 0:
+                    raise RuntimeError(f"target worker exited with code {proc.returncode}")
+                row = json.loads(result_path.read_text(encoding="utf-8"))
+                row["findings"] = [Finding(**item) for item in row.get("findings", [])]
+            except (OSError, ValueError, TypeError, RuntimeError) as exc:
+                row = {"verdict": f"error: {str(exc)[:200]}", "findings": []}
     return {
         "target": target_url,
-        "verdict": verdict,
+        "verdict": f"timeout after {per_target_timeout}s" if timed_out else row.get("verdict", "error: worker result missing"),
         "timed_out": timed_out,
-        "wall_clock_seconds": elapsed,
-        "findings": findings,
+        "wall_clock_seconds": round(time.monotonic() - started, 1),
+        "findings": [] if timed_out else row.get("findings", []),
     }
+
+
+def _run_target_worker(config: dict[str, Any]) -> dict[str, Any]:
+    """Worker-only entry point; never construct a live orchestrator in the parent."""
+    engagement = Engagement(**config["engagement"])
+    target_url = authorized_targets(engagement, [config["target_url"]])[0]
+    if not engagement.is_within_window():
+        raise EngagementError("Refusing to run outside the engagement testing window")
+    snapshot = config.get("session_snapshot") or {}
+    if snapshot:
+        from hacking_agent.core import sessions
+
+        registry = sessions.get_registry()
+        for session in snapshot.get("sessions", []):
+            registry.register(sessions.AuthSession(**session), overwrite=True)
+        registry.set_active(snapshot.get("active", "default"))
+    from hacking_agent.cli.orchestrator import Orchestrator
+
+    orch = Orchestrator(
+        target_url=target_url,
+        max_iterations=config["max_iterations"],
+        objective=(config.get("objective") or "").strip() or (
+            "Authorized security assessment: recon, enumerate, and test the "
+            "in-scope target for exploitable vulnerabilities, then produce "
+            "evidence-backed findings."
+        ),
+        scope_domains=list(engagement.authorized_domains),
+        scope_cidrs=list(engagement.authorized_cidrs),
+        mission_mode="production",
+    )
+    orch.scope_guard.attach_engagement(engagement)
+    orch.run()
+    orch._assemble_evidence_bundles()
+    findings = extract_findings(orch.memory, orch.evidence, orch.bundles)
+    return {"verdict": "assessed", "findings": [asdict(item) for item in findings]}
 
 
 def build_consolidated_report(
@@ -293,7 +333,7 @@ def write_reports(
     else:
         ensure_runtime_dirs()
         base = LOG_DIR
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
     md_path = base / f"assessment_{ts}.md"
     json_path = base / f"assessment_{ts}.json"
     md_path.write_text(safe_markdown, encoding="utf-8")
@@ -361,6 +401,9 @@ def run_assessment(args: argparse.Namespace) -> int:
                     per_target_timeout=args.per_target_timeout,
                 )
             )
+            if target_results[-1].get("timed_out"):
+                console.print("[yellow]Stopping assessment after target timeout; review outstanding container work before retrying.[/]")
+                break
 
     report_md, report_json = build_consolidated_report(
         engagement, targets, target_results

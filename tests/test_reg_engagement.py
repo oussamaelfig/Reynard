@@ -151,7 +151,12 @@ class EngagementScopeGuardTests(unittest.TestCase):
         allowed = ScopeGuard.from_engagement(
             self._engagement(allow_destructive=True)
         )
-        allowed.validate("run_shell", {"command": "rm -rf /var/www/old"})
+        allowed.validate("http_request", {
+            "url": "https://example.com/q", "data": "q=1; DROP TABLE accounts",
+        })
+        # Destructive authorization does not authorize an unbounded shell.
+        with self.assertRaises(ScopeViolation):
+            allowed.validate("run_shell", {"command": "rm -rf /var/www/old"})
 
     def test_delete_carlos_lab_pattern_allowed_even_when_blocking(self):
         # The classic "delete carlos" lab win condition must not be treated as

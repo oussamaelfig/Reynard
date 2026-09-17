@@ -37,6 +37,7 @@ from hacking_agent.core.schemas import AgentResult, AgentTask, ToolDecision
 from hacking_agent.core.scope import ScopeGuard, ScopeViolation
 from hacking_agent.core.state_machine import StateMachine
 from hacking_agent.core.tools import execute_tool
+from hacking_agent.core.http_transport import execution_scope
 
 T = TypeVar("T", bound=BaseModel)
 console = Console()
@@ -136,7 +137,8 @@ class BudgetedToolExecutor:
         # and the known-failed-attempt gate still bound genuine loops.
         payload_str = self._extract_payload(decision.tool, decision.args)
         idempotent_nav = self._is_idempotent_nav(decision.tool, decision.args)
-        if payload_str and not idempotent_nav and self.memory.is_duplicate(payload_str):
+        validation_replay = agent_name == "validator" and phase == "validate"
+        if payload_str and not idempotent_nav and not validation_replay and self.memory.is_duplicate(payload_str):
             reason = f"Duplicate payload (already sent): {payload_str[:80]}"
             console.print(f"[yellow]⚠ {reason}[/]")
             emit("tool_blocked", {
@@ -152,6 +154,7 @@ class BudgetedToolExecutor:
         if (
             decision.tool not in self.REPEATABLE_TOOLS
             and not idempotent_nav
+            and not validation_replay
             and self.memory.is_known_failed_attempt(decision.tool, decision.args)
         ):
             reason = (
@@ -187,7 +190,8 @@ class BudgetedToolExecutor:
         # handle right before dispatch; adapters may only read it, never mutate.
         if decision.tool in self.EXTERNAL_TOOLS:
             self._publish_active_scope_guard()
-        raw_result = execute_tool(decision.tool, decision.args)
+        with execution_scope(self.scope_guard):
+            raw_result = execute_tool(decision.tool, decision.args)
 
         # ----- auto-analyze HTTP/browser responses -----
         signals = self._auto_analyze(decision.tool, decision.args, raw_result)

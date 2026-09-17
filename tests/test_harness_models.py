@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from hacking_agent.harness.models import RunRequest, RunStatus
+from hacking_agent.harness.models import AuthSessionSpec
+import pytest
+from pydantic import ValidationError
 
 
 def test_authorization_error_requires_ack():
@@ -56,3 +59,29 @@ def test_status_terminality():
     assert RunStatus.cancelled.is_terminal
     assert not RunStatus.queued.is_terminal
     assert not RunStatus.running.is_terminal
+
+
+@pytest.mark.parametrize("fields", [
+    {"max_iterations": 0}, {"max_iterations": 1001},
+    {"per_target_timeout": float("inf")}, {"per_target_timeout": -1},
+    {"max_requests_per_second": float("nan")}, {"max_total_requests": -1},
+    {"targets": ["x"] * 101}, {"description": "x" * 20001},
+    {"mission_mode": "unknown"}, {"authorized_domains": [""]},
+])
+def test_invalid_unbounded_options_rejected(fields):
+    with pytest.raises(ValidationError):
+        RunRequest(**fields)
+
+
+def test_session_header_injection_and_ambiguous_identities_rejected():
+    for fields in ({"cookie_header": "cookie=x\r\nHost: evil.invalid"},
+                   {"headers": {"X-Test\nInjected": "x"}},
+                   {"headers": {"X-Test": "a\x00b"}}):
+        with pytest.raises(ValidationError):
+            AuthSessionSpec(name="user", **fields)
+    with pytest.raises(ValidationError):
+        RunRequest(auth_sessions=[AuthSessionSpec(name="user"), AuthSessionSpec(name="user")])
+    with pytest.raises(ValidationError):
+        RunRequest(auth_sessions=[AuthSessionSpec(name="user", headers={
+            str(i): "x" * 32768 for i in range(9)
+        })])

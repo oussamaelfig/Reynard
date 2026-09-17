@@ -1,6 +1,7 @@
 # Git ignore for Reynard
 .env
 venv/
+.venv/
 node_modules/
 __pycache__/
 *.pyc
@@ -11,3 +12,8 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/

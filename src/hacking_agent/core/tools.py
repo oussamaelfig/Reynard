@@ -2628,7 +2628,7 @@ def tool_inventory(role: str = "general", check_container: bool = False) -> str:
 
 def read_file(path: str) -> str:
     """Read a file from inside the Kali container."""
-    result = _docker_exec(f"cat '{path}'")
+    result = _docker_exec(f"cat -- {shlex.quote(path)}")
     if result["exit_code"] != 0:
         return json.dumps({
             "error": f"Failed to read file: {result['stderr']}",
@@ -2643,13 +2643,12 @@ def read_file(path: str) -> str:
 def write_file(path: str, content: str) -> str:
     """Write content to a file inside the Kali container."""
     # Ensure parent directory exists
-    dir_path = os.path.dirname(path)
-    _docker_exec(f"mkdir -p '{dir_path}'")
+    dir_path = os.path.dirname(path) or "."
+    _docker_exec(f"mkdir -p -- {shlex.quote(dir_path)}")
 
     # Use heredoc to write content (handles special characters)
     # Escape single quotes in content for safe shell transmission
-    escaped_content = content.replace("'", "'\\''")
-    result = _docker_exec(f"printf '%s' '{escaped_content}' > '{path}'")
+    result = _docker_exec(f"printf '%s' {shlex.quote(content)} > {shlex.quote(path)}")
 
     if result["exit_code"] != 0:
         return json.dumps({
@@ -2665,7 +2664,7 @@ def write_file(path: str, content: str) -> str:
 
 def list_dir(path: str = "/data") -> str:
     """List directory contents inside the Kali container."""
-    result = _docker_exec(f"ls -lah '{path}' 2>&1")
+    result = _docker_exec(f"ls -lah -- {shlex.quote(path)} 2>&1")
     if result["exit_code"] != 0:
         return json.dumps({
             "error": f"Failed to list directory: {result['stderr']}",
@@ -2683,7 +2682,7 @@ def http_request(
     headers: dict | None = None,
     data: str | None = None,
     follow_redirects: bool = True,
-    insecure: bool = True,
+    insecure: bool = False,
     session: str | None = None,
 ) -> str:
     """
@@ -2702,15 +2701,18 @@ def http_request(
     if headers:
         merged_headers.update(headers)
 
-    cmd_parts = [
-        "curl",
-        "-s",
-        "-S",
-        "-D-",
-        f"-b {jar}",
-        f"-c {jar}",
-        f"-X {method}",
-    ]
+    from hacking_agent.core.http_transport import active_guard, request
+    guard = active_guard()
+    if guard is not None and guard.engagement_attached:
+        return json.dumps(request(
+            guard, sess, url=url, method=method, headers=merged_headers,
+            data=data, follow_redirects=follow_redirects, insecure=insecure,
+        ))
+
+    # Every caller-controlled value is one shell argument. --url prevents a
+    # leading dash from becoming a curl option; restrict URL protocols too.
+    cmd_parts = ["curl", "-s", "-S", "-D-", "--proto", "=http,https",
+                 "--proto-redir", "=http,https", "-b", jar, "-c", jar, "-X", method]
 
     if follow_redirects:
         cmd_parts.append("-L")
@@ -2718,17 +2720,14 @@ def http_request(
         cmd_parts.append("-k")
 
     for key, value in merged_headers.items():
-        # Escape any single quotes in header values.
-        v = str(value).replace("'", "'\\''")
-        cmd_parts.append(f"-H '{key}: {v}'")
+        cmd_parts.extend(["-H", f"{key}: {value}"])
 
     if data:
-        escaped_data = data.replace("'", "'\\''")
-        cmd_parts.append(f"-d '{escaped_data}'")
+        cmd_parts.extend(["--data-raw", data])
 
-    cmd_parts.append(f"'{url}'")
+    cmd_parts.extend(["--url", url])
 
-    curl_cmd = " ".join(cmd_parts)
+    curl_cmd = shlex.join(cmd_parts)
     result = _docker_exec(curl_cmd, timeout=60)
 
     return json.dumps({
@@ -4368,7 +4367,7 @@ TOOL_FUNCTIONS: dict[str, callable] = {
         headers=args.get("headers"),
         data=args.get("data"),
         follow_redirects=args.get("follow_redirects", True),
-        insecure=args.get("insecure", True),
+        insecure=args.get("insecure", False),
         session=args.get("session"),
     ),
     "browser_navigate": lambda args: browser_navigate(

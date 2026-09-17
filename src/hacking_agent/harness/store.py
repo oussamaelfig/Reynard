@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,7 +42,11 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
+class RunPathError(ValueError):
+    """An invalid run identifier must never become a filesystem path."""
 
 
 class RunStore:
@@ -52,6 +57,7 @@ class RunStore:
         self.root = Path(root) if root else (LOG_DIR / "runs")
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._auth_sessions: dict[str, list[dict[str, Any]]] = {}
         self._conn = sqlite3.connect(str(self.root / "runs.db"),
                                      check_same_thread=False, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
@@ -70,8 +76,11 @@ class RunStore:
     # ---- paths ----------------------------------------------------------
 
     def run_dir(self, run_id: str) -> Path:
-        d = self.root / run_id
-        d.mkdir(parents=True, exist_ok=True)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", run_id):
+            raise RunPathError("invalid run identifier")
+        d = (self.root / run_id).resolve()
+        if d.parent != self.root.resolve():
+            raise RunPathError("run directory escapes the run store")
         return d
 
     def config_path(self, run_id: str) -> Path:
@@ -99,10 +108,14 @@ class RunStore:
             targets=request.resolved_targets(),
             description=(request.description or "")[:500],
         )
-        # Persist the submitted config (no secrets) for the worker to read.
+        self.run_dir(run_id).mkdir(mode=0o700)
+        # Credentials are ephemeral: only the worker's stdin receives them.
+        public_config = request.model_dump(mode="json")
+        public_config["auth_sessions"] = []
         self.config_path(run_id).write_text(
-            request.model_dump_json(indent=2), encoding="utf-8")
+            json.dumps(public_config, indent=2), encoding="utf-8")
         with self._lock:
+            self._auth_sessions[run_id] = [s.model_dump(mode="json") for s in request.auth_sessions]
             self._conn.execute(
                 """INSERT INTO runs (id, status, created_at, updated_at, targets,
                        description, findings_count, verified_count,
@@ -115,9 +128,33 @@ class RunStore:
             self._conn.commit()
         return rec
 
+    def take_auth_sessions(self, run_id: str) -> list[dict[str, Any]]:
+        """Consume credentials once; do not retain them after launch/cancel."""
+        with self._lock:
+            return self._auth_sessions.pop(run_id, [])
+
+    def recover_interrupted(self) -> int:
+        """Stale queued/running records require a fresh authorized submission.
+
+        Never kill stored PIDs: after restart a PID may belong to another app.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE runs SET status=?, updated_at=?, error=? WHERE status IN (?, ?)",
+                (RunStatus.failed.value, _now(),
+                 "Harness restarted; execution state unknown. Check previous worker before resubmitting.",
+                 RunStatus.queued.value, RunStatus.running.value),
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
     def update(self, run_id: str, **fields: Any) -> None:
         if not fields:
             return
+        allowed = {"status", "findings_count", "verified_count", "suppressed_count",
+                   "error", "pid", "exit_code"}
+        if fields.keys() - allowed:
+            raise ValueError("unsupported run update field")
         fields["updated_at"] = _now()
         if isinstance(fields.get("status"), RunStatus):
             fields["status"] = fields["status"].value
@@ -166,6 +203,7 @@ class RunStore:
 
     def close(self) -> None:
         with self._lock:
+            self._auth_sessions.clear()
             try:
                 self._conn.close()
             except Exception:

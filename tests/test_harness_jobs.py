@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import pytest
 
 from hacking_agent.harness.jobs import JobManager
 from hacking_agent.harness.models import RunRequest, RunStatus
@@ -114,3 +115,63 @@ def test_runs_are_serialized(tmp_path):
     first, second = sorted([ta, tb], key=lambda r: r["start"])
     # With one slot, the second run cannot start until the first has finished.
     assert second["start"] >= first["end"] - 0.05
+
+
+def test_unsafe_shared_container_concurrency_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="max_concurrency=1"):
+        JobManager(RunStore(root=tmp_path), max_concurrency=2)
+
+
+def test_duplicate_submission_cannot_launch_worker_twice(tmp_path):
+    store = RunStore(root=tmp_path)
+    jm = JobManager(store, worker_cmd=_cmd(_TIMED))
+    rec = store.create(_req())
+    jm.submit(rec.id)
+    pid = store.get(rec.id).pid
+    jm.submit(rec.id)
+    assert store.get(rec.id).pid == pid
+    _wait_terminal(store, rec.id)
+    jm.submit(rec.id)
+    assert not jm.is_running(rec.id)
+
+
+def test_credentials_reach_worker_over_stdin_only(tmp_path):
+    store = RunStore(root=tmp_path)
+    script = (
+        "import sys,json,pathlib,os;p=pathlib.Path(sys.argv[1]);"
+        "s=json.load(sys.stdin);"
+        "assert s[0]['cookie_header']=='session=ephemeral-secret';"
+        "assert 'ephemeral-secret' not in str(os.environ);"
+        "assert 'ephemeral-secret' not in (p/'config.json').read_text();"
+        "(p/'result.json').write_text('{}')"
+    )
+    jm = JobManager(store, worker_cmd=_cmd(script))
+    req = RunRequest(authorized=True, authorized_domains=["example.com"],
+                     auth_sessions=[{"name": "user", "cookie_header": "session=ephemeral-secret"}])
+    rec = store.create(req)
+    jm.submit(rec.id)
+    assert _wait_terminal(store, rec.id).status is RunStatus.completed
+    assert store.take_auth_sessions(rec.id) == []
+
+
+def test_shutdown_cancels_queue_and_prevents_later_launch(tmp_path):
+    store = RunStore(root=tmp_path)
+    jm = JobManager(store, worker_cmd=_cmd(_SLOW))
+    first, second = store.create(_req()), store.create(_req())
+    jm.submit(first.id)
+    jm.submit(second.id)
+    jm.shutdown()
+    assert _wait_terminal(store, first.id).status is RunStatus.cancelled
+    assert store.get(second.id).status is RunStatus.cancelled
+    with pytest.raises(RuntimeError):
+        jm.submit(store.create(_req()).id)
+
+
+@pytest.mark.parametrize("script", ["pass", "import sys,pathlib;pathlib.Path(sys.argv[1],'result.json').write_text('[]')"])
+def test_zero_exit_without_valid_worker_result_is_not_completed(tmp_path, script):
+    store = RunStore(root=tmp_path)
+    jm = JobManager(store, worker_cmd=_cmd(script))
+    rec = store.create(_req())
+    jm.submit(rec.id)
+    final = _wait_terminal(store, rec.id)
+    assert final.status is RunStatus.failed and final.error

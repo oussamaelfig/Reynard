@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- env sinks + toggles MUST be set before importing the agent stack ----
     os.environ["REYNARD_EVENT_LOG"] = str(run_dir / "events.jsonl")
-    os.environ.setdefault("REYNARD_MEMORY_DB", str(run_dir / "memory.db"))
+    os.environ["REYNARD_MEMORY_DB"] = str(run_dir / "memory.db")
     from hacking_agent.harness.envload import (
         load_operator_env, llm_key_present, missing_llm_key_error,
     )
@@ -63,7 +63,14 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault("REYNARD_EXTERNAL_ENABLED", "0")
 
     from hacking_agent.harness.models import RunRequest
-    req = RunRequest.model_validate(config)
+    try:
+        if os.environ.pop("REYNARD_AUTH_SESSIONS_STDIN", "") == "1":
+            # Credentials never enter config files, argv, or the child environment.
+            config["auth_sessions"] = json.loads(sys.stdin.buffer.read(1048577))
+        req = RunRequest.model_validate(config)
+    except (ValueError, TypeError) as exc:
+        _write_result(run_dir, error=f"invalid run configuration: {type(exc).__name__}")
+        return 1
 
     err = req.authorization_error()
     if err:
@@ -116,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
                    "timed_out": False, "wall_clock_seconds": 0, "findings": []}
             emit("error", {"target": target, "message": str(exc)[:300]})
         results.append(row)
+        if row.get("timed_out"):
+            # Container-side commands may outlive their client; stop this run.
+            emit("error", {"target": target, "message": "Target timed out; remaining targets skipped."})
+            break
 
     try:
         report_md, report_json = build_consolidated_report(engagement, targets, results)
@@ -132,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
 
     fatal = [str(r.get("verdict") or "") for r in results
              if str(r.get("verdict") or "").startswith("error:")]
+    if any(row.get("timed_out") for row in results):
+        fatal.append("error: target timed out; remaining targets skipped")
     if fatal:
         err = " | ".join(fatal)[:500]
         _write_result(run_dir, findings_count=findings_count,

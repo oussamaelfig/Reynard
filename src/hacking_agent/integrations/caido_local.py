@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -47,12 +48,23 @@ class CaidoLocalBridgeClient:
         timeout: float = DEFAULT_TIMEOUT,
     ):
         self.base_url = (base_url or _bridge_url()).rstrip("/")
+        parsed = urlsplit(self.base_url)
+        if (parsed.scheme not in {"http", "https"}
+                or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in {"", "/"}):
+            raise ValueError("Caido bridge URL must be a loopback HTTP(S) origin")
+        self._origin = (parsed.scheme, parsed.hostname,
+                        parsed.port or (443 if parsed.scheme == "https" else 80))
         self.token = token if token is not None else _bridge_token()
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False)
+
+    def close(self) -> None:
+        self._client.close()
 
     def status(self) -> dict[str, Any]:
-        result = self.request("GET", "/status", require_token=False)
+        result = self.request("GET", "/status")
         result.update({
             "bridge_url": self.base_url,
             "token_configured": bool(self.token),
@@ -72,22 +84,31 @@ class CaidoLocalBridgeClient:
         params: dict[str, Any] | None = None,
         json_body: Any | None = None,
         headers: dict[str, Any] | None = None,
-        require_token: bool = False,
+        require_token: bool = True,
     ) -> dict[str, Any]:
-        if require_token and not self.token:
+        if not self.token:
             return {
                 "error": "Caido local bridge token not configured.",
                 "configured": False,
                 "bridge_url": self.base_url,
             }
 
-        if path.startswith("http://") or path.startswith("https://"):
-            if not path.startswith(self.base_url):
+        try:
+            parsed = urlsplit(path)
+            port = parsed.port
+        except ValueError:
+            return {"error": "Invalid bridge request URL", "bridge_url": self.base_url}
+        if parsed.scheme or parsed.netloc:
+            origin = (parsed.scheme, parsed.hostname,
+                      port or (443 if parsed.scheme == "https" else 80))
+            if origin != self._origin or parsed.username or parsed.password or parsed.fragment:
                 return {
                     "error": f"Refusing to call non-bridge URL {path!r}",
                     "bridge_url": self.base_url,
                 }
             url = path
+        elif "\\" in path or parsed.fragment:
+            return {"error": "Invalid bridge request path", "bridge_url": self.base_url}
         else:
             url = f"{self.base_url}/{path.lstrip('/')}"
 
@@ -99,7 +120,7 @@ class CaidoLocalBridgeClient:
             req_headers["Authorization"] = f"Bearer {self.token}"
         if headers:
             for key, value in headers.items():
-                if value is not None and str(key).lower() != "authorization":
+                if value is not None and str(key).lower() not in {"authorization", "host", "origin"}:
                     req_headers[str(key)] = str(value)
 
         try:
@@ -185,7 +206,7 @@ class CaidoLocalBridgeClient:
         )
 
     def send_replay_session(self, session_id: str) -> dict[str, Any]:
-        return self.request("POST", f"/replay/sessions/{session_id}/send")
+        return self.request("POST", f"/replay/sessions/{quote(session_id, safe='')}/send", json_body={})
 
     def search_history(
         self,
@@ -207,7 +228,7 @@ class CaidoLocalBridgeClient:
     def get_history_item(self, request_id: str, include_response: bool = True) -> dict[str, Any]:
         return self.request(
             "GET",
-            f"/history/{request_id}",
+            f"/history/{quote(request_id, safe='')}",
             params={"include_response": str(include_response).lower()},
         )
 

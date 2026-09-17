@@ -27,7 +27,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
+
+from hacking_agent.core.target_address import normalize_host, parse_target, parse_url_prefix, scope_path
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cycle
     from hacking_agent.core.engagement import Engagement
@@ -44,6 +45,33 @@ class RateLimitExceeded(ScopeViolation):
     (e.g. BudgetedToolExecutor) treat an exhausted request budget as a blocked
     tool call rather than an uncaught crash.
     """
+
+
+# These tools can issue additional requests or execute arbitrary programs whose
+# destinations cannot be verified at the tool-call boundary. Keep the lab API,
+# but fail closed under a production engagement until a constrained transport
+# exists. Local observation/session tools and single-request HTTP remain usable.
+ENGAGEMENT_UNBOUNDED_TOOLS = frozenset({
+    "run_shell", "browser_navigate", "browser_execute_js", "browser_interact",
+    "browser_map", "browser_use_explore", "hexstrike_run_capability",
+    "nuclei_scan", "extract_js_endpoints", "discover_apis", "ffuf_fuzz",
+    "sqlmap_run", "nmap_scan", "naabu_scan", "katana_crawl", "httpx_probe",
+    "dnsx_resolve", "dns_recon", "tls_info", "subfinder_scan", "race_send", "authz_matrix_scan",
+    "ssti_probe", "request_smuggling_probe", "metasploit_run", "gdb_debug",
+    "radare2_analyze", "frida_hook", "burp_send_http1_request",
+    "burp_send_to_intruder", "burp_create_repeater_tab", "web_fetch",
+})
+
+_REQUIRED_TARGET_TOOLS = frozenset({
+    "http_request", "web_fetch", "browser_navigate", "browser_execute_js",
+    "browser_interact", "browser_map", "capture_baseline", "diff_against_baseline",
+    "nuclei_scan", "extract_js_endpoints", "ffuf_fuzz", "sqlmap_run",
+    "request_smuggling_probe", "race_send", "ssti_probe", "dns_recon", "tls_info",
+    "subfinder_scan", "waybackurls_fetch", "crtsh_lookup", "urlscan_lookup",
+    "naabu_scan", "katana_crawl", "httpx_probe", "dnsx_resolve", "authz_matrix_scan",
+    "browser_use_explore", "hexstrike_run_capability", "nmap_scan", "discover_apis",
+    "burp_send_http1_request", "burp_create_repeater_tab", "burp_send_to_intruder",
+})
 
 
 @dataclass
@@ -77,7 +105,7 @@ class ScopeGuard:
     block_destructive: bool = False
     engagement_name: str = ""
 
-    # Always-allowed domains (DNS, portswigger infra, etc.)
+    # Legacy lab infrastructure only; never authorizes an attached engagement.
     ALLOWLIST: set[str] = field(default_factory=lambda: {
         "localhost",
         "127.0.0.1",
@@ -131,6 +159,12 @@ class ScopeGuard:
         self._rate_lock = threading.Lock()
         self._now = time.monotonic
         self._sleep = time.sleep
+        self._engagement: Engagement | None = None
+
+    @property
+    def engagement_attached(self) -> bool:
+        """True even for unnamed engagements; metadata is not authorization."""
+        return self._engagement is not None
 
     @classmethod
     def from_target_url(cls, target_url: str,
@@ -138,9 +172,8 @@ class ScopeGuard:
                         extra_cidrs: list[str] | None = None) -> "ScopeGuard":
         """Build a ScopeGuard from a target URL, automatically extracting
         the domain and optionally adding extra allowed domains/CIDRs."""
-        parsed = urlparse(target_url if "://" in target_url else f"http://{target_url}")
-        domain = parsed.hostname or ""
-        domains = [domain] if domain else []
+        domain = parse_target(target_url).host
+        domains = [domain]
         if extra_domains:
             domains.extend(extra_domains)
         return cls(
@@ -161,7 +194,7 @@ class ScopeGuard:
     def attach_engagement(self, engagement: "Engagement") -> None:
         """Install an engagement's rules of engagement into this guard.
 
-        Merges the engagement's authorized scope into the allowlist and turns
+        Replaces inferred scope with the engagement's authorized scope and turns
         on the out-of-scope denylist, rate limit, request cap, and destructive-
         action block. Called on the orchestrator's scope guard in assessment
         mode; never invoked on the default lab path, so lab behaviour is
@@ -173,12 +206,9 @@ class ScopeGuard:
         # The engagement IS the authorization boundary. Replace any allowlist
         # inferred from the target URL so a path-scoped asset
         # (https://example.com/docs) cannot silently widen to the whole host.
-        self.allowed_domains = [
-            d for d in (getattr(engagement, "authorized_domains", []) or []) if d
-        ]
-        self.allowed_cidrs = [
-            c for c in (getattr(engagement, "authorized_cidrs", []) or []) if c
-        ]
+        engagement.validate()
+        self.allowed_domains = [normalize_host(d) for d in engagement.authorized_domains]
+        self.allowed_cidrs = [str(ipaddress.ip_network(c, strict=False)) for c in engagement.authorized_cidrs]
         self.out_of_scope = list(getattr(engagement, "out_of_scope", []) or [])
         self.authorized_url_prefixes = list(
             getattr(engagement, "authorized_url_prefixes", []) or []
@@ -193,12 +223,22 @@ class ScopeGuard:
             getattr(engagement, "allow_destructive", False)
         )
         self.engagement_name = str(getattr(engagement, "engagement_name", "") or "")
+        # Snapshot policy so later edits to the source Engagement cannot extend
+        # a live guard's window or relax its destructive-action rule.
+        from copy import deepcopy
+        self._engagement = deepcopy(engagement)
 
     # ---- public API ------------------------------------------------------
 
     def validate(self, tool_name: str, args: dict) -> None:
         """Validate a tool call against the scope. Raises ScopeViolation."""
+        if not isinstance(args, dict):
+            raise ScopeViolation("SCOPE VIOLATION: tool arguments must be an object")
+        if self.engagement_attached:
+            self._validate_engagement_tool(tool_name, args)
         targets = self._extract_targets(tool_name, args)
+        if tool_name in _REQUIRED_TARGET_TOOLS and not targets:
+            raise ScopeViolation(f"SCOPE VIOLATION: {tool_name} requires an explicit target")
         if tool_name == "run_shell":
             self._validate_shell_safety(args.get("command", ""))
         # Destructive-action block only fires when an engagement with
@@ -210,6 +250,7 @@ class ScopeGuard:
         if not targets:
             return  # tools with no target (list_dir, analyze_response) pass
 
+        self.validate_window()
         for target in targets:
             if self._is_out_of_scope(target):
                 raise ScopeViolation(
@@ -228,6 +269,26 @@ class ScopeGuard:
         # scope probes go through is_in_scope() and never consume budget.
         self._enforce_request_budget(tool_name)
 
+    def validate_window(self) -> None:
+        """Check the current RoE window without consuming request budget."""
+        if self._engagement is not None and not self._engagement.is_within_window():
+            raise ScopeViolation("TESTING WINDOW CLOSED: target requests are not authorized now")
+
+    def _validate_engagement_tool(self, tool_name: str, args: dict) -> None:
+        opaque = tool_name in ENGAGEMENT_UNBOUNDED_TOOLS
+        if tool_name == "caido_local_api":
+            opaque = args.get("operation") in {
+                "send_raw", "create_replay_session", "send_replay_session", "raw_bridge_request",
+            }
+        if args.get("extra_args"):
+            opaque = True  # raw CLI flags can change destinations or run a shell
+        if opaque:
+            raise ScopeViolation(
+                f"SCOPE VIOLATION: {tool_name} cannot enforce every destination and "
+                "request budget under an attached engagement; use scoped http_request "
+                "or local observation tools"
+            )
+
     def is_in_scope(self, url_or_host: str) -> bool:
         """Non-throwing scope check (useful for filtering, not gating).
 
@@ -235,7 +296,7 @@ class ScopeGuard:
         or request-cap budget (it is a read-only predicate, not a gate).
         """
         if not url_or_host:
-            return True
+            return False
         if self._is_out_of_scope(url_or_host):
             return False
         return self._is_in_scope(url_or_host)
@@ -259,7 +320,7 @@ class ScopeGuard:
             return "out_of_scope"
         # No allowlist configured => open lab behaviour; we cannot *prove*
         # in-scope, so report unknown rather than a false positive.
-        if (not self.allowed_domains and not self.allowed_cidrs
+        if (not self.engagement_attached and not self.allowed_domains and not self.allowed_cidrs
                 and not self.authorized_url_prefixes and not self.ALLOWLIST):
             return "unknown"
         return "in_scope" if self._is_in_scope(url_or_host) else "out_of_scope"
@@ -273,7 +334,7 @@ class ScopeGuard:
 
     def _extract_targets(self, tool_name: str, args: dict) -> list[str]:
         """Pull network targets from a tool call's args."""
-        if tool_name in ("http_request", "browser_navigate",
+        if tool_name in ("http_request", "web_fetch", "browser_navigate",
                          "browser_execute_js", "browser_interact",
                          "browser_map"):
             return self._dedupe([args.get("url", "")])
@@ -458,7 +519,7 @@ class ScopeGuard:
         for target in targets:
             if not target:
                 continue
-            cleaned = str(target).strip().strip("'\"")
+            cleaned = str(target)
             if cleaned and cleaned not in seen:
                 seen.add(cleaned)
                 out.append(cleaned)
@@ -467,21 +528,33 @@ class ScopeGuard:
     def _is_in_scope(self, target: str) -> bool:
         """Check if a target URL/host is within the allowed scope."""
         if not target:
-            return True
+            return False
+        try:
+            address = parse_target(target)
+        except (TypeError, ValueError):
+            return False
+        host = address.host
 
-        parsed = urlparse(target if "://" in target else f"http://{target}")
-        host = parsed.hostname or target
-
-        # Allowlist check (always-permitted domains)
-        for allowed in self.ALLOWLIST:
-            if host == allowed or host.endswith(f".{allowed}"):
-                return True
+        # A real engagement never inherits lab or loopback authorization.
+        if not self.engagement_attached:
+            for allowed in self.ALLOWLIST:
+                if host == allowed or host.endswith(f".{allowed}"):
+                    return True
 
         # Explicit domain check
         for domain in self.allowed_domains:
+            try:
+                domain = normalize_host(domain)
+            except ValueError:
+                continue
             if host == domain:
                 return True
-            if self.include_subdomains and host.endswith(f".{domain}"):
+            try:
+                ipaddress.ip_address(domain)
+                domain_is_ip = True
+            except ValueError:
+                domain_is_ip = False
+            if not domain_is_ip and self.include_subdomains and host.endswith(f".{domain}"):
                 return True
 
         # CIDR check (for IP targets)
@@ -503,21 +576,20 @@ class ScopeGuard:
     def _matches_url_prefix(self, target: str) -> bool:
         if not self.authorized_url_prefixes or "://" not in (target or ""):
             return False
-        parsed = urlparse(target)
-        host = (parsed.hostname or "").lower()
-        path = parsed.path or "/"
-        rebuilt = f"{(parsed.scheme or 'https').lower()}://{host}{path}"
+        try:
+            parsed = parse_target(target)
+            origin = (parsed.scheme, parsed.host, parsed.port)
+            path = scope_path(parsed.path)
+        except (TypeError, ValueError, UnicodeError):
+            return False
         for raw in self.authorized_url_prefixes:
-            pref = (raw or "").strip()
-            if not pref:
+            try:
+                scheme, host, port, prefix = parse_url_prefix(raw)
+            except (TypeError, ValueError, UnicodeError):
                 continue
-            pp = urlparse(pref if "://" in pref else f"https://{pref}")
-            phost = (pp.hostname or "").lower()
-            ppath = pp.path or "/"
-            prefix = f"{(pp.scheme or 'https').lower()}://{phost}{ppath}"
-            if rebuilt == prefix:
-                return True
-            if rebuilt.startswith(prefix.rstrip("/") + "/"):
+            if origin == (scheme, host, port) and (
+                path == prefix or path.startswith(prefix.rstrip("/") + "/")
+            ):
                 return True
         return False
 
@@ -540,12 +612,22 @@ class ScopeGuard:
         """
         if not target or not self.out_of_scope:
             return False
-        parsed = urlparse(target if "://" in target else f"http://{target}")
-        host = (parsed.hostname or target).lower()
+        try:
+            host = parse_target(target).host
+        except (TypeError, ValueError):
+            return True
         for denied in self.out_of_scope:
-            d = denied.strip().lower()
-            if not d:
+            if "/" in denied:
+                try:
+                    if ipaddress.ip_address(host) in ipaddress.ip_network(denied, strict=False):
+                        return True
+                except ValueError:
+                    pass
                 continue
+            try:
+                d = normalize_host(denied)
+            except ValueError:
+                return True  # malformed policy never silently disables a deny
             if host == d or host.endswith(f".{d}"):
                 return True
         return False
@@ -582,7 +664,8 @@ class ScopeGuard:
             is_delete_family = token.strip().lower().startswith(
                 ("delete", "update")
             )
-            if is_delete_family and self.LAB_SAFE_DELETE_MARKER.search(blob):
+            if (not self.engagement_attached and is_delete_family
+                    and self.LAB_SAFE_DELETE_MARKER.search(blob)):
                 continue
             raise ScopeViolation(
                 f"DESTRUCTIVE ACTION BLOCKED (allow_destructive=false): "
@@ -610,7 +693,6 @@ class ScopeGuard:
                         f"{self.max_total_requests} scoped requests reached "
                         f"(tool={tool_name})."
                     )
-                self._request_count += 1
             if self.max_requests_per_second > 0:
                 min_interval = 1.0 / self.max_requests_per_second
                 now = self._now()
@@ -620,7 +702,11 @@ class ScopeGuard:
                     if wait > 0:
                         self._sleep(wait)
                         now = self._now()
+                self.validate_window()  # rate-limit sleep may cross the RoE deadline
                 self._last_request_time = now
+            else:
+                self.validate_window()
+            self._request_count += 1
 
     def requests_made(self) -> int:
         """Number of scoped requests counted against the engagement cap."""

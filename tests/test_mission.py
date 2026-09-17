@@ -10,6 +10,21 @@ from hacking_agent.core.mission import Mission, detect_mode
 
 
 class DetectModeTests(unittest.TestCase):
+    def test_lookalike_lab_hosts_are_production(self):
+        for target in (
+            "https://web-security-academy.net.attacker.test",
+            "https://notportswigger.net", "https://exploit-server.net.attacker.test",
+            "https://[malformed", "https://user@portswigger.net",
+        ):
+            with self.subTest(target=target):
+                self.assertFalse(mission_mod.is_lab_host(target))
+
+    def test_engagement_overrides_explicit_and_environment_benchmark(self):
+        with patch.dict(os.environ, {"REYNARD_MISSION_MODE": "benchmark"}):
+            mission = Mission.detect("https://portswigger.net", explicit="benchmark", engagement_attached=True)
+        self.assertEqual(mission.mode, mission_mod.MODE_PRODUCTION)
+        self.assertEqual(mission.source, "engagement")
+
     def test_lab_host_is_benchmark(self):
         self.assertEqual(
             detect_mode("https://0abc.web-security-academy.net/"),

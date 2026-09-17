@@ -29,10 +29,14 @@ Usage
 from __future__ import annotations
 
 import json
+import ipaddress
+import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from hacking_agent.core.target_address import normalize_host, parse_url_prefix
 
 
 class EngagementError(ValueError):
@@ -87,6 +91,46 @@ class Engagement:
 
     # ---- derived checks --------------------------------------------------
 
+    def validate(self) -> None:
+        """Reject malformed RoE instead of silently widening authorization."""
+        for name in ("authorized_domains", "authorized_cidrs", "authorized_url_prefixes", "out_of_scope"):
+            entries = getattr(self, name)
+            if not isinstance(entries, list) or any(not isinstance(entry, str) for entry in entries):
+                raise EngagementError(f"{name} must be a list of strings.")
+        for domain in self.authorized_domains:
+            try:
+                normalize_host(domain)
+            except (TypeError, ValueError) as exc:
+                raise EngagementError(f"Invalid authorized domain: {domain!r}") from exc
+        for cidr in self.authorized_cidrs:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except (TypeError, ValueError) as exc:
+                raise EngagementError(f"Invalid authorized CIDR: {cidr!r}") from exc
+        for prefix in self.authorized_url_prefixes:
+            try:
+                parse_url_prefix(prefix)
+            except (TypeError, ValueError, UnicodeError) as exc:
+                raise EngagementError(f"Invalid authorized URL prefix: {prefix!r}") from exc
+        for denied in self.out_of_scope:
+            try:
+                if "/" in denied:
+                    ipaddress.ip_network(denied, strict=False)
+                else:
+                    normalize_host(denied)
+            except (TypeError, ValueError) as exc:
+                raise EngagementError(f"Invalid out-of-scope entry: {denied!r}") from exc
+        if not math.isfinite(self.max_requests_per_second) or self.max_requests_per_second < 0:
+            raise EngagementError("max_requests_per_second must be finite and nonnegative.")
+        if self.max_total_requests < 0 or self.evidence_retention_days < 0:
+            raise EngagementError("Request and retention limits cannot be negative.")
+        if not isinstance(self.allow_destructive, bool):
+            raise EngagementError("allow_destructive must be a boolean.")
+        start = _parse_dt(self.testing_window_start)
+        end = _parse_dt(self.testing_window_end)
+        if start and end and start > end:
+            raise EngagementError("testing_window_start must not be after testing_window_end.")
+
     def has_authorized_scope(self) -> bool:
         """True only if at least one authorized domain or CIDR is defined.
 
@@ -105,7 +149,8 @@ class Engagement:
         An unset start or end is treated as open-ended, so an engagement with
         no window declared is always "within window".
         """
-        now = now or datetime.now()
+        # A missing timezone means UTC, consistently across hosts and CI.
+        now = _utc(now or datetime.now(timezone.utc))
         start = _parse_dt(self.testing_window_start)
         end = _parse_dt(self.testing_window_end)
         if start and now < start:
@@ -149,14 +194,18 @@ def _parse_dt(value: str) -> datetime | None:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        return _utc(datetime.fromisoformat(text))
     except ValueError:
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
             try:
-                return datetime.strptime(text, fmt)
+                return _utc(datetime.strptime(text, fmt))
             except ValueError:
                 continue
-    return None
+    raise EngagementError(f"Invalid testing-window datetime: {value!r}")
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -226,7 +275,7 @@ def engagement_from_dict(raw: dict[str, Any]) -> Engagement:
     if not isinstance(window, dict):
         window = {}
 
-    return Engagement(
+    engagement = Engagement(
         engagement_name=str(raw.get("engagement_name") or raw.get("name") or ""),
         client=str(raw.get("client") or ""),
         tester=str(raw.get("tester") or ""),
@@ -251,9 +300,9 @@ def engagement_from_dict(raw: dict[str, Any]) -> Engagement:
             else raw.get("deny") or raw.get("excluded")
         ),
         max_requests_per_second=float(
-            raw.get("max_requests_per_second")
+            (raw.get("max_requests_per_second")
             if raw.get("max_requests_per_second") is not None
-            else raw.get("rate_limit_rps") or 0.0
+            else raw.get("rate_limit_rps")) or 0.0
         ),
         max_total_requests=int(raw.get("max_total_requests") or 0),
         allow_destructive=_as_bool(raw.get("allow_destructive"), default=False),
@@ -267,14 +316,12 @@ def engagement_from_dict(raw: dict[str, Any]) -> Engagement:
         evidence_retention_days=int(raw.get("evidence_retention_days") or 0),
         notes=str(raw.get("notes") or ""),
     )
+    engagement.validate()
+    return engagement
 
 
 def load_engagement(path: str | Path) -> Engagement:
     """Load and validate an engagement config from a YAML or JSON file."""
     raw = _load_raw(path)
     engagement = engagement_from_dict(raw)
-    if engagement.max_requests_per_second < 0:
-        raise EngagementError("max_requests_per_second cannot be negative.")
-    if engagement.max_total_requests < 0:
-        raise EngagementError("max_total_requests cannot be negative.")
     return engagement

@@ -22,6 +22,15 @@ dependencies = [
 # (core/knowledge.py) auto-falls back to a pure-Python BM25 retriever, and the
 # Ollama embedding backend needs no PyPI dependency (just OLLAMA_BASE_URL).
 [project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.12,<1",
+  "mypy>=1.15,<2",
+  "bandit>=1.8,<2",
+  "types-PyYAML>=6",
+]
+
 rag = [
   "sentence-transformers>=2.2.0",  # local all-MiniLM-L6-v2 embeddings
   "numpy>=1.24.0",
@@ -55,3 +64,25 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "hacking_agent.harness.ui" = ["*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [".venv", "venv", "logs", "build", "dist"]
+
+[tool.ruff.lint]
+# Catch syntax/undefined-name defects across the legacy tree without a
+# formatting-only rewrite. Expand this baseline as modules are modernized.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+follow_imports = "silent"
+check_untyped_defs = true
+warn_unused_ignores = true

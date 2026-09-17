@@ -57,7 +57,7 @@ def _client(tmp_path, worker=_WORKER):
     cmd = (lambda rd: [sys.executable, "-c", worker, rd])
     jobs = JobManager(store, worker_cmd=cmd)
     app = create_app(store=store, jobs=jobs, token=TOKEN)
-    return store, TestClient(app)
+    return store, TestClient(app, base_url="http://127.0.0.1")
 
 
 def _wait_status(client, run_id, timeout=20.0):
@@ -144,7 +144,7 @@ def test_sse_stream_from_seeded_events(tmp_path):
         json.dumps({"id": 2, "type": "finding", "payload": {"summary": "x"}, "ts": 2}) + "\n",
         encoding="utf-8")
     store.update(rec.id, status=RunStatus.completed)
-    with c.stream("GET", f"/api/runs/{rec.id}/events?token={TOKEN}") as s:
+    with c.stream("GET", f"/api/runs/{rec.id}/events", headers=AUTH) as s:
         body = "".join(s.iter_text())
     assert body.count("data:") == 3           # 2 events + _done
     assert "run_start" in body and "finding" in body
@@ -263,10 +263,76 @@ def test_report_md_download(tmp_path):
     assert "Security Assessment Report" in r.text
 
 
-def test_index_injects_token(tmp_path):
+def test_index_never_exposes_token(tmp_path):
     _, c = _client(tmp_path)
     html = c.get("/").text
-    assert 'const TOKEN = "secret-token"' in html
+    assert TOKEN not in html
     assert "__HARNESS_TOKEN__" not in html
     assert "Launch run" in html
     assert "confirmed ·" in html and "suppressed" in html
+
+
+def test_cookie_login_and_sse_without_url_secrets(tmp_path):
+    store, c = _client(tmp_path)
+    assert c.post("/api/session").status_code == 401
+    response = c.post("/api/session", headers=AUTH)
+    assert response.status_code == 200
+    cookie = response.headers["set-cookie"]
+    assert "HttpOnly" in cookie and "SameSite=strict" in cookie
+    assert TOKEN not in cookie
+    assert c.get("/api/runs").status_code == 200
+    rec = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
+    store.update(rec.id, status=RunStatus.completed)
+    assert c.get(f"/api/runs/{rec.id}/events").status_code == 200
+
+
+def test_origin_host_and_query_token_are_rejected(tmp_path):
+    store, c = _client(tmp_path)
+    assert c.get("/api/runs", headers={**AUTH, "Origin": "https://evil.invalid"}).status_code == 403
+    assert c.get("/api/runs", headers={**AUTH, "Origin": "null"}).status_code == 403
+    assert c.get("/api/runs", headers={**AUTH, "Host": "evil.invalid"}).status_code == 400
+    assert c.get("/api/runs", headers={**AUTH, "Origin": "http://127.0.0.1"}).status_code == 200
+    rec = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
+    assert c.get(f"/api/runs/{rec.id}/events?token={TOKEN}").status_code == 401
+
+
+def test_empty_token_app_is_not_anonymous(tmp_path):
+    store = RunStore(root=tmp_path)
+    c = TestClient(create_app(store=store, token=""), base_url="http://127.0.0.1")
+    assert c.get("/api/runs").status_code == 401
+    assert c.get("/api/health").json()["auth_required"] is True
+
+
+def test_browser_headers_and_input_bounds(tmp_path):
+    _, c = _client(tmp_path)
+    response = c.get("/")
+    assert "script-src 'nonce-" in response.headers["content-security-policy"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert c.post("/api/runs", headers=AUTH, content=b"x" * 1048577).status_code == 413
+    assert c.post("/api/runs", headers=AUTH, json={"max_iterations": -1}).status_code == 422
+
+
+def test_run_is_pre_rejected_outside_scope(tmp_path):
+    store, c = _client(tmp_path)
+    response = c.post("/api/runs", headers=AUTH, json={
+        "authorized": True, "authorized_domains": ["allowed.invalid"],
+        "targets": ["https://outside.invalid"],
+    })
+    assert response.status_code == 400
+    assert store.list() == []
+
+
+def test_sse_cursors_survive_worker_counter_reset_and_resume(tmp_path):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x.com"], authorized=True))
+    store.events_path(rec.id).write_text(
+        json.dumps({"id": 1, "type": "first"}) + "\n" +
+        json.dumps({"id": 1, "type": "second"}) + "\n", encoding="utf-8")
+    store.update(rec.id, status=RunStatus.completed)
+    response = c.get(f"/api/runs/{rec.id}/events", headers=AUTH)
+    assert '"first"' in response.text and '"second"' in response.text
+    ids = [line[4:] for line in response.text.splitlines() if line.startswith("id: ")]
+    assert len(set(ids)) == 2
+    resumed = c.get(f"/api/runs/{rec.id}/events", headers={**AUTH, "Last-Event-ID": ids[0]})
+    assert '"first"' not in resumed.text and '"second"' in resumed.text

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "node --test packages/backend/tests/*.test.mjs",
     "typecheck": "pnpm -r typecheck",
     "build": "caido-dev build",
     "watch": "caido-dev watch"

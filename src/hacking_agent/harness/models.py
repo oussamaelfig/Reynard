@@ -1,11 +1,13 @@
 """Typed models for the run harness (submission requests + run records)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+ScopeEntry = Annotated[str, Field(min_length=1, max_length=4096)]
 
 
 class RunStatus(str, Enum):
@@ -22,10 +24,19 @@ class RunStatus(str, Enum):
 
 class AuthSessionSpec(BaseModel):
     """A controlled identity for authenticated / authorization testing."""
-    name: str
-    role_hint: str = "user"           # anonymous | user | admin | ...
-    cookie_header: str = ""           # "session=abc; other=def"
-    headers: dict[str, str] = Field(default_factory=dict)  # e.g. Authorization: Bearer ...
+    name: str = Field(min_length=1, max_length=128)
+    role_hint: str = Field(default="user", max_length=128)
+    cookie_header: str = Field(default="", max_length=32768)
+    headers: dict[str, str] = Field(default_factory=dict, max_length=64)
+
+    @field_validator("cookie_header", "headers")
+    @classmethod
+    def reject_header_injection(cls, value: Any) -> Any:
+        values = [value] if isinstance(value, str) else [*value.keys(), *value.values()]
+        if any("\r" in item or "\n" in item or "\x00" in item or len(item) > 32768
+               for item in values):
+            raise ValueError("session headers must be bounded single-line values")
+        return value
 
 
 class RunRequest(BaseModel):
@@ -35,22 +46,31 @@ class RunRequest(BaseModel):
     harness refuses to launch anything without an authorized scope (mirroring
     reynard-assess). The LLM API key is NEVER part of this model — it is read
     from the server environment and passed to the worker via env only."""
-    targets: list[str] = Field(default_factory=list)
-    authorized_domains: list[str] = Field(default_factory=list)
-    authorized_cidrs: list[str] = Field(default_factory=list)
-    authorized_url_prefixes: list[str] = Field(default_factory=list)
-    out_of_scope: list[str] = Field(default_factory=list)
-    description: str = ""              # free-text objective / prompt from the operator
-    mission_mode: str = "production"
-    max_iterations: int = 30
-    per_target_timeout: float = 1800.0
-    max_requests_per_second: float = 0.0
-    max_total_requests: int = 0
+    targets: list[ScopeEntry] = Field(default_factory=list, max_length=100)
+    authorized_domains: list[ScopeEntry] = Field(default_factory=list, max_length=1000)
+    authorized_cidrs: list[ScopeEntry] = Field(default_factory=list, max_length=1000)
+    authorized_url_prefixes: list[ScopeEntry] = Field(default_factory=list, max_length=1000)
+    out_of_scope: list[ScopeEntry] = Field(default_factory=list, max_length=1000)
+    description: str = Field(default="", max_length=20000)
+    mission_mode: Literal["production", "benchmark"] = "production"
+    max_iterations: int = Field(default=30, ge=1, le=1000)
+    per_target_timeout: float = Field(default=1800.0, gt=0, le=86400, allow_inf_nan=False)
+    max_requests_per_second: float = Field(default=0.0, ge=0, le=1000, allow_inf_nan=False)
+    max_total_requests: int = Field(default=0, ge=0, le=1000000)
     allow_destructive: bool = False
-    auth_sessions: list[AuthSessionSpec] = Field(default_factory=list)
+    auth_sessions: list[AuthSessionSpec] = Field(default_factory=list, max_length=20)
     enable_browser_use: bool = False
     enable_hexstrike: bool = False
     authorized: bool = False          # explicit "I am authorized to test this scope"
+
+    @field_validator("auth_sessions")
+    @classmethod
+    def bound_session_payload(cls, value: list[AuthSessionSpec]) -> list[AuthSessionSpec]:
+        if sum(len(session.model_dump_json().encode()) for session in value) > 262144:
+            raise ValueError("combined auth session configuration exceeds 256 KiB")
+        if len({session.name for session in value}) != len(value):
+            raise ValueError("auth session names must be unique")
+        return value
 
     def has_scope(self) -> bool:
         return bool(
@@ -69,6 +89,14 @@ class RunRequest(BaseModel):
                     "or CIDR.")
         if not (self.targets or self.authorized_domains):
             return "Provide at least one target URL or authorized domain."
+        from hacking_agent.core.engagement import engagement_from_dict
+        from hacking_agent.core.scope import ScopeGuard
+        try:
+            guard = ScopeGuard.from_engagement(engagement_from_dict(self.to_engagement_dict()))
+            if any(not guard.is_in_scope(target) for target in self.resolved_targets()):
+                return "Every target must be inside the authorized scope and outside exclusions."
+        except ValueError as exc:
+            return f"Invalid authorized scope: {exc}"
         return None
 
     def to_engagement_dict(self) -> dict[str, Any]:
@@ -96,8 +124,8 @@ class RunRecord(BaseModel):
     """Persisted metadata for a run (status index)."""
     id: str
     status: RunStatus = RunStatus.queued
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     targets: list[str] = Field(default_factory=list)
     description: str = ""
     findings_count: int = 0

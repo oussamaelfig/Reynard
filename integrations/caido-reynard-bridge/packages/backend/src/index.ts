@@ -1,19 +1,13 @@
 import type { DefineAPI, SDK } from "caido:plugin";
 import { RequestSpecRaw } from "caido:utils";
 import * as net from "net";
+import { authorizeRequest, httpResponse, parseRequest, rememberSession, RequestError, type ParsedRequest } from "./security";
 
 const CONTRACT = "reynard-caido-local-bridge/v1";
 const HOST = "127.0.0.1";
 const PORT = 17650;
 
 type JsonRecord = Record<string, unknown>;
-
-type ParsedRequest = {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body: string;
-};
 
 let bridgeServer: net.Server | undefined;
 const replaySessions = new Map<string, unknown>();
@@ -198,7 +192,7 @@ async function handleCreateReplaySession(sdk: SDK, request: ParsedRequest): Prom
   const body = jsonBody(request.body);
   const spec = rawSpec(body);
   const session = await sdk.replay.createSession(spec);
-  replaySessions.set(String(session.getId()), spec);
+  rememberSession(replaySessions, String(session.getId()), spec);
   return ok({
     session_id: session.getId(),
     session_name: session.getName(),
@@ -319,61 +313,6 @@ async function route(sdk: SDK, request: ParsedRequest): Promise<JsonRecord> {
   return fail(`Unknown endpoint ${request.method} ${request.path}`, 404);
 }
 
-function parseRequest(raw: string): ParsedRequest | undefined {
-  const splitAt = raw.indexOf("\r\n\r\n");
-  if (splitAt < 0) {
-    return undefined;
-  }
-
-  const head = raw.slice(0, splitAt);
-  const lines = head.split("\r\n");
-  const requestLine = lines.shift();
-  if (!requestLine) {
-    throw new Error("Missing HTTP request line");
-  }
-  const [method, path] = requestLine.split(" ");
-  if (!method || !path) {
-    throw new Error(`Invalid HTTP request line: ${requestLine}`);
-  }
-
-  const headers: Record<string, string> = {};
-  for (const line of lines) {
-    const colon = line.indexOf(":");
-    if (colon > 0) {
-      headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim();
-    }
-  }
-
-  const contentLength = Number.parseInt(headers["content-length"] ?? "0", 10);
-  const bodyStart = splitAt + 4;
-  if (raw.length < bodyStart + contentLength) {
-    return undefined;
-  }
-
-  return {
-    method: method.toUpperCase(),
-    path,
-    headers,
-    body: raw.slice(bodyStart, bodyStart + contentLength),
-  };
-}
-
-function httpResponse(status: number, body: JsonRecord): string {
-  const payload = JSON.stringify(body, null, 2);
-  const reason = status >= 200 && status < 300 ? "OK" : "ERROR";
-  return [
-    `HTTP/1.1 ${status} ${reason}`,
-    "Content-Type: application/json; charset=utf-8",
-    "Access-Control-Allow-Origin: *",
-    "Access-Control-Allow-Headers: authorization, content-type",
-    "Access-Control-Allow-Methods: GET, POST, OPTIONS",
-    `Content-Length: ${payload.length}`,
-    "Connection: close",
-    "",
-    payload,
-  ].join("\r\n");
-}
-
 function startBridge(sdk: SDK): void {
   if (bridgeServer) {
     return;
@@ -381,7 +320,12 @@ function startBridge(sdk: SDK): void {
 
   bridgeServer = net.createServer((socket) => {
     let buffer = "";
+    let handled = false;
+    const timer = setTimeout(() => { handled = true; socket.end(); }, 10000);
+    socket.on("close", () => clearTimeout(timer));
+    socket.on("error", () => { handled = true; clearTimeout(timer); });
     socket.on("data", (chunk: Uint8Array) => {
+      if (handled) return;
       buffer += bytesToText(chunk) ?? "";
       void (async () => {
         try {
@@ -389,14 +333,22 @@ function startBridge(sdk: SDK): void {
           if (!request) {
             return;
           }
+          // Claim once before awaiting SDK calls, so another data event cannot
+          // replay the same request while the first operation is in flight.
+          handled = true;
+          clearTimeout(timer);
+          authorizeRequest(request, sdk.env.getVar("CAIDO_LOCAL_BRIDGE_TOKEN"));
           const result = await route(sdk, request);
           const status = typeof result.status === "number" ? result.status : 200;
           socket.write(httpResponse(status, result));
           socket.end();
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          sdk.console.error(`Reynard bridge error: ${message}`);
-          socket.write(httpResponse(500, fail(message)));
+          handled = true;
+          clearTimeout(timer);
+          const status = error instanceof RequestError ? error.status : error instanceof SyntaxError ? 400 : 500;
+          const message = error instanceof RequestError ? error.message : status === 400 ? "Invalid JSON body" : "Bridge operation failed";
+          sdk.console.error(`Reynard bridge request failed (${status})`);
+          socket.write(httpResponse(status, fail(message, status)));
           socket.end();
         }
       })();

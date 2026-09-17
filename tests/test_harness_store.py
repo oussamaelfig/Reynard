@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from hacking_agent.harness.models import RunRequest, RunStatus
-from hacking_agent.harness.store import RunStore
+from hacking_agent.harness.store import RunPathError, RunStore
 
 
 def _req(**kw):
@@ -68,3 +69,43 @@ def test_get_missing_returns_none(tmp_path):
     store = RunStore(root=tmp_path)
     assert store.get("does-not-exist") is None
     assert store.load_request("does-not-exist") is None
+    assert not (tmp_path / "does-not-exist").exists()
+
+
+def test_auth_credentials_are_ephemeral_and_consumed_once(tmp_path):
+    store = RunStore(root=tmp_path)
+    rec = store.create(_req(auth_sessions=[{
+        "name": "user", "cookie_header": "session=secret-cookie-marker",
+        "headers": {"Authorization": "Bearer secret-auth-marker"},
+    }]))
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert b"secret-cookie-marker" not in path.read_bytes()
+            assert b"secret-auth-marker" not in path.read_bytes()
+    sessions = store.take_auth_sessions(rec.id)
+    assert sessions[0]["cookie_header"] == "session=secret-cookie-marker"
+    assert store.take_auth_sessions(rec.id) == []
+    assert store.load_request(rec.id).auth_sessions == []
+
+
+@pytest.mark.parametrize("run_id", ["..", "../escape", "C:\\escape", "a/b", "a\\b", ""])
+def test_store_paths_cannot_escape_root(tmp_path, run_id):
+    store = RunStore(root=tmp_path)
+    with pytest.raises(RunPathError):
+        store.report_paths(run_id)
+
+
+def test_restart_marks_interrupted_runs_failed_without_pid_signals(tmp_path):
+    store = RunStore(root=tmp_path)
+    running = store.create(_req())
+    queued = store.create(_req())
+    done = store.create(_req())
+    store.update(running.id, status=RunStatus.running, pid=42)
+    store.update(done.id, status=RunStatus.completed)
+    assert store.recover_interrupted() == 2
+    assert store.get(running.id).status is RunStatus.failed
+    assert store.get(queued.id).status is RunStatus.failed
+    assert store.get(done.id).status is RunStatus.completed
+    assert "execution state unknown" in store.get(running.id).error
+    with pytest.raises(ValueError):
+        store.update(running.id, **{"pid = 0 --": 1})

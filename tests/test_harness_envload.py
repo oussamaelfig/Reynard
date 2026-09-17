@@ -87,3 +87,23 @@ def test_run_job_target_error_is_failed(tmp_path, monkeypatch):
     assert rc == 1
     result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert result["error"].startswith("error:")
+
+
+def test_timeout_stops_remaining_targets_and_marks_run_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr("hacking_agent.harness.envload.load_operator_env", lambda: None)
+    monkeypatch.setattr("hacking_agent.harness.envload.llm_key_present", lambda: True)
+    monkeypatch.setenv("REYNARD_MEMORY_DB", "shared-should-not-be-used.db")
+    req = RunRequest(authorized_domains=["example.com"], authorized=True,
+                     targets=["https://a.example.com/", "https://b.example.com/"])
+    (tmp_path / "config.json").write_text(req.model_dump_json(), encoding="utf-8")
+    calls = []
+    def timeout(_engagement, target, **_kwargs):
+        calls.append(target)
+        return {"target": target, "timed_out": True, "findings": [], "verdict": "timeout"}
+    monkeypatch.setattr("hacking_agent.cli.assess.run_target", timeout)
+    monkeypatch.setattr("hacking_agent.cli.assess.build_consolidated_report",
+                        lambda *_a: ("# empty", {"finding_count": 0, "verified_count": 0}))
+    assert run_job_main([str(tmp_path)]) == 1
+    assert calls == ["https://a.example.com/"]
+    assert "timed out" in json.loads((tmp_path / "result.json").read_text())["error"]
+    assert os.environ["REYNARD_MEMORY_DB"] == str(tmp_path / "memory.db")

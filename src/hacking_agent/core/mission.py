@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from urllib.parse import urlparse
+
+from hacking_agent.core.target_address import parse_target
 
 MODE_BENCHMARK = "benchmark"
 MODE_PRODUCTION = "production"
@@ -48,13 +49,15 @@ _PROD_ALIASES = {"production", "prod", "pentest", "bounty", "assessment", "asses
 def _host(target_url: str) -> str:
     if not target_url:
         return ""
-    parsed = urlparse(target_url if "://" in target_url else f"http://{target_url}")
-    return (parsed.hostname or "").lower()
+    try:
+        return parse_target(target_url).host
+    except (TypeError, ValueError):
+        return ""
 
 
 def is_lab_host(target_url: str) -> bool:
     host = _host(target_url)
-    return any(marker in host for marker in LAB_HOST_MARKERS)
+    return any(host == marker or host.endswith(f".{marker}") for marker in LAB_HOST_MARKERS)
 
 
 def normalize_mode(value: str | None) -> str | None:
@@ -76,17 +79,17 @@ def detect_mode(target_url: str = "", objective: str = "", *,
     """Decide the mission mode.
 
     Precedence:
-      1. explicit override (CLI flag / REYNARD_MISSION_MODE env)
-      2. an attached engagement (reynard-assess) => production
+      1. an attached engagement (reynard-assess) => production
+      2. explicit override (CLI flag / REYNARD_MISSION_MODE env)
       3. a non-empty lab profile passed in => benchmark
       4. a known lab host => benchmark
       5. default => production (removes lab assumptions from the default path)
     """
+    if engagement_attached:
+        return MODE_PRODUCTION
     override = normalize_mode(explicit) or normalize_mode(os.getenv("REYNARD_MISSION_MODE"))
     if override:
         return override
-    if engagement_attached:
-        return MODE_PRODUCTION
     if lab_profile:
         return MODE_BENCHMARK
     if is_lab_host(target_url):
@@ -118,12 +121,12 @@ class Mission:
                explicit: str | None = None, engagement_attached: bool = False,
                lab_profile: dict | None = None) -> "Mission":
         # Determine provenance for transparency in logs.
-        if normalize_mode(explicit):
+        if engagement_attached:
+            source = "engagement"
+        elif normalize_mode(explicit):
             source = "explicit"
         elif normalize_mode(os.getenv("REYNARD_MISSION_MODE")):
             source = "env"
-        elif engagement_attached:
-            source = "engagement"
         elif lab_profile:
             source = "lab_profile"
         elif is_lab_host(target_url):
