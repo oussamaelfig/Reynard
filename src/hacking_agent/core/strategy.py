@@ -366,7 +366,7 @@ class StrategyEngine:
             name: 0 for name in PHASES
         }
 
-    def get_phase(self, phase_name: str) -> Phase:
+    def get_phase(self, phase_name: str) -> Phase | None:
         """Get a phase by name."""
         return self.phases.get(phase_name)
 
@@ -507,6 +507,7 @@ class StallDetector:
         self._best_kg = -1
         self._best_ev = -1
         self._best_phase_idx = -1
+        self._hypothesis_phases: dict[str, int] = {}
         self._last_signature: tuple | None = None
 
     @property
@@ -519,10 +520,15 @@ class StallDetector:
         phase_idx = PHASE_SEQUENCE.index(phase) if phase in PHASE_SEQUENCE else -1
         signature = (str(agent), str(phase), str(hypothesis_id))
 
+        # Switching labels alone is not progress. An existing hypothesis can,
+        # however, advance even after a different hypothesis reached EXPLOIT.
+        key = str(hypothesis_id)
+        prior_phase = self._hypothesis_phases.get(key, phase_idx)
         progressed = (
             kg_count > self._best_kg
             or evidence_count > self._best_ev
             or phase_idx > self._best_phase_idx
+            or phase_idx > prior_phase
         )
         # First observation is never a stall (nothing to compare against).
         if self._last_signature is None:
@@ -531,6 +537,7 @@ class StallDetector:
         self._best_kg = max(self._best_kg, kg_count)
         self._best_ev = max(self._best_ev, evidence_count)
         self._best_phase_idx = max(self._best_phase_idx, phase_idx)
+        self._hypothesis_phases[key] = max(prior_phase, phase_idx)
         self._last_signature = signature
 
         if progressed:

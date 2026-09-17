@@ -15,18 +15,19 @@ lexical. All heavyweight imports are guarded so the base install keeps working
 and the feature NEVER hard-fails on an offline/cheap setup.
 
 The index is cached on disk and rebuilt only when the methodology files change
-(content hash + mtime fingerprint).
+(content fingerprint).
 =============================================================================
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
-import pickle
 import re
+import tempfile
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -139,7 +140,7 @@ class _SentenceTransformerBackend(_Backend):
     is_vector = True
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        from sentence_transformers import SentenceTransformer  # type: ignore
+        from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer(model_name)
 
@@ -308,42 +309,78 @@ class KnowledgeBase:
                     stat = path.stat()
                     h.update(path.name.encode())
                     h.update(str(stat.st_size).encode())
-                    h.update(str(int(stat.st_mtime)).encode())
+                    h.update(path.read_bytes())
                 except OSError:
                     continue
         return h.hexdigest()[:16]
 
     def _cache_path(self, backend_name: str, fp: str) -> Path:
-        return self.cache_dir / f"rag_{backend_name}_{fp}.pkl"
+        # Old pickle caches are deliberately ignored, never deserialized.
+        return self.cache_dir / f"rag_{backend_name}_{fp}.json"
 
     def _load_cache(self, backend_name: str, fp: str) -> bool:
         path = self._cache_path(backend_name, fp)
         if not path.exists():
             return False
         try:
-            with open(path, "rb") as fh:
-                data = pickle.load(fh)
+            if path.is_symlink() or path.stat().st_size > 32 * 1024 * 1024:
+                return False
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict) or data.get("schema_version") != 1:
+                return False
             if data.get("fingerprint") != fp or data.get("backend") != backend_name:
                 return False
-            self._chunks = data["chunks"]
-            self._embeddings = data.get("embeddings") or []
+            rows = data.get("chunks")
+            embeddings = data.get("embeddings")
+            if not isinstance(rows, list) or not isinstance(embeddings, list):
+                return False
+            chunks = []
+            for row in rows:
+                if not isinstance(row, dict) or any(
+                    not isinstance(row.get(key), str) for key in ("source", "heading", "text")
+                ) or type(row.get("chunk_id")) is not int:
+                    return False
+                chunks.append(Chunk(**row))
+            dimensions: set[int] = set()
+            for vector in embeddings:
+                if not isinstance(vector, list) or not vector or any(
+                    type(value) not in (int, float) or not math.isfinite(value) for value in vector
+                ):
+                    return False
+                dimensions.add(len(vector))
+            if embeddings and (len(embeddings) != len(chunks) or len(dimensions) != 1):
+                return False
+            self._chunks = chunks
+            self._embeddings = embeddings
             return True
         except Exception:
             return False
 
     def _save_cache(self, backend_name: str, fp: str) -> None:
+        temporary: str | None = None
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             path = self._cache_path(backend_name, fp)
-            with open(path, "wb") as fh:
-                pickle.dump({
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.cache_dir,
+                                             prefix=".rag-", suffix=".tmp", delete=False) as fh:
+                temporary = fh.name
+                json.dump({
+                    "schema_version": 1,
                     "fingerprint": fp,
                     "backend": backend_name,
-                    "chunks": self._chunks,
+                    "chunks": [asdict(chunk) for chunk in self._chunks],
                     "embeddings": self._embeddings,
-                }, fh)
+                }, fh, allow_nan=False)
+            os.replace(temporary, path)
         except Exception:
             pass
+        finally:
+            if temporary and os.path.exists(temporary):
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
 
     # ---- build ----------------------------------------------------------
 

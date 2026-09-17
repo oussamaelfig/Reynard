@@ -39,7 +39,8 @@ engagement:
   # ---- rules of engagement ----
   # Global request rate limit (requests/second). 0 = unlimited.
   max_requests_per_second: 5
-  # Hard cap on total in-scope requests for the whole assessment. 0 = unlimited.
+  # Hard cap on in-scope requests PER TARGET. 0 = unlimited.
+  # Multi-target runs do not yet share one aggregate request counter.
   max_total_requests: 5000
   # When false, obviously destructive actions (rm -rf, DROP TABLE, shutdown,
   # DELETE FROM, ...) are blocked at the ScopeGuard.

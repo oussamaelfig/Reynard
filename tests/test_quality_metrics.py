@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -165,13 +166,38 @@ def test_duplicate_fixture_ids_and_nonboolean_labels_are_rejected():
 
 
 def test_builtin_stored_evidence_corpus_passes_and_has_positive_and_negative_cases():
-    report = metrics.score_fixtures(metrics.policy_fixtures())
+    with metrics.isolated_fixture_authority():
+        cases = metrics.policy_fixtures()
+        report = metrics.score_fixtures(cases)
     assert report["passed"], report["results"]
     assert report["expected_positive_count"] >= 1
     assert report["expected_negative_count"] >= 10
     assert report["confusion_matrix"]["false_positive"] == 0
     assert report["confusion_matrix"]["false_negative"] == 0
     assert report["metrics"]["false_positive_rate"]["denominator"] == report["expected_negative_count"]
+    by_name = {case.name: case.finding for case in cases}
+    assert by_name["missing_negative_control"].evidence_bundle["control_tests"] == []
+    assert by_name["missing_bundle_receipt"].evidence_bundle["authenticity"] == {}
+    assert by_name["incomplete_response"].evidence_bundle["test_exchanges"][0]["response"] == ""
+
+
+def test_fixture_authority_isolates_and_restores_operator_configuration(monkeypatch, tmp_path):
+    authority_dir = tmp_path / "operator-authority"
+    monkeypatch.setenv("REYNARD_VALIDATION_STATE_DIR", str(authority_dir))
+    monkeypatch.setenv("REYNARD_VALIDATION_HMAC_KEY", "operator-key-must-not-be-used")
+    monkeypatch.setenv("REYNARD_HOST_EXEC", "true")
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        with metrics.isolated_fixture_authority():
+            fixture_dir = Path(os.environ["REYNARD_VALIDATION_STATE_DIR"])
+            assert fixture_dir != authority_dir
+            assert "REYNARD_VALIDATION_HMAC_KEY" not in os.environ
+            assert "REYNARD_HOST_EXEC" not in os.environ
+            raise RuntimeError("fixture failure")
+    assert not fixture_dir.exists()
+    assert not authority_dir.exists()
+    assert os.environ["REYNARD_VALIDATION_STATE_DIR"] == str(authority_dir)
+    assert os.environ["REYNARD_VALIDATION_HMAC_KEY"] == "operator-key-must-not-be-used"
+    assert os.environ["REYNARD_HOST_EXEC"] == "true"
 
 
 def test_benchmark_check_fails_on_mismatched_fixture(monkeypatch, capsys):

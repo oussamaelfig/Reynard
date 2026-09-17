@@ -20,6 +20,7 @@ Shared infrastructure for all specialists.
 from __future__ import annotations
 
 import json
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar
 from urllib.parse import unquote
@@ -80,9 +81,17 @@ class BudgetedToolExecutor:
         # results are auto-ingested (with provenance + scope status) exactly like
         # ffuf/sqlmap/nmap records flow into the knowledge graph.
         self.surface = surface
+        # Session selection, dedup and shared state form one transaction. Agent
+        # reasoning can run concurrently; identity-bearing tool I/O is serialized.
+        self._execution_lock = threading.RLock()
 
     def call(self, decision: ToolDecision, agent_name: str,
              phase: str = "general", iteration: int = 0) -> dict[str, Any]:
+        with self._execution_lock:
+            return self._call_serialized(decision, agent_name, phase, iteration)
+
+    def _call_serialized(self, decision: ToolDecision, agent_name: str,
+                         phase: str, iteration: int) -> dict[str, Any]:
         """Execute a typed ToolDecision.
 
         Returns: {
@@ -525,7 +534,7 @@ class BudgetedToolExecutor:
         if not proof and not dialogs:
             return signals
         merged = dict(signals or {})
-        merged["xss_proof"] = str(proof) if proof else f"{len(dialogs)} dialog(s) fired"
+        merged["xss_proof"] = str(proof) if proof else f"{len(dialogs or [])} dialog(s) fired"
         merged["dialog_fired"] = True
         merged["reflected"] = True
         return merged

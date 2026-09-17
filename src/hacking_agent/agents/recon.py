@@ -415,7 +415,7 @@ class ReconAgent(BaseAgent):
         methodology = task.context.get("methodology")
         if methodology:
             stable.append(f"\n{methodology}")
-        stable.append(f"\n{render_tool_catalog('recon')}")
+        stable.append(f"\n{render_tool_catalog('recon', production=bool(self.memory.get_fact('mission_production', False)))}")
 
         volatile = [f"\n{self.kg_summary()}"]
         if last_observation:

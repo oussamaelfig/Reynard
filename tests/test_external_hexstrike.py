@@ -1,12 +1,19 @@
 """Tests for the HexStrike capability broker (broker discipline + scope + degradation)."""
 from __future__ import annotations
 
-import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock
+
+import pytest
 
 from hacking_agent.core.scope import ScopeGuard
 from hacking_agent.integrations.external import hexstrike as hx
+
+
+@pytest.fixture(autouse=True)
+def explicit_hexstrike_environment(monkeypatch):
+    # Availability is checked on every broker operation, not just construction.
+    monkeypatch.setenv("HEXSTRIKE_ENABLED", "1")
 
 
 class _FakeClient:
@@ -32,22 +39,22 @@ class _FakeClient:
 
 
 def _broker(**kw):
-    with patch.dict(os.environ, {"HEXSTRIKE_ENABLED": "1"}, clear=False):
-        b = hx.HexStrikeCapabilityBroker(client=_FakeClient(**kw))
-        # touch available() under the patched env
-        b.available()
-        return b
+    return hx.HexStrikeCapabilityBroker(client=_FakeClient(**kw))
 
 
 class DegradationTests(unittest.TestCase):
     def test_server_down_is_graceful(self):
-        b = hx.HexStrikeCapabilityBroker(
-            client=hx.HexStrikeClient(base_url="http://127.0.0.1:59998"))
+        client = Mock(spec=hx.HexStrikeClient)
+        client.base_url = "http://unavailable.fixture.invalid"
+        client.is_available.return_value = False
+        b = hx.HexStrikeCapabilityBroker(client=client)
         self.assertFalse(b.available())
         self.assertEqual(b.search_capability("xss"), [])
         cap = b.execute_capability("dalfox", "https://x.com/")
         self.assertFalse(cap.available)
         self.assertTrue(cap.errors)
+        client.health.assert_not_called()
+        client.run_tool.assert_not_called()
 
 
 class BrokerDisciplineTests(unittest.TestCase):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import textwrap
 import time
 from copy import deepcopy
 
@@ -17,39 +18,43 @@ from hacking_agent.harness.jobs import JobManager  # noqa: E402
 from hacking_agent.harness.models import RunRequest, RunStatus  # noqa: E402
 from hacking_agent.harness.server import create_app  # noqa: E402
 from hacking_agent.harness.store import RunStore  # noqa: E402
-from test_finding_validation import finding_for, valid_bundle  # noqa: E402
+from test_finding_validation import (  # noqa: E402
+    finding_for,
+    signed_report,
+    valid_bundle,
+)
 
 TOKEN = "secret-token"
 AUTH = {"x-harness-token": TOKEN}
 
-_STRICT_FINDING = finding_to_report_dict(
-    finding_for(valid_bundle(), title="SQL injection via `id`")
-)
-_STRICT_REPORT = {
-    "engagement_name": "worker-test",
-    "targets": ["https://x/"],
-    "target_count": 1,
-    "finding_count": 1,
-    "verified_count": 1,
-    "confirmed_count": 1,
-    "suppressed_count": 0,
-    "targets_assessed": [{
-        "target": "https://x/",
-        "verdict": "assessed",
-        "findings": [_STRICT_FINDING],
-    }],
-}
-
 # Fake worker: emits events, a strict report, and result.json, then exits 0.
-_WORKER = (
-    "import sys,json,pathlib;p=pathlib.Path(sys.argv[1]);"
-    "(p/'events.jsonl').write_text("
-    "json.dumps({'id':1,'type':'run_start','payload':{},'ts':1})+chr(10)+"
-    "json.dumps({'id':2,'type':'finding','payload':{'summary':'sqli'},'ts':2})+chr(10));"
-    "(p/'report.md').write_text('# Report\\n\\n## Findings\\n- SQLi in id');"
-    f"(p/'report.json').write_text({json.dumps(json.dumps(_STRICT_REPORT))});"
-    "(p/'result.json').write_text(json.dumps({'findings_count':1,'verified_count':1}))"
-)
+_WORKER = textwrap.dedent("""
+    import json
+    import pathlib
+    import sys
+    p = pathlib.Path(sys.argv[1])
+    sys.path.insert(0, str(pathlib.Path.cwd() / "tests"))
+    from test_finding_validation import finding_for, signed_report, valid_bundle
+    finding = finding_for(
+        valid_bundle(run_id=p.name),
+        title="SQL injection via `id`",
+    )
+    report = signed_report(finding, run_id=p.name)
+    (p / "events.jsonl").write_text(
+        json.dumps({"id": 1, "type": "run_start", "payload": {}, "ts": 1})
+        + "\\n"
+        + json.dumps({
+            "id": 2, "type": "finding",
+            "payload": {"summary": "sqli"}, "ts": 2,
+        })
+        + "\\n"
+    )
+    (p / "report.md").write_text("# stale worker markdown")
+    (p / "report.json").write_text(json.dumps(report))
+    (p / "result.json").write_text(json.dumps({
+        "findings_count": 1, "verified_count": 1,
+    }))
+""")
 
 
 def _client(tmp_path, worker=_WORKER):
@@ -74,6 +79,9 @@ def test_health_is_public(tmp_path):
     _, c = _client(tmp_path)
     r = c.get("/api/health")
     assert r.status_code == 200 and r.json()["auth_required"] is True
+    assert r.json()["revision"]
+    assert len(r.json()["ui_sha256"]) == 16
+    assert r.json()["reportability_policy_version"] == 2
 
 
 def test_token_gate(tmp_path):
@@ -174,8 +182,13 @@ def test_cancel_endpoint(tmp_path):
 
 def _seed_report(store, run_id):
     md = "# Security Assessment Report\n\n## Findings\n\n- SQLi\n"
-    js = dict(_STRICT_REPORT)
-    js["engagement_name"] = "harness-run"
+    js = signed_report(
+        finding_for(
+            valid_bundle(run_id=run_id),
+            title="SQL injection via `id`",
+        ),
+        run_id=run_id,
+    )
     md_path, json_path = store.report_paths(run_id)
     md_path.write_text(md, encoding="utf-8")
     json_path.write_text(json.dumps(js), encoding="utf-8")
@@ -211,7 +224,13 @@ def test_findings_markdown_download(tmp_path):
 def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
     store, c = _client(tmp_path)
     rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
-    raw = deepcopy(_STRICT_REPORT)
+    raw = signed_report(
+        finding_for(
+            valid_bundle(run_id=rec.id),
+            title="SQL injection via `id`",
+        ),
+        run_id=rec.id,
+    )
     raw["targets_assessed"][0]["verdict"] = (
         "error: SUPPRESSED CUSTOMER SECRET prose-only anomaly detail"
     )
@@ -244,12 +263,63 @@ def test_every_report_api_and_export_suppresses_raw_candidate_details(tmp_path):
         assert "prose-only anomaly detail" not in response.text
 
     report = responses[0].json()
-    assert report["json"]["confirmed_count"] == 1
-    assert report["json"]["suppressed_count"] == 1
+    assert report["json"]["confirmed_count"] == 0
+    assert report["json"]["suppressed_count"] == 2
     aggregate = responses[3].json()
-    assert aggregate["confirmed_count"] == aggregate["count"] == 1
-    assert aggregate["suppressed_count"] == 1
-    assert "Suppressed internal candidates: 1." in responses[4].text
+    assert aggregate["confirmed_count"] == aggregate["count"] == 0
+    assert aggregate["suppressed_count"] == 2
+    assert "Report-candidate suppressions: 2." in responses[4].text
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "finding_id", "vuln_id", "title", "vuln_type", "endpoint",
+        "severity", "description",
+        "impact", "remediation", "parameter", "cwe", "cvss_vector",
+        "cvss_score", "target", "engagement_id", "reproduction_steps",
+        "references", "evidence",
+    ],
+)
+def test_each_bound_field_mutation_is_rejected_by_all_harness_exports(
+    tmp_path,
+    field,
+):
+    store, c = _client(tmp_path)
+    rec = store.create(RunRequest(authorized_domains=["x"], authorized=True))
+    raw = signed_report(
+        finding_for(
+            valid_bundle(run_id=rec.id),
+            title="SQL injection via `id`",
+        ),
+        run_id=rec.id,
+    )
+    item = raw["targets_assessed"][0]["findings"][0]
+    marker = f"HARNESS-MUTATION-{field}"
+    if field in {"reproduction_steps", "references", "evidence"}:
+        item[field] = [marker]
+    elif field == "cvss_score":
+        item[field] = 10.0
+    else:
+        item[field] = marker
+    md_path, json_path = store.report_paths(rec.id)
+    md_path.write_text(f"# stale\n{marker}", encoding="utf-8")
+    json_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    responses = [
+        c.get(f"/api/runs/{rec.id}/report", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/report.md", headers=AUTH),
+        c.get(f"/api/runs/{rec.id}/evidence", headers=AUTH),
+        c.get("/api/findings", headers=AUTH),
+        c.get("/api/findings.md", headers=AUTH),
+    ]
+    assert all(response.status_code == 200 for response in responses)
+    assert responses[0].json()["json"]["confirmed_count"] == 0
+    assert responses[2].json()["confirmed_count"] == 0
+    assert responses[3].json()["confirmed_count"] == 0
+    assert responses[3].json()["suppressed_count"] == 1
+    if field != "cvss_score":
+        assert all(marker not in response.text for response in responses)
 
 
 def test_report_md_download(tmp_path):
@@ -269,7 +339,11 @@ def test_index_never_exposes_token(tmp_path):
     assert TOKEN not in html
     assert "__HARNESS_TOKEN__" not in html
     assert "Launch run" in html
-    assert "confirmed ·" in html and "suppressed" in html
+    assert "confirmed ·" in html and "report-gate suppressions" in html
+    response = c.get("/")
+    assert "no-store" in response.headers["cache-control"]
+    assert response.headers["x-reynard-revision"]
+    assert response.headers["x-reynard-ui-sha256"]
 
 
 def test_cookie_login_and_sse_without_url_secrets(tmp_path):

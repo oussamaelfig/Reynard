@@ -23,6 +23,40 @@ from typing import Any
 from urllib.parse import unquote
 
 
+_SIMPLE_ARITHMETIC_RE = re.compile(
+    r"^\s*(-?\d{1,9})\s*([+\-*/%])\s*(-?\d{1,9})\s*$"
+)
+
+
+def _safe_arithmetic_result(expression: str) -> str | None:
+    """Evaluate only the tiny integer grammar used by Angular canary probes.
+
+    Payload text is model-controlled.  General Python evaluation here would
+    execute inside the control plane and invalidate every provenance guarantee.
+    """
+    match = _SIMPLE_ARITHMETIC_RE.fullmatch(expression)
+    if not match:
+        return None
+    left = int(match.group(1))
+    right = int(match.group(3))
+    operator = match.group(2)
+    if operator == "+":
+        value: int | float = left + right
+    elif operator == "-":
+        value = left - right
+    elif operator == "*":
+        value = left * right
+    elif operator == "%":
+        if right == 0:
+            return None
+        value = left % right
+    else:
+        if right == 0:
+            return None
+        value = left / right
+    return str(value)
+
+
 # =============================================================================
 # ResponseAnalyzer
 # =============================================================================
@@ -228,14 +262,15 @@ class ResponseAnalyzer:
             if expr_match:
                 expr = expr_match.group(1)
                 # Check if it was evaluated (e.g., {{7*7}} became 49)
-                try:
-                    expected = str(eval(expr))  # Safe for simple math
-                    if expected in body and '{{' not in body.split(expected)[0][-10:]:
-                        signals["angular_evaluated"] = True
-                        signals["reflected"] = True
-                        signals["reflection_context"] = "angular_template"
-                except Exception:
-                    pass
+                expected = _safe_arithmetic_result(expr)
+                if (
+                    expected is not None
+                    and expected in body
+                    and '{{' not in body.split(expected)[0][-10:]
+                ):
+                    signals["angular_evaluated"] = True
+                    signals["reflected"] = True
+                    signals["reflection_context"] = "angular_template"
 
     def _detect_context(self, body: str, payload: str) -> str:
         """Determine the HTML context where the payload appears."""

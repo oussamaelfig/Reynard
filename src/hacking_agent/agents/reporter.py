@@ -39,6 +39,10 @@ from hacking_agent.core.finding_validation import (
     is_reportable,
     partition_reportable,
 )
+from hacking_agent.core.validation_provenance import (
+    public_evidence_bundle,
+    verify_protocol,
+)
 from hacking_agent.core.paths import LOG_DIR, ensure_runtime_dirs
 from hacking_agent.core.schemas import AgentResult, AgentTask
 
@@ -232,6 +236,7 @@ class Finding:
     vuln_id: str = ""
     vuln_type: str = ""
     severity: str = "medium"
+    target: str = ""
     endpoint: str = ""
     parameter: str = ""
     description: str = ""
@@ -240,6 +245,9 @@ class Finding:
     cwe: str = ""
     cvss_vector: str = ""
     cvss_score: float = 0.0
+    reproduction_steps: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    engagement_id: str = ""
     # Compatibility mirror only.  Customer boundaries call ``is_reportable``;
     # assigning this boolean cannot promote a candidate.
     verified: bool = False
@@ -317,9 +325,12 @@ def _bundle_evidence(bundle: Any) -> list[dict]:
             "payload": "",
             "request": sanitize_text(str(value(exchange, "request") or "")),
             "response": sanitize_text(str(value(exchange, "response") or "")),
-            "agent": "validator",
+            "agent": "trusted_executor",
             "timestamp": str(value(exchange, "timestamp") or ""),
             "label": str(value(exchange, "label") or "replay"),
+            "capture_id": str(value(exchange, "capture_id") or ""),
+            "request_sha256": str(value(exchange, "request_sha256") or ""),
+            "response_sha256": str(value(exchange, "response_sha256") or ""),
         })
     for control in value(bundle, "control_tests", []) or []:
         exchange = value(control, "exchange", None)
@@ -328,11 +339,82 @@ def _bundle_evidence(bundle: Any) -> list[dict]:
             "payload": "",
             "request": sanitize_text(str(value(exchange, "request") or "")),
             "response": sanitize_text(str(value(exchange, "response") or "")),
-            "agent": "validator",
+            "agent": "trusted_executor",
             "timestamp": str(value(exchange, "timestamp") or ""),
             "label": "control",
+            "capture_id": str(value(exchange, "capture_id") or ""),
+            "request_sha256": str(value(exchange, "request_sha256") or ""),
+            "response_sha256": str(value(exchange, "response_sha256") or ""),
         })
     return rows
+
+
+def _deterministic_references(vuln_type: str, cwe: str) -> list[str]:
+    number = "".join(character for character in cwe if character.isdigit())
+    references = (
+        [f"https://cwe.mitre.org/data/definitions/{number}.html"]
+        if number else []
+    )
+    if "sql" in vuln_type.lower():
+        references.append(
+            "https://owasp.org/www-community/attacks/SQL_Injection"
+        )
+    elif "xss" in vuln_type.lower():
+        references.append("https://owasp.org/www-community/attacks/xss/")
+    return references
+
+
+def finalize_bundle_for_reporting(
+    bundle: Any,
+    *,
+    parameter: str = "",
+    extra_secrets: tuple[str, ...] = (),
+) -> bool:
+    """Bind the complete deterministic customer projection and authenticate it.
+
+    This is a control-plane assembly operation, never a stored-report reader.
+    It refuses to attest legacy or model-authored protocols.
+    """
+    protocol_ok, _ = verify_protocol(
+        getattr(bundle, "validation_protocol", None),
+    )
+    if not protocol_ok:
+        return False
+    bundle.seal(extra_secrets=extra_secrets)
+    severity = str(bundle.severity or "info").lower()
+    vector, score = cvss_for_severity(severity)
+    cwe = cwe_for(bundle.vuln_type or bundle.title)
+    endpoint = sanitize_text(str(bundle.endpoint or ""))
+    target = sanitize_text(str(bundle.target or endpoint))
+    effect = sanitize_text(str(bundle.causal_signal or ""))
+    evidence = _bundle_evidence(bundle)
+    protocol = bundle.validation_protocol
+    bundle.customer_projection = {
+        "finding_id": str(bundle.finding_id or bundle.vuln_id),
+        "vuln_id": str(bundle.vuln_id),
+        "title": sanitize_text(str(bundle.title or bundle.vuln_type)),
+        "vuln_type": sanitize_text(str(bundle.vuln_type)),
+        "severity": severity,
+        "target": target,
+        "endpoint": endpoint,
+        "parameter": sanitize_text(str(parameter or "")),
+        "description": (
+            f"Trusted executor captures reproduced a {bundle.vuln_type} "
+            f"effect at {endpoint}; a separately captured matched control "
+            "did not show that effect."
+        ),
+        "impact": f"Validated executor effect: {effect}",
+        "remediation": _default_remediation(bundle.vuln_type),
+        "cwe": cwe,
+        "cvss_vector": vector,
+        "cvss_score": score,
+        "reproduction_steps": list(bundle.reproduction_steps),
+        "references": _deterministic_references(bundle.vuln_type, cwe),
+        "evidence": evidence,
+        "engagement_id": str(protocol.get("engagement_id") or ""),
+    }
+    bundle.attest(extra_secrets=extra_secrets)
+    return True
 
 
 def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
@@ -389,46 +471,43 @@ def extract_findings(memory, evidence, evidence_bundles=None) -> list[Finding]:
             # remain suppressed unless the full Validator transcript exists.
             bundle.id = f"bundle:{vuln_id}"
             bundle.finding_id = vuln_id
-            bundle.seal()
+        if not bundle.customer_projection:
+            finalize_bundle_for_reporting(bundle, parameter=str(parameter))
+        projection = dict(bundle.customer_projection or {})
         finding = Finding(
-            title=title.strip() or vuln_type,
-            finding_id=vuln_id,
-            vuln_id=vuln_id,
-            vuln_type=vuln_type,
-            severity=severity,
-            endpoint=sanitize_text(str(endpoint)),
-            parameter=parameter,
-            description=sanitize_text(
-                str(
-                    attrs.get("hypothesis")
-                    or attrs.get("notes")
-                    or bundle.causal_signal
-                    or ""
-                )
+            title=str(projection.get("title") or title.strip() or vuln_type),
+            finding_id=str(projection.get("finding_id") or vuln_id),
+            vuln_id=str(projection.get("vuln_id") or vuln_id),
+            vuln_type=str(projection.get("vuln_type") or vuln_type),
+            severity=str(projection.get("severity") or severity),
+            target=str(projection.get("target") or ""),
+            endpoint=str(projection.get("endpoint") or endpoint),
+            parameter=str(projection.get("parameter") or parameter),
+            description=str(projection.get("description") or ""),
+            impact=str(projection.get("impact") or ""),
+            remediation=str(projection.get("remediation") or ""),
+            cwe=str(projection.get("cwe") or ""),
+            cvss_vector=str(projection.get("cvss_vector") or ""),
+            cvss_score=float(projection.get("cvss_score") or 0.0),
+            reproduction_steps=list(
+                projection.get("reproduction_steps") or []
             ),
-            impact=sanitize_text(str(
-                attrs.get("impact")
-                or (
-                    f"Independent validation demonstrated this exploit effect: "
-                    f"{bundle.causal_signal}"
-                    if bundle.causal_signal else ""
-                )
-            )),
-            remediation=sanitize_text(
-                str(attrs.get("remediation") or _default_remediation(vuln_type))
-            ),
-            cvss_vector=str(attrs.get("cvss_vector") or ""),
-            evidence=_bundle_evidence(bundle),
+            references=list(projection.get("references") or []),
+            engagement_id=str(projection.get("engagement_id") or ""),
+            evidence=list(projection.get("evidence") or []),
             verification_status=str(bundle.verification_status or ""),
             evidence_bundle=bundle.to_dict(),
         )
+        # Deterministic scoring is useful for internal triage. It cannot promote
+        # the candidate because the complete outward projection must still
+        # match the authenticated bundle exactly.
+        finding.ensure_scored()
         decision = evaluate_reportability(finding)
         finding.verified = decision.reportable
         if not decision.reportable:
             finding.suppression_reason_code = decision.reason_code
             finding.suppression_rationale = decision.rationale
             emit_suppression(finding, decision)
-        finding.ensure_scored()
         findings.append(finding)
     findings.sort(
         key=lambda f: (0 if f.verified else 1,
@@ -445,7 +524,6 @@ def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
         raise ValueError(
             f"candidate is not reportable: {decision.reason_code}"
         )
-    finding.ensure_scored()
     return {
         "finding_id": finding.finding_id,
         "vuln_id": finding.vuln_id,
@@ -455,6 +533,7 @@ def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
         "cwe": finding.cwe,
         "cvss_vector": finding.cvss_vector,
         "cvss_score": finding.cvss_score,
+        "target": finding.target,
         "endpoint": finding.endpoint,
         "parameter": finding.parameter,
         "verification_status": "verified",
@@ -462,15 +541,18 @@ def finding_to_report_dict(finding: Finding) -> dict[str, Any]:
         "description": finding.description,
         "impact": finding.impact,
         "remediation": finding.remediation,
-        # Never trust a parallel, mutable evidence projection from stored JSON.
-        # Rebuild it from the sealed bundle accepted by the central policy.
-        "evidence": _bundle_evidence(finding.evidence_bundle),
-        "evidence_bundle": dict(finding.evidence_bundle),
+        "reproduction_steps": list(finding.reproduction_steps),
+        "references": list(finding.references),
+        "engagement_id": finding.engagement_id,
+        "evidence": list(finding.evidence),
+        "evidence_bundle": public_evidence_bundle(finding.evidence_bundle),
     }
 
 
 def _reproduction_steps(finding: Finding) -> list[str]:
     """Derive concrete reproduction steps from a finding's evidence."""
+    if finding.reproduction_steps:
+        return list(finding.reproduction_steps)
     bundle_steps = (
         finding.evidence_bundle.get("reproduction_steps", [])
         if isinstance(finding.evidence_bundle, dict) else []
@@ -497,7 +579,6 @@ def render_finding_section(finding: Finding, index: int) -> str:
     """Render one finding as a professional per-finding markdown section."""
     if not is_reportable(finding):
         return ""
-    finding.ensure_scored()
     lines = [
         f"### {index}. {finding.title}",
         "",
@@ -609,17 +690,8 @@ def render_assessment_report(
     tally = _severity_tally(verified)
     external_suppressed = int(meta.get("external_suppressed_count", 0) or 0)
     suppressed_total = len(suppressed) + external_suppressed
-    reason_counts: dict[str, int] = {}
     for finding, decision in suppressed:
-        reason_counts[decision.reason_code] = (
-            reason_counts.get(decision.reason_code, 0) + 1
-        )
         emit_suppression(finding, decision)
-    for reason, count in dict(
-        meta.get("external_suppression_reasons") or {}
-    ).items():
-        if isinstance(count, int) and count > 0:
-            reason_counts[str(reason)] = reason_counts.get(str(reason), 0) + count
 
     lines = [
         f"# Security Assessment Report — {meta.get('engagement_name', 'Engagement')}",
@@ -644,7 +716,8 @@ def render_assessment_report(
             f"{tally['critical']} critical, {tally['high']} high, "
             f"{tally['medium']} medium, {tally['low']} low, {tally['info']} "
             f"informational. {suppressed_total} candidate observation(s) were "
-            "suppressed by the validation gate and are not findings in this report."
+            "submitted to and rejected by the customer report gate; they are "
+            "not findings in this report."
         ),
         "",
         "## 2. Scope",
@@ -698,17 +771,15 @@ def render_assessment_report(
     lines += ["", "## 6. Validation Gate Summary", ""]
     if suppressed_total:
         lines.append(
-            f"{suppressed_total} internal candidate observation(s) were "
-            "suppressed and are not reportable findings."
+            f"{suppressed_total} report candidate(s) were rejected by the "
+            "customer export gate and are not reportable findings. Suppression "
+            "diagnostics remain in the internal operator event stream."
         )
-        if reason_counts:
-            lines.append("")
-            lines.append("| Suppression reason | Count |")
-            lines.append("| --- | ---: |")
-            for reason, count in sorted(reason_counts.items()):
-                lines.append(f"| `{reason}` | {count} |")
     else:
-        lines.append("No candidate observations were suppressed.")
+        lines.append(
+            "No report-candidate suppressions were recorded. This does not mean "
+            "that zero hypotheses or reconnaissance observations existed."
+        )
 
     lines += [
         "",

@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     run_dir = Path(argv[0]).resolve()
+    os.environ["REYNARD_RUN_ID"] = run_dir.name
+    os.environ["REYNARD_ENGAGEMENT_ID"] = f"harness:{run_dir.name}"
     try:
         config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     except Exception as exc:
@@ -89,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     from hacking_agent.core.events import emit
     from hacking_agent.core.engagement import engagement_from_dict
     from hacking_agent.cli.assess import build_consolidated_report, run_target
+    from hacking_agent.core.process_control import ProcessCleanupError
 
     # ---- controlled identities for authenticated / authorization testing ----
     if req.auth_sessions:
@@ -123,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
                 per_target_timeout=req.per_target_timeout,
                 objective=req.description or None,
             )
+        except ProcessCleanupError:
+            row = {"target": target, "verdict": "error: target process cleanup could not be confirmed",
+                   "timed_out": True, "wall_clock_seconds": 0, "findings": []}
         except Exception as exc:  # never abort the whole run on one target
             row = {"target": target, "verdict": f"error: {exc}",
                    "timed_out": False, "wall_clock_seconds": 0, "findings": []}
@@ -134,8 +140,15 @@ def main(argv: list[str] | None = None) -> int:
             break
 
     try:
-        report_md, report_json = build_consolidated_report(engagement, targets, results)
-        (run_dir / "report.md").write_text(report_md, encoding="utf-8")
+        _report_md, report_json = build_consolidated_report(
+            engagement, targets, results,
+        )
+        from hacking_agent.harness.submission import render_stored_report_markdown
+        safe_markdown = render_stored_report_markdown(
+            report_json,
+            expected_run_id=run_dir.name,
+        )
+        (run_dir / "report.md").write_text(safe_markdown, encoding="utf-8")
         (run_dir / "report.json").write_text(
             json.dumps(report_json, indent=2, default=str), encoding="utf-8")
         findings_count = int(report_json.get("finding_count", 0) or 0)

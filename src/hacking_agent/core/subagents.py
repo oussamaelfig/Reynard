@@ -80,7 +80,7 @@ class BoundedSubagentScheduler:
             return False
         if spec.requires_serial:
             return False
-        if not spec.mutates_target:
+        if not spec.mutates_target and spec.lane not in {"exploitation", "validation"}:
             return True
         playbook_id = (lab_profile or {}).get("playbook_id")
         return bool(
@@ -119,7 +119,7 @@ class BoundedSubagentScheduler:
         for spec in specs:
             if self.can_parallelize(spec, lab_profile):
                 parallel_specs.append(spec)
-            elif spec.mutates_target and not self.policy.allow_stateful_serial:
+            elif (spec.mutates_target or spec.lane in {"exploitation", "validation"}) and not self.policy.allow_stateful_serial:
                 skipped.append(SubagentRun(
                     name=spec.name,
                     lane=spec.lane,
@@ -148,11 +148,14 @@ class BoundedSubagentScheduler:
         })
         results: list[SubagentRun] = []
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="subagent") as pool:
-            futures = {pool.submit(self._run_one, spec, True): spec for spec in specs}
+            futures = {pool.submit(self._run_one, spec, True): index
+                       for index, spec in enumerate(specs)}
+            ordered: dict[int, SubagentRun] = {}
             for future in as_completed(futures):
                 result = future.result()
-                results.append(result)
+                ordered[futures[future]] = result
                 emit("subagent_result", result.__dict__)
+            results = [ordered[index] for index in range(len(specs))]
         emit("subagents_done", {
             "mode": "parallel",
             "count": len(results),

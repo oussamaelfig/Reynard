@@ -6,12 +6,12 @@
   <title>Reynard · Run Harness</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-      --r-xs: 5px; --r-sm: 7px; --r: 9px; --r-lg: 13px; --r-xl: 18px; --pill: 999px;
+      --font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --r-xs: 4px; --r-sm: 6px; --r: 8px; --r-lg: 12px; --r-xl: 16px; --pill: 999px;
       --sp: 4px;
       --ease: cubic-bezier(0.4, 0, 0.2, 1);
       --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -19,60 +19,60 @@
       --sidebar-w: 236px; --list-w: 340px;
     }
 
-    /* ---------- dark (default) ---------- */
+    /* ---------- dark (default) — Conductor warm palette ---------- */
     html[data-theme="dark"] {
-      --bg: #08090a;
-      --s1: #0d0e10;
-      --s2: #141518;
-      --s3: #1a1c20;
-      --s-hover: #202227;
-      --border-strong: rgba(255,255,255,0.13);
-      --border: rgba(255,255,255,0.08);
-      --border-subtle: rgba(255,255,255,0.05);
-      --text: #f3f4f6;
-      --text-muted: #8b909a;
-      --text-faint: #5b606b;
-      --accent: #7c86ff;
-      --accent-hover: #8f97ff;
-      --accent-press: #6a74f0;
-      --accent-ghost: rgba(124,134,255,0.14);
-      --accent-ring: rgba(124,134,255,0.45);
-      --green: #46c76a; --green-bg: rgba(70,199,106,0.14);
-      --amber: #e0a53b; --amber-bg: rgba(224,165,59,0.14);
-      --red: #f36d68; --red-bg: rgba(243,109,104,0.14);
-      --blue: #5aa2ff; --blue-bg: rgba(90,162,255,0.14);
-      --violet: #b98cff; --violet-bg: rgba(185,140,255,0.14);
-      --shadow-pop: 0 1px 0 rgba(0,0,0,0.4), 0 12px 40px rgba(0,0,0,0.55);
-      --shadow-drawer: -24px 0 60px rgba(0,0,0,0.5);
-      --scrim: rgba(3,4,6,0.62);
+      --bg: #0e0c0b;
+      --s1: #141110;
+      --s2: #1c1917;
+      --s3: #211e1c;
+      --s-hover: #2a2623;
+      --border-strong: rgba(237,235,232,0.20);
+      --border: rgba(237,235,232,0.12);
+      --border-subtle: rgba(237,235,232,0.06);
+      --text: #f1f0ee;
+      --text-muted: #b3aca8;
+      --text-faint: #756f6c;
+      --accent: #f99c00;
+      --accent-hover: #fcbb00;
+      --accent-press: #e08c00;
+      --accent-ghost: rgba(249,156,0,0.14);
+      --accent-ring: rgba(249,156,0,0.40);
+      --green: #00c758; --green-bg: rgba(0,199,88,0.14);
+      --amber: #f99c00; --amber-bg: rgba(249,156,0,0.14);
+      --red: #fb2c36; --red-bg: rgba(251,44,54,0.14);
+      --blue: #3080ff; --blue-bg: rgba(48,128,255,0.14);
+      --violet: #e8a04a; --violet-bg: rgba(249,156,0,0.12);
+      --shadow-pop: 0 1px 0 rgba(14,12,11,0.4), 0 12px 40px rgba(14,12,11,0.55);
+      --shadow-drawer: -24px 0 60px rgba(14,12,11,0.5);
+      --scrim: rgba(8,6,5,0.62);
       color-scheme: dark;
     }
-    /* ---------- light ---------- */
+    /* ---------- light — Conductor warm paper ---------- */
     html[data-theme="light"] {
-      --bg: #fbfbfc;
-      --s1: #ffffff;
-      --s2: #f6f7f9;
-      --s3: #eef0f4;
-      --s-hover: #eceef2;
-      --border-strong: rgba(17,20,24,0.16);
-      --border: rgba(17,20,24,0.10);
-      --border-subtle: rgba(17,20,24,0.06);
-      --text: #14161b;
-      --text-muted: #5a616e;
-      --text-faint: #939aa6;
-      --accent: #5b63d3;
-      --accent-hover: #4a52c4;
-      --accent-press: #434bbb;
-      --accent-ghost: rgba(91,99,211,0.10);
-      --accent-ring: rgba(91,99,211,0.35);
-      --green: #1a8f43; --green-bg: rgba(26,143,67,0.10);
-      --amber: #b6791b; --amber-bg: rgba(182,121,27,0.12);
-      --red: #d64545; --red-bg: rgba(214,69,69,0.10);
-      --blue: #2f6fed; --blue-bg: rgba(47,111,237,0.10);
-      --violet: #7c4ddb; --violet-bg: rgba(124,77,219,0.10);
-      --shadow-pop: 0 2px 4px rgba(17,20,24,0.06), 0 16px 40px rgba(17,20,24,0.14);
-      --shadow-drawer: -24px 0 60px rgba(17,20,24,0.18);
-      --scrim: rgba(20,22,28,0.34);
+      --bg: #ffffff;
+      --s1: #fafaf9;
+      --s2: #f2f0ee;
+      --s3: #ebe8e5;
+      --s-hover: #e6e2de;
+      --border-strong: rgba(44,40,38,0.16);
+      --border: #eae8e6;
+      --border-subtle: rgba(44,40,38,0.06);
+      --text: #2c2826;
+      --text-muted: #756f6c;
+      --text-faint: #a5a09c;
+      --accent: #f99c00;
+      --accent-hover: #e08c00;
+      --accent-press: #c97a00;
+      --accent-ghost: rgba(249,156,0,0.10);
+      --accent-ring: rgba(249,156,0,0.35);
+      --green: #16a249; --green-bg: rgba(22,162,73,0.10);
+      --amber: #c47d00; --amber-bg: rgba(196,125,0,0.12);
+      --red: #fb2c36; --red-bg: rgba(251,44,54,0.10);
+      --blue: #3080ff; --blue-bg: rgba(48,128,255,0.10);
+      --violet: #c47d00; --violet-bg: rgba(249,156,0,0.10);
+      --shadow-pop: 0 2px 4px rgba(44,40,38,0.06), 0 16px 40px rgba(44,40,38,0.12);
+      --shadow-drawer: -24px 0 60px rgba(44,40,38,0.16);
+      --scrim: rgba(44,40,38,0.34);
       color-scheme: light;
     }
 
@@ -80,11 +80,13 @@
     ::selection { background: var(--accent-ghost); }
     html, body { height: 100%; }
     body {
-      margin: 0; background: var(--bg); color: var(--text);
+      margin: 0; color: var(--text);
       font-family: var(--font); font-size: 13px; line-height: 1.45;
       letter-spacing: -0.006em;
       font-feature-settings: "cv01" 1, "ss03" 1, "calt" 1;
       -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+      background-color: var(--bg);
+      background-image: radial-gradient(ellipse 80% 45% at 50% -12%, rgba(249,156,0,0.07), transparent 55%);
     }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
@@ -104,7 +106,8 @@
     /* ---------- sidebar ---------- */
     .sidebar { background: var(--s1); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
     .brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 14px; }
-    .brand .mark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: linear-gradient(150deg, var(--accent), var(--accent-press)); box-shadow: 0 0 0 1px var(--border-strong), 0 6px 16px var(--accent-ghost); }
+    .brand .mark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: linear-gradient(150deg, var(--accent-hover), var(--accent) 42%, var(--accent-press)); box-shadow: 0 0 0 1px var(--border-strong), 0 6px 16px var(--accent-ghost); }
+    .brand .mark svg circle { fill: var(--bg); }
     .brand .mark svg { width: 15px; height: 15px; display: block; }
     .brand .name { font-weight: 600; font-size: 14px; letter-spacing: -0.02em; }
     .brand .name small { display: block; font-weight: 500; font-size: 10.5px; color: var(--text-faint); letter-spacing: 0.02em; }
@@ -126,9 +129,9 @@
     .btn:hover { background: var(--s-hover); }
     .btn:active { transform: translateY(1px); }
     .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
-    .btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
-    .btn.primary:hover { background: var(--accent-hover); }
-    .btn.primary:active { background: var(--accent-press); }
+    .btn.primary { background: var(--text); border-color: transparent; color: var(--bg); }
+    .btn.primary:hover { background: color-mix(in srgb, var(--text) 88%, var(--bg)); }
+    .btn.primary:active { background: color-mix(in srgb, var(--text) 78%, var(--bg)); }
     .btn.ghost { background: transparent; border-color: transparent; color: var(--text-muted); padding: 6px 9px; }
     .btn.ghost:hover { background: var(--s2); color: var(--text); }
     .btn.danger { color: var(--red); border-color: var(--border-strong); background: transparent; }
@@ -148,7 +151,8 @@
       background: var(--s1); color: var(--text); font: inherit; font-size: 12.5px;
       transition: border-color var(--dur-1), box-shadow var(--dur-1), background var(--dur-1);
     }
-    html[data-theme="dark"] input, html[data-theme="dark"] textarea, html[data-theme="dark"] select { background: #050607; }
+    html[data-theme="dark"] input, html[data-theme="dark"] textarea, html[data-theme="dark"] select { background: #0b0a09; }
+    html[data-theme="light"] input, html[data-theme="light"] textarea, html[data-theme="light"] select { background: #f8f7f6; }
     textarea { resize: vertical; min-height: 58px; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
     input::placeholder, textarea::placeholder { color: var(--text-faint); }
     input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -241,8 +245,8 @@
 
     .block { border: 1px solid var(--border); border-radius: var(--r); margin: 5px 0; overflow: hidden; background: var(--s1); animation: fade var(--dur-3) var(--ease-out); }
     .block .bh { display: flex; align-items: center; gap: 8px; padding: 6px 11px; font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); }
-    .block.think { border-color: color-mix(in srgb, var(--violet) 40%, var(--border)); }
-    .block.think .bh { color: var(--violet); background: var(--violet-bg); }
+    .block.think { border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+    .block.think .bh { color: var(--amber); background: var(--amber-bg); }
     .block.answer { border-color: color-mix(in srgb, var(--blue) 40%, var(--border)); }
     .block.answer .bh { color: var(--blue); background: var(--blue-bg); }
     .block .txt { margin: 0; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text); max-height: 340px; overflow: auto; }
@@ -673,7 +677,7 @@
       const tgt = r.targets && r.targets.length ? r.targets.join(", ") : (r.description || "—");
       const err = r.error ? `<span class="fchip" style="color:var(--red)">${esc(r.error).slice(0, 60)}</span>` : "";
       const f = (r.status === "completed" || r.status === "failed")
-        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} suppressed</span>`
+        ? `<span class="fchip">${r.findings_count || 0} confirmed · ${r.suppressed_count || 0} report-gate suppressions</span>`
         : "";
       return `<div class="run ${r.id === selected ? "active" : ""}" data-id="${r.id}">
         <span class="rid">${esc(r.id)}</span>
@@ -820,7 +824,7 @@
         const rows = [];
         targets.forEach((t) => (t.findings || []).forEach((f) => rows.push(
           `<tr><td>${esc(t.target || "")}</td><td>${esc(f.title || f.name || "")}</td><td>${esc(f.severity || "")}</td><td>${esc(f.verification_status || f.status || "")}</td></tr>`)));
-        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${esc(j.target_count ?? "-")}</dd><dt>Confirmed findings</dt><dd>${esc(j.confirmed_count ?? j.finding_count ?? "-")}</dd><dt>Suppressed candidates</dt><dd>${esc(j.suppressed_count ?? 0)}</dd></dl>` +
+        el.innerHTML = `<dl class="kv"><dt>Targets</dt><dd>${esc(j.target_count ?? "-")}</dd><dt>Confirmed findings</dt><dd>${esc(j.confirmed_count ?? j.finding_count ?? "-")}</dd><dt>Report-gate suppressions</dt><dd>${esc(j.suppressed_count ?? 0)}</dd></dl>` +
           (rows.length ? `<table><thead><tr><th>Target</th><th>Confirmed finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<p class="hint" style="color:var(--text-faint)">No independently validated vulnerabilities were found.</p>`);
       } catch (e) { el.innerHTML = emptyState("No evidence yet", "Evidence bundles appear after the run completes."); }
     }
@@ -961,7 +965,7 @@
       let data;
       try { data = await api("/api/findings"); } catch (e) { return; }
       findingsCache = data.findings || [];
-      $("f-count").textContent = `${data.confirmed_count || 0} confirmed · ${data.suppressed_count || 0} suppressed`;
+      $("f-count").textContent = `${data.confirmed_count || 0} confirmed · ${data.suppressed_count || 0} report-gate suppressions`;
       // Only re-render when the set actually changed, so a background refresh
       // never reflows the list or steals focus while you're reading.
       const sig = findingsCache.map((f) => f.finding_id).join("|");

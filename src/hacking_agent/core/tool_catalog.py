@@ -227,8 +227,22 @@ CATALOG: tuple[ToolEntry, ...] = (
 )
 
 
-def render_tool_catalog(role: str = "general") -> str:
+def render_tool_catalog(role: str = "general", *, production: bool | None = None) -> str:
     """Render a compact prompt section tailored by role."""
+    if production is None:
+        from hacking_agent.core.http_transport import active_guard
+        guard = active_guard()
+        production = bool(guard and guard.engagement_attached)
+    if production:
+        return "\n".join([
+            "# PRODUCTION TOOL-SELECTION CATALOG",
+            "Use only bounded requests to explicitly authorized targets.",
+            "- http_request: scoped HTTP(S), verified TLS, bounded responses; each redirect is checked.",
+            "- register_session / list_sessions / swap_session: explicit named identities; do not invent credentials.",
+            "- capture_baseline / diff_against_baseline / analyze_response: compare captured observations; differences are candidates, not proof.",
+            "Opaque browser, shell, scanner and delegated network execution are disabled under an engagement.",
+            "Do not substitute arbitrary commands or external services for a blocked tool.",
+        ])
     role = (role or "general").lower()
     _STRUCTURED_RECON = (
         "structured recon (subfinder_scan/httpx_probe/katana_crawl/dnsx_resolve/"

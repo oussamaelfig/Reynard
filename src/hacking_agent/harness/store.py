@@ -171,14 +171,66 @@ class RunStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-        return self._row_to_record(row) if row else None
+        return self._reconcile_record(self._row_to_record(row)) if row else None
 
     def list(self, limit: int = 100) -> list[RunRecord]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?",
                 (limit,)).fetchall()
-        return [self._row_to_record(r) for r in rows]
+        return [
+            self._reconcile_record(self._row_to_record(row))
+            for row in rows
+        ]
+
+    def _reconcile_record(self, record: RunRecord) -> RunRecord:
+        """Backfill customer counts from the authenticated structured report.
+
+        SQLite and worker summaries are cache fields only.  Missing, legacy, or
+        unverifiable reports fail closed to zero confirmed findings.
+        """
+        report_path = self.root / record.id / "report.json"
+        confirmed = 0
+        suppressed = 0
+        if report_path.exists():
+            try:
+                from hacking_agent.harness.submission import sanitize_report_json
+                raw = json.loads(report_path.read_text(encoding="utf-8"))
+                safe = sanitize_report_json(
+                    raw,
+                    expected_run_id=record.id,
+                )
+                confirmed = max(
+                    0, int(safe.get("confirmed_count", 0) or 0),
+                )
+                suppressed = max(
+                    0, int(safe.get("suppressed_count", 0) or 0),
+                )
+            except Exception:
+                confirmed = 0
+                suppressed = 0
+        if (
+            record.findings_count == confirmed
+            and record.verified_count == confirmed
+            and record.suppressed_count == suppressed
+        ):
+            return record
+        updated_at = _now()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE runs
+                   SET findings_count=?, verified_count=?,
+                       suppressed_count=?, updated_at=?
+                   WHERE id=?""",
+                (confirmed, confirmed, suppressed, updated_at, record.id),
+            )
+            self._conn.commit()
+        return record.model_copy(update={
+            "findings_count": confirmed,
+            "verified_count": confirmed,
+            "suppressed_count": suppressed,
+            "updated_at": updated_at,
+        })
 
     def load_request(self, run_id: str) -> Optional[RunRequest]:
         p = self.config_path(run_id)

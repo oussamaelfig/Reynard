@@ -29,14 +29,25 @@ complete in the report.
 from __future__ import annotations
 
 import json
+import os
 import re
-from datetime import datetime
-from typing import Any
+import uuid
+from datetime import datetime, timezone
+from typing import Any, cast
 
 from rich.console import Console
 
-from hacking_agent.agents.base import BaseAgent
+from hacking_agent.agents.base import BaseAgent, BudgetedToolExecutor
+from hacking_agent.core.evidence_bundle import sanitize_text
 from hacking_agent.core.schemas import AgentResult, AgentTask, PoC, ValidationOutput
+from hacking_agent.core.tool_catalog import render_tool_catalog
+from hacking_agent.core.validation_provenance import (
+    capture_observation,
+    derive_executor_effect,
+    issue_protocol_receipt,
+    sha256_text,
+    validator_identity,
+)
 
 console = Console()
 
@@ -86,18 +97,14 @@ token and session cookie are refreshed together), then submit.
 5. final=True ends iteration. You MUST set final=True before returning
    confirmed=True - i.e. you can only confirm AFTER finishing all probes.
 6. Every next_probe MUST include probe_kind. On the final response, provide
-   attempt_results referencing real executed attempt indexes. Confirmation
-   requires two replay/fresh_context_replay results with outcome
-   vulnerable_effect and one control result with outcome control_no_effect.
+   attempt_results only as your advisory interpretation. Your outcomes,
+   behavioral signals, notes, context IDs, and proof metadata NEVER establish
+   reportability. The control plane independently captures requests/responses,
+   derives supported structured effects, creates context/capture IDs, and
+   authenticates two replays plus a matched control.
 7. Supply validation_context, exact reproduction_steps, and class-specific
-   proof_type/proof_metadata. XSS needs browser execution; injection needs a
-   payload-specific oracle; blind SSRF/XXE needs fresh attributable correlation
-   or direct sensitive-resource proof; authz needs a controlled identity and
-   ownership matrix; upload/traversal/cache/race/business logic/OAuth needs a
-   concrete exploit effect and matched control.
-8. behavioral_signal must quote a short distinctive substring of the actual
-   recorded response. Request text, your descriptions, and fabricated context
-   labels are not observations. Copy context_id from the recorded attempt.
+   proof_type/proof_metadata for operator diagnostics only. Unsupported
+   executor evidence is suppressed even when you claim confirmed=True.
 
 # OUTPUT
 A SINGLE ValidationOutput JSON. While iterating, supply next_probe and
@@ -111,6 +118,10 @@ class ValidatorAgent(BaseAgent):
 
     VERSION = "reynard-validator/1"
     MAX_INNER_ITER = 8
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.validator_instance_id = f"validator:{uuid.uuid4().hex}"
 
     def execute(self, task: AgentTask) -> AgentResult:
         poc_id = task.context.get("poc_id")
@@ -163,8 +174,23 @@ class ValidatorAgent(BaseAgent):
                     target_poc, vuln_entity,
                     "validator_protocol_incomplete: next probe omitted probe_kind",
                 )
+            required_sequence = (
+                "replay", "fresh_context_replay", "control",
+            )
+            if len(attempts) < len(required_sequence):
+                expected_kind = required_sequence[len(attempts)]
+                if out.probe_kind != expected_kind:
+                    return self._record_validation_error(
+                        target_poc,
+                        vuln_entity,
+                        (
+                            "validator_protocol_incomplete: expected "
+                            f"{expected_kind}, received {out.probe_kind}"
+                        ),
+                        attempts=attempts,
+                    )
 
-            outcome = self.tools.call(
+            outcome = cast(BudgetedToolExecutor, self.tools).call(
                 out.next_probe, agent_name=self.name,
                 phase="validate", iteration=self.sm.iteration,
             )
@@ -174,14 +200,25 @@ class ValidatorAgent(BaseAgent):
                 last_observation = self._summarize_result(
                     outcome["result"], outcome["signals"],
                 )
-            attempts.append(self._capture_attempt(
-                index=inner + 1,
-                probe_kind=out.probe_kind,
-                decision=out.next_probe,
-                outcome=outcome,
-                observation=last_observation,
-                context=task.context,
-            ))
+            try:
+                attempts.append(self._capture_attempt(
+                    index=inner + 1,
+                    probe_kind=out.probe_kind,
+                    decision=out.next_probe,
+                    outcome=outcome,
+                    observation=last_observation,
+                    context=task.context,
+                ))
+            except Exception as exc:
+                return self._record_validation_error(
+                    target_poc,
+                    vuln_entity,
+                    (
+                        "validator_executor_capture_failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    attempts=attempts,
+                )
 
         if final_output is None:
             # Inner-loop budget exhausted before final - treat as ambiguous.
@@ -193,7 +230,7 @@ class ValidatorAgent(BaseAgent):
         # Apply the verdict to the underlying entities.
         if final_output.confirmed:
             metadata, protocol_error = self._validated_metadata(
-                final_output, attempts,
+                final_output, attempts, task.context,
             )
             if protocol_error:
                 return self._record_validation_error(
@@ -207,7 +244,9 @@ class ValidatorAgent(BaseAgent):
                 vuln_id=vuln_id,
                 payload=target_poc.payload,
                 request_summary=f"VALIDATED: {target_poc.request_summary}"[:300],
-                response_excerpt=final_output.causal_signal[:500],
+                response_excerpt=str(
+                    metadata["validation_protocol"]["causal_signal"]
+                )[:500],
                 verdict="success",
                 agent_name=self.name,
                 validation_metadata=metadata,
@@ -250,11 +289,14 @@ class ValidatorAgent(BaseAgent):
             verdict="failure",
             agent_name=self.name,
             validation_metadata={
-                "validation_schema_version": 1,
+                "validation_schema_version": 2,
                 "protocol_valid": False,
-                "validator_identity": self.name,
+                "validator_identity": validator_identity(
+                    instance_id=self.validator_instance_id,
+                    version=self.VERSION,
+                ),
                 "validator_version": self.VERSION,
-                "validated_at": datetime.utcnow().isoformat(),
+                "validated_at": datetime.now(timezone.utc).isoformat(),
                 "rejection_reason": final_output.fp_reason[:500],
                 "attempts": attempts,
             },
@@ -306,10 +348,6 @@ class ValidatorAgent(BaseAgent):
         )
         if isinstance(response, dict):
             response = response.get("raw_response") or response.get("body") or ""
-        status = parsed.get("status_code")
-        if not isinstance(status, int):
-            codes = re.findall(r"(?m)^HTTP/\S+\s+(\d{3})", str(response))
-            status = int(codes[-1]) if codes else None
         request = (
             args.get("raw_request")
             or args.get("request")
@@ -318,15 +356,64 @@ class ValidatorAgent(BaseAgent):
                 sort_keys=True, default=str,
             )
         )
+        captured_at = datetime.now(timezone.utc).isoformat()
+        status_code = (
+            parsed.get("status_code")
+            if parsed.get("status_code") is not None
+            else parsed.get("status")
+        )
+        if status_code is None:
+            codes = re.findall(r"(?m)^HTTP/\S+\s+(\d{3})", str(response))
+            status_code = int(codes[-1]) if codes else None
+        if status_code is None:
+            status_code = (outcome.get("signals") or {}).get("status_code")
+        try:
+            status_code = int(status_code or 0)
+        except (TypeError, ValueError):
+            status_code = 0
+        tool = str(getattr(decision, "tool", "") or "")
+        run_id, engagement_id = self._runtime_binding(context)
+        safe_request = sanitize_text(str(request)[:4000])
+        safe_response = sanitize_text(str(response)[:5000])
+        blocked = bool(outcome.get("blocked") or parsed.get("error")
+                       or parsed.get("truncated") or parsed.get("exit_code", 0) != 0
+                       or len(str(request)) > 4000 or len(str(response)) > 5000)
+        trusted_effect = {} if blocked else derive_executor_effect(
+            tool=tool,
+            raw_result=raw,
+            signals=outcome.get("signals") or {},
+        )
+        trusted_observation = capture_observation(
+            attempt_index=index,
+            probe_kind=probe_kind,
+            tool=tool,
+            request=safe_request,
+            response=safe_response,
+            status_code=status_code,
+            identity=str(
+                parsed.get("session")
+                or args.get("session")
+                or args.get("identity")
+                or context.get("active_session")
+                or "anonymous"
+            ),
+            url=str(parsed.get("url") or args.get("url") or context.get("target_url") or ""),
+            method=str(parsed.get("method") or args.get("method") or "GET").upper(),
+            captured_at=captured_at,
+            run_id=run_id,
+            engagement_id=engagement_id,
+            validator_instance_id=self.validator_instance_id,
+            trusted_effect=trusted_effect,
+        )
         return {
             "step": index,
             "attempt_index": index,
             "probe_kind": probe_kind,
-            "tool": getattr(decision, "tool", ""),
+            "tool": tool,
             "args": json.dumps(args, sort_keys=True, default=str)[:1200],
             "description": str(getattr(decision, "reasoning", "") or "")[:500],
-            "request": str(request)[:4000],
-            "response": str(response)[:5000],
+            "request": safe_request,
+            "response": safe_response,
             "url": str(parsed.get("url") or args.get("url") or context.get("target_url") or ""),
             "method": str(parsed.get("method") or args.get("method") or "GET").upper(),
             "identity": str(
@@ -336,111 +423,67 @@ class ValidatorAgent(BaseAgent):
                 or context.get("active_session")
                 or "anonymous"
             ),
-            "status_code": status,
-            "context_id": f"probe-{index}-" + str(parsed.get("session") or args.get("session")
-                                                   or context.get("active_session") or "anonymous"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "status_code": status_code,
+            "timestamp": captured_at,
             "observation": observation[:1000],
             "signals": outcome.get("signals") or {},
-            "blocked": bool(outcome.get("blocked") or parsed.get("error")
-                            or parsed.get("truncated") or parsed.get("exit_code", 0) != 0),
+            "blocked": blocked,
+            "trusted_observation": trusted_observation,
         }
 
     def _validated_metadata(
         self,
         output: ValidationOutput,
         attempts: list[dict[str, Any]],
+        context: dict[str, Any],
     ) -> tuple[dict[str, Any], str]:
-        """Cross-check the model's verdict against probes actually executed."""
+        """Issue a receipt only for independently derived executor effects."""
         prefix = "validator_protocol_incomplete: "
         if not output.final:
             return {}, prefix + "confirmed verdict was not final"
         if output.reproducibility != "reproducible":
             return {}, prefix + "confirmed verdict was not reproducible"
-        if len(output.causal_signal.strip()) < 8:
-            return {}, prefix + "causal signal is empty or template-like"
-        if not output.validation_context:
-            return {}, prefix + "controlled/fresh validation context missing"
-        if len(output.reproduction_steps) < 2:
-            return {}, prefix + "exact reproduction steps missing"
-        if not output.proof_type or not output.proof_metadata:
-            return {}, prefix + "vulnerability-specific proof metadata missing"
-
-        actual = {int(a["attempt_index"]): a for a in attempts}
-        adjudicated: list[dict[str, Any]] = []
-        seen: set[int] = set()
-        for result in output.attempt_results:
-            index = int(result.attempt_index)
-            attempt = actual.get(index)
-            if attempt is None or index in seen:
-                return {}, prefix + "attempt result does not reference one real probe"
-            if result.probe_kind != attempt.get("probe_kind"):
-                return {}, prefix + "reported probe kind differs from executed probe"
-            if attempt.get("blocked") or result.outcome == "error":
-                return {}, prefix + "a required validation probe failed or was blocked"
-            if len(result.behavioral_signal.strip()) < 3:
-                return {}, prefix + "attempt behavioral signal missing"
-            if len(result.context_id.strip()) < 4:
-                return {}, prefix + "attempt context identifier missing"
-            if result.context_id != attempt.get("context_id"):
-                return {}, prefix + "context identifier differs from recorded probe"
-            if result.behavioral_signal.lower() not in str(attempt.get("response", "")).lower():
-                return {}, prefix + "behavioral signal is absent from the actual response"
-            seen.add(index)
-            merged = dict(attempt)
-            merged.update({
-                "outcome": result.outcome,
-                "behavioral_signal": result.behavioral_signal[:1000],
-                "context_id": result.context_id[:160],
-            })
-            adjudicated.append(merged)
-
-        positive = [
-            a for a in adjudicated
-            if a["probe_kind"] in {"replay", "fresh_context_replay"}
-            and a["outcome"] == "vulnerable_effect"
+        if any(attempt.get("blocked") for attempt in attempts[:3]):
+            return {}, prefix + "a required validation probe failed or was blocked"
+        observations = [
+            dict(attempt.get("trusted_observation") or {})
+            for attempt in attempts
+            if attempt.get("trusted_observation")
         ]
-        controls = [
-            a for a in adjudicated
-            if a["probe_kind"] == "control"
-            and a["outcome"] == "control_no_effect"
-        ]
-        if len(positive) < 2:
-            return {}, prefix + "fewer than two positive replay probes"
-        if not controls:
-            return {}, prefix + "matched negative control did not pass"
-
-        replay_results = [
-            {
-                "attempt_index": a["attempt_index"],
-                "probe_kind": a["probe_kind"],
-                "outcome": a["outcome"],
-                "behavioral_signal": a["behavioral_signal"],
-                "context_id": a["context_id"],
-                "timestamp": a["timestamp"],
-            }
-            for a in adjudicated
-        ]
+        run_id, engagement_id = self._runtime_binding(context)
+        protocol, reason = issue_protocol_receipt(
+            observations,
+            run_id=run_id,
+            engagement_id=engagement_id,
+            validator_instance_id=self.validator_instance_id,
+            validator_version=self.VERSION,
+        )
+        if protocol is None:
+            return {}, prefix + reason
         metadata = {
-            "validation_schema_version": 1,
+            "validation_schema_version": 2,
             "protocol_valid": True,
-            "validator_identity": self.name,
-            "validator_version": self.VERSION,
-            "validation_method": "two independent replays plus matched negative control",
-            "validation_context": output.validation_context,
-            "validated_at": datetime.utcnow().isoformat(),
-            "replay_count": len(positive),
-            "replay_results": replay_results,
-            "attempts": adjudicated,
-            "proof_type": output.proof_type,
-            "proof_metadata": dict(output.proof_metadata),
-            "causal_signal": output.causal_signal,
-            "reproduction_steps": list(output.reproduction_steps),
-            "oob_interactions": list(output.oob_interactions),
-            "screenshots": list(output.screenshots),
+            "validation_protocol": protocol,
             "validation_error": "",
         }
         return metadata, ""
+
+    def _runtime_binding(
+        self,
+        context: dict[str, Any],
+    ) -> tuple[str, str]:
+        target = str(context.get("target_url") or self.memory.target_url or "")
+        run_id = str(
+            context.get("run_id")
+            or os.getenv("REYNARD_RUN_ID")
+            or f"standalone:{sha256_text(target)[:16]}"
+        )
+        engagement_id = str(
+            context.get("engagement_id")
+            or os.getenv("REYNARD_ENGAGEMENT_ID")
+            or f"engagement:{sha256_text(target)[:16]}"
+        )
+        return run_id, engagement_id
 
     def _record_validation_error(
         self,
@@ -463,11 +506,14 @@ class ValidatorAgent(BaseAgent):
             verdict="failure",
             agent_name=self.name,
             validation_metadata={
-                "validation_schema_version": 1,
+                "validation_schema_version": 2,
                 "protocol_valid": False,
-                "validator_identity": self.name,
+                "validator_identity": validator_identity(
+                    instance_id=self.validator_instance_id,
+                    version=self.VERSION,
+                ),
                 "validator_version": self.VERSION,
-                "validated_at": datetime.utcnow().isoformat(),
+                "validated_at": datetime.now(timezone.utc).isoformat(),
                 "validation_error": reason[:500],
                 "attempts": list(attempts or []),
             },
@@ -522,6 +568,7 @@ class ValidatorAgent(BaseAgent):
         )
         return (
             f"{session_section}"
+            f"{render_tool_catalog('exploitation', production=bool(self.memory.get_fact('mission_production', False)))}\n"
             f"{exploit_server_section}"
             f"# POC TO VALIDATE\n"
             f"poc_id: {poc.id}\n"

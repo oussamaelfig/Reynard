@@ -8,14 +8,23 @@ from pathlib import Path
 from hacking_agent.cli.assess import _run_target_worker
 
 
-def main() -> None:
-    result_path = Path(sys.argv[1])
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1:
+        print("usage: python -m hacking_agent.cli.assess_worker <result_path>", file=sys.stderr)
+        return 2
+    result_path = Path(args[0])
     try:
-        result = _run_target_worker(json.load(sys.stdin))
+        config = json.load(sys.stdin)
+        if not isinstance(config, dict):
+            raise ValueError("worker configuration must be an object")
+        result = _run_target_worker(config)
     except Exception as exc:
-        result = {"verdict": f"error: {type(exc).__name__}: {str(exc)[:200]}", "findings": []}
+        # Exception messages can include credentials from worker input.
+        result = {"verdict": f"error: target worker failed ({type(exc).__name__})", "findings": []}
     result_path.write_text(json.dumps(result), encoding="utf-8")
+    return int(str(result.get("verdict", "")).startswith("error:"))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

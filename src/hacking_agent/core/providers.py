@@ -23,6 +23,7 @@ retry budget is exhausted.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from abc import ABC, abstractmethod
@@ -56,6 +57,35 @@ def _prompt_cache_enabled() -> bool:
 
 class ProviderError(RuntimeError):
     """Raised when an LLM call fails terminally (transport or schema)."""
+
+
+def _enforce_usage_budget() -> None:
+    """Stop new calls/retries after measured usage reaches configured caps.
+
+    Already in-flight responses may exceed a cap, and providers without usage
+    data cannot establish a hard token ceiling. This is an admission check.
+    """
+    def limit(name: str) -> float:
+        try:
+            value = float(os.getenv(name, "0") or 0)
+        except ValueError as exc:
+            raise ProviderError(f"Invalid nonnegative budget: {name}") from exc
+        if not math.isfinite(value) or value < 0:
+            raise ProviderError(f"Invalid nonnegative budget: {name}")
+        return value
+
+    tokens = limit("LLM_MAX_TOKENS_BUDGET")
+    cost = limit("LLM_MAX_COST_BUDGET")
+    meter = get_token_meter()
+    if tokens and meter.totals()["total_tokens"] >= tokens:
+        raise ProviderError("LLM token budget exhausted; no additional call or retry")
+    if cost:
+        input_price = limit("LLM_INPUT_PRICE_PER_1K")
+        output_price = limit("LLM_OUTPUT_PRICE_PER_1K")
+        if input_price == 0 and output_price == 0:
+            raise ProviderError("LLM cost budget requires configured token prices")
+        if meter.estimated_cost(input_price, output_price) >= cost:
+            raise ProviderError("LLM cost budget exhausted; no additional call or retry")
 
 
 # =============================================================================
@@ -446,6 +476,7 @@ class OpenAICompatibleProvider(LLMProvider):
         })
 
         for attempt in range(max_retries + 1):
+            _enforce_usage_budget()
             try:
                 kwargs: dict[str, Any] = dict(
                     model=self.config.model,
@@ -578,7 +609,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 "schema": schema.__name__,
                 "error": str(last_error)[:500],
             })
-            return fallback  # type: ignore[return-value]
+            return fallback
         emit("error", {
             "agent": self.config.role,
             "component": "llm",
@@ -597,6 +628,7 @@ class OpenAICompatibleProvider(LLMProvider):
             "mode": "text",
         })
         for attempt in range(max_retries + 1):
+            _enforce_usage_budget()
             try:
                 kwargs: dict[str, Any] = dict(
                     model=self.config.model,
@@ -766,6 +798,7 @@ class AnthropicProvider(LLMProvider):
         })
 
         for attempt in range(max_retries + 1):
+            _enforce_usage_budget()
             try:
                 system_param, tools_param = self._cache_prefix(system, [tool_def])
                 msg_kwargs: dict[str, Any] = dict(
@@ -852,7 +885,7 @@ class AnthropicProvider(LLMProvider):
                 "schema": schema.__name__,
                 "error": str(last_error)[:500],
             })
-            return fallback  # type: ignore[return-value]
+            return fallback
         emit("error", {
             "agent": self.config.role,
             "component": "llm",
@@ -868,6 +901,7 @@ class AnthropicProvider(LLMProvider):
             "mode": "text",
         })
         for attempt in range(max_retries + 1):
+            _enforce_usage_budget()
             try:
                 system_param, _ = self._cache_prefix(system)
                 msg_kwargs: dict[str, Any] = dict(

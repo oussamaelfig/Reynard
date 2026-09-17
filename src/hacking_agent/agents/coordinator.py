@@ -145,7 +145,7 @@ class CoordinatorAgent:
         sections: list[str] = [
             f"# TARGET\n{target_url}",
             f"\n# STATE MACHINE\n{self.sm.snapshot()}",
-            f"\n{render_tool_catalog('general')}",
+            f"\n{render_tool_catalog('general', production=bool(self.memory.get_fact('mission_production', False)))}",
             f"\n{kg_context}",
             f"\n{self.evidence.summarize()}",
         ]

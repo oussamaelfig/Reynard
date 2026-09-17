@@ -59,12 +59,20 @@ execution, vulnerability discovery, or safe removal of unobserved tools.
 python scripts/quality_metrics.py --check
 ```
 
-This command reuses the strict reportability tests' positive SQL boolean-oracle
-fixture, then evaluates a small labeled corpus of valid and invalid stored
-evidence. Rejected cases include missing controls, incomplete or uncorrelated
-transcripts, self-validation, integrity tampering, mismatched projections,
-unsupported classes, reflection without execution, one-off latency, and DNS-only
-callbacks.
+This command evaluates 18 stored records using the v2 reportability fixtures:
+two positive synthetic signed SQL/browser records and 16 negative records.
+The synthetic executor mints the positive receipts; no actual detector or browser
+runs. The standalone command uses a temporary authority/artifact directory and
+restores the operator's environment afterward, so fixture receipts are not
+signed with the operator's key.
+
+Negative cases cover bare confidence/verified flags, missing receipts, legacy
+schemas, validator failures, changed projections, missing controls/transcripts,
+reused context claims, substituted proof metadata, mismatched run/key bindings,
+and removed artifact manifests. Mutation occurs only after fixture finalization;
+the helper cannot repair or re-attest corrupted records. Most tampering cases
+fail integrity before semantic proof checks, so these results do not establish
+that a real detector rejects reflection, latency noise, or stale callbacks.
 
 The JSON includes per-fixture decisions, the confusion matrix, and each metric's
 numerator and denominator:
@@ -83,8 +91,8 @@ fixture names and nonboolean labels are rejected. An empty corpus cannot pass.
 rejection, or evaluation error. This guards against reducing fixture false
 positives by rejecting everything.
 
-The corpus tests the **stored-evidence acceptance policy only**. Its single
-positive class does not establish coverage of all vulnerability classes. It does
+The corpus tests the **stored-evidence acceptance policy only**. Its two
+synthetic positive forms do not establish detector coverage. It does
 not measure agent discovery, actual validator replay execution, tool execution,
 or real-world false positives. The fixtures are constructed regression cases,
 not an independent assessment corpus or evidence of competitor performance.

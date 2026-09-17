@@ -158,7 +158,7 @@ class JobManager:
         try:
             from hacking_agent.harness.submission import sanitize_report_json
             raw = json.loads(path.read_text(encoding="utf-8"))
-            safe = sanitize_report_json(raw)
+            safe = sanitize_report_json(raw, expected_run_id=run_id)
             count = int(safe.get("confirmed_count", 0) or 0)
             suppressed = int(safe.get("suppressed_count", 0) or 0)
             return count, count, max(0, suppressed)

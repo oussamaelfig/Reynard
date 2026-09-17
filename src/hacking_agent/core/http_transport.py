@@ -47,9 +47,10 @@ def request(guard: ScopeGuard, session: AuthSession, *, url: str, method: str,
         raise ScopeViolation("Routing/framing header overrides are not supported in production")
     request_headers = dict(headers)
     request_data = data
+    session.http_cookies_loaded = True
     # A new client shares only this identity's cookie jar. It does not inherit
     # ambient proxy settings, credentials, or cookies from another identity.
-    with httpx.Client(cookies=session.http_cookies, verify=not insecure,
+    with httpx.Client(verify=not insecure,
                       trust_env=False, timeout=30.0, follow_redirects=False) as client:
         for hop in range(MAX_REDIRECTS + 1):
             if hop:
@@ -59,8 +60,18 @@ def request(guard: ScopeGuard, session: AuthSession, *, url: str, method: str,
                 guard.validate_window()
                 if not guard.is_in_scope(url):
                     raise ScopeViolation("HTTP destination changed after authorization")
-            kwargs = {"headers": request_headers, "content": request_data}
-            with client.stream(method, url, **kwargs) as response:
+            # HTTPX's request cookie merge creates a new liberal CookieJar and
+            # loses our host-only policy. Apply this identity's policy directly
+            # and prevent the client's automatic jar from adding extra cookies.
+            client.cookies.clear()
+            outgoing_headers = dict(request_headers)
+            if not any(key.lower() == "cookie" for key in outgoing_headers):
+                cookie_request = httpx.Request(method, url)
+                httpx.Cookies(session.http_cookies).set_cookie_header(cookie_request)
+                if "cookie" in cookie_request.headers:
+                    outgoing_headers["Cookie"] = cookie_request.headers["cookie"]
+            with client.stream(method, url, headers=outgoing_headers, content=request_data) as response:
+                httpx.Cookies(session.http_cookies).extract_cookies(response)
                 chunks: list[bytes] = []
                 size = 0
                 truncated = False
@@ -91,16 +102,22 @@ def request(guard: ScopeGuard, session: AuthSession, *, url: str, method: str,
                     raise ScopeViolation("HTTP redirect limit exceeded")
                 destination = response.url.join(response.headers["location"])
                 origin = lambda u: (u.scheme, u.host, u.port)
-                if origin(destination) != origin(response.url):
+                cross_origin = origin(destination) != origin(response.url)
+                if cross_origin:
                     # Custom headers may carry secrets too; forward only a
                     # small set of representation preferences to a new origin.
                     request_headers = {k: v for k, v in request_headers.items()
                                        if k.lower() in {"accept", "accept-language", "user-agent"}}
-                if response.status_code == 303 and method != "HEAD" or (
+                if (response.status_code == 303 and method != "HEAD") or (
                     response.status_code in {301, 302} and method == "POST"
                 ):
                     method, request_data = "GET", None
                     request_headers = {k: v for k, v in request_headers.items()
                                        if k.lower() != "content-type"}
+                if cross_origin and request_data:
+                    raise ScopeViolation(
+                        "Cross-origin redirect would forward a request body; "
+                        "send a separately authorized request without inherited credentials"
+                    )
                 url = str(destination)
     raise RuntimeError("Unreachable redirect state")

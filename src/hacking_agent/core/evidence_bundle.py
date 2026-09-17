@@ -142,12 +142,17 @@ class SanitizedExchange:
     source: str = ""
     context_id: str = ""
     attempt_index: int = 0
+    capture_id: str = ""
+    request_sha256: str = ""
+    response_sha256: str = ""
 
     @classmethod
     def build(cls, *, label: str = "test", identity: str = "", method: str = "GET",
               url: str = "", request: str = "", response: str = "",
               status_code: Optional[int] = None, notes: str = "",
               source: str = "", context_id: str = "", attempt_index: int = 0,
+              capture_id: str = "", request_sha256: str = "",
+              response_sha256: str = "",
               extra_secrets: tuple[str, ...] = ()) -> "SanitizedExchange":
         return cls(
             label=label, identity=identity, method=method, url=url,
@@ -155,6 +160,8 @@ class SanitizedExchange:
             response=sanitize_text(response, extra_secrets),
             status_code=status_code, notes=notes, source=source,
             context_id=context_id, attempt_index=attempt_index,
+            capture_id=capture_id, request_sha256=request_sha256,
+            response_sha256=response_sha256,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -164,6 +171,9 @@ class SanitizedExchange:
             "status_code": self.status_code, "timestamp": self.timestamp,
             "notes": self.notes, "source": self.source,
             "context_id": self.context_id, "attempt_index": self.attempt_index,
+            "capture_id": self.capture_id,
+            "request_sha256": self.request_sha256,
+            "response_sha256": self.response_sha256,
         }
 
     @classmethod
@@ -174,7 +184,10 @@ class SanitizedExchange:
                    status_code=d.get("status_code"),
                    timestamp=d.get("timestamp") or _now(), notes=d.get("notes", ""),
                    source=d.get("source", ""), context_id=d.get("context_id", ""),
-                   attempt_index=int(d.get("attempt_index", 0) or 0))
+                   attempt_index=int(d.get("attempt_index", 0) or 0),
+                   capture_id=d.get("capture_id", ""),
+                   request_sha256=d.get("request_sha256", ""),
+                   response_sha256=d.get("response_sha256", ""))
 
 
 @dataclass
@@ -225,7 +238,7 @@ class EvidenceBundle:
     # intentionally non-reportable.
     validation_schema_version: int = 0
     discovered_by: str = ""
-    validator_identity: str = ""
+    validator_identity: dict[str, Any] = field(default_factory=dict)
     validator_version: str = ""
     validation_method: str = ""
     validation_context: str = ""
@@ -234,14 +247,19 @@ class EvidenceBundle:
     replay_results: list[dict[str, Any]] = field(default_factory=list)
     proof_type: str = ""
     proof_metadata: dict[str, Any] = field(default_factory=dict)
+    validation_protocol: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    customer_projection: dict[str, Any] = field(default_factory=dict)
     validation_error: str = ""
     integrity_sha256: str = ""
+    authenticity: dict[str, Any] = field(default_factory=dict)
     suppression_reason_code: str = ""
     suppression_rationale: str = ""
 
     def _touch(self) -> None:
         self.updated_at = _now()
         self.integrity_sha256 = ""
+        self.authenticity = {}
 
     # ---- mutation ----
     def add_test(self, exchange: SanitizedExchange) -> None:
@@ -283,7 +301,11 @@ class EvidenceBundle:
         return self.is_verified
 
     def seal(self, *, extra_secrets: tuple[str, ...] = ()) -> str:
-        """Sanitize and seal the complete bundle for boundary re-validation."""
+        """Sanitize and digest the bundle.
+
+        A digest detects accidental changes but is not authentic.  Only
+        :meth:`attest` creates the control-plane HMAC required for reporting.
+        """
         self.title = sanitize_text(self.title, extra_secrets)
         self.vuln_type = sanitize_text(self.vuln_type, extra_secrets)
         self.target = sanitize_text(self.target, extra_secrets)
@@ -338,11 +360,22 @@ class EvidenceBundle:
         self.proof_metadata = sanitize_structure(
             self.proof_metadata, extra_secrets,
         )
+        self.customer_projection = sanitize_structure(
+            self.customer_projection, extra_secrets,
+        )
         self.updated_at = _now()
         self.integrity_sha256 = ""
+        self.authenticity = {}
         from hacking_agent.core.finding_validation import evidence_integrity_digest
         self.integrity_sha256 = evidence_integrity_digest(self)
         return self.integrity_sha256
+
+    def attest(self, *, extra_secrets: tuple[str, ...] = ()) -> str:
+        """Create a control-plane authenticity receipt for a trusted protocol."""
+        self.seal(extra_secrets=extra_secrets)
+        from hacking_agent.core.validation_provenance import attest_bundle
+        self.authenticity = attest_bundle(self)
+        return str(self.authenticity.get("signature") or "")
 
     def apply_reportability(self) -> bool:
         """Evaluate and retain a concise internal suppression diagnostic."""
@@ -433,8 +466,12 @@ class EvidenceBundle:
             "replay_results": list(self.replay_results),
             "proof_type": self.proof_type,
             "proof_metadata": dict(self.proof_metadata),
+            "validation_protocol": dict(self.validation_protocol),
+            "artifacts": list(self.artifacts),
+            "customer_projection": dict(self.customer_projection),
             "validation_error": self.validation_error,
             "integrity_sha256": self.integrity_sha256,
+            "authenticity": dict(self.authenticity),
             "suppression_reason_code": self.suppression_reason_code,
             "suppression_rationale": self.suppression_rationale,
         }
@@ -458,7 +495,10 @@ class EvidenceBundle:
                 d.get("validation_schema_version", 0) or 0
             ),
             discovered_by=d.get("discovered_by", ""),
-            validator_identity=d.get("validator_identity", ""),
+            validator_identity=(
+                dict(d.get("validator_identity") or {})
+                if isinstance(d.get("validator_identity"), dict) else {}
+            ),
             validator_version=d.get("validator_version", ""),
             validation_method=d.get("validation_method", ""),
             validation_context=d.get("validation_context", ""),
@@ -467,8 +507,12 @@ class EvidenceBundle:
             replay_results=list(d.get("replay_results") or []),
             proof_type=d.get("proof_type", ""),
             proof_metadata=dict(d.get("proof_metadata") or {}),
+            validation_protocol=dict(d.get("validation_protocol") or {}),
+            artifacts=list(d.get("artifacts") or []),
+            customer_projection=dict(d.get("customer_projection") or {}),
             validation_error=d.get("validation_error", ""),
             integrity_sha256=d.get("integrity_sha256", ""),
+            authenticity=dict(d.get("authenticity") or {}),
             suppression_reason_code=d.get("suppression_reason_code", ""),
             suppression_rationale=d.get("suppression_rationale", ""),
         )
@@ -617,40 +661,68 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
         dict(getattr(validator_record, "validation_metadata", {}) or {})
         if validator_record is not None else {}
     )
-    protocol_valid = bool(validation_meta.get("protocol_valid"))
+    validation_protocol = dict(
+        validation_meta.get("validation_protocol") or {}
+    )
+    from hacking_agent.core.validation_provenance import (
+        EXECUTOR_SOURCE,
+        verify_protocol,
+    )
+    protocol_valid, _ = verify_protocol(validation_protocol)
     strict_status = verification_status
     if strict_status == V_VERIFIED and not protocol_valid:
         strict_status = V_UNVERIFIED
 
+    protocol_identity = (
+        dict(validation_protocol.get("validator_identity") or {})
+        if protocol_valid else {}
+    )
     bundle = EvidenceBundle(
         id="", vuln_id=vuln_id, vuln_type=vuln_type, title=title or vuln_type,
         severity=severity, target=target, endpoint=endpoint, identity=identity,
         verification_status=strict_status,
         discovered_by=discovered_by,
-        validation_schema_version=int(
-            validation_meta.get("validation_schema_version", 0) or 0
+        validation_schema_version=(
+            2 if protocol_valid
+            else int(validation_meta.get("validation_schema_version", 0) or 0)
         ),
-        validator_identity=str(validation_meta.get("validator_identity") or ""),
-        validator_version=str(validation_meta.get("validator_version") or ""),
-        validation_method=str(validation_meta.get("validation_method") or ""),
-        validation_context=str(validation_meta.get("validation_context") or ""),
-        validated_at=str(validation_meta.get("validated_at") or ""),
-        replay_count=int(validation_meta.get("replay_count", 0) or 0),
-        replay_results=list(validation_meta.get("replay_results") or []),
-        proof_type=str(validation_meta.get("proof_type") or ""),
-        proof_metadata=dict(validation_meta.get("proof_metadata") or {}),
+        validator_identity=protocol_identity,
+        validator_version=str(protocol_identity.get("version") or ""),
+        validation_method=str(
+            validation_protocol.get("validation_method") or ""
+        ),
+        validation_context=str(
+            validation_protocol.get("validation_context") or ""
+        ),
+        validated_at=str(validation_protocol.get("validated_at") or ""),
+        replay_count=int(validation_protocol.get("replay_count", 0) or 0),
+        replay_results=list(
+            validation_protocol.get("replay_results") or []
+        ),
+        proof_type=str(validation_protocol.get("proof_type") or ""),
+        proof_metadata=dict(
+            validation_protocol.get("proof_metadata") or {}
+        ),
+        validation_protocol=validation_protocol,
+        artifacts=list(validation_protocol.get("artifacts") or []),
         validation_error=str(validation_meta.get("validation_error") or ""),
-        causal_signal=str(validation_meta.get("causal_signal") or ""),
-        verified_by=("validator" if protocol_valid else ""),
+        causal_signal=str(validation_protocol.get("causal_signal") or ""),
+        verified_by=(protocol_identity.get("role", "") if protocol_valid else ""),
     )
 
-    attempts = list(validation_meta.get("attempts") or [])
+    attempts = list(validation_protocol.get("observations") or [])
+    replay_outcomes = {
+        int(item.get("attempt_index", 0) or 0): str(item.get("outcome") or "")
+        for item in (validation_protocol.get("replay_results") or [])
+        if isinstance(item, dict)
+    }
     if attempts:
         for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
             probe_kind = str(attempt.get("probe_kind") or "")
-            outcome = str(attempt.get("outcome") or "")
+            attempt_index = int(attempt.get("attempt_index", 0) or 0)
+            outcome = replay_outcomes.get(attempt_index, "")
             exchange = SanitizedExchange.build(
                 label=probe_kind or "replay",
                 identity=str(attempt.get("identity") or identity),
@@ -659,40 +731,28 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
                 request=str(attempt.get("request") or ""),
                 response=str(attempt.get("response") or ""),
                 status_code=attempt.get("status_code"),
-                notes=str(attempt.get("behavioral_signal") or ""),
-                source="validator",
+                notes="",
+                source=EXECUTOR_SOURCE,
                 context_id=str(attempt.get("context_id") or ""),
-                attempt_index=int(attempt.get("attempt_index", 0) or 0),
+                attempt_index=attempt_index,
+                capture_id=str(attempt.get("capture_id") or ""),
+                request_sha256=str(attempt.get("request_sha256") or ""),
+                response_sha256=str(attempt.get("response_sha256") or ""),
                 extra_secrets=extra_secrets,
             )
-            if attempt.get("timestamp"):
-                exchange.timestamp = str(attempt["timestamp"])
+            if attempt.get("captured_at"):
+                exchange.timestamp = str(attempt["captured_at"])
             if probe_kind == "control":
                 bundle.add_control(ControlTest(
-                    description=(
-                        str(attempt.get("description") or "")
-                        or "Matched negative control executed by Validator"
-                    ),
+                    description="Matched negative control captured by trusted executor",
                     exchange=exchange,
-                    result=(
-                        str(attempt.get("behavioral_signal") or "")
-                        or outcome
-                    ),
+                    result=f"{outcome} in {exchange.capture_id}",
                 ))
             elif (
                 probe_kind in {"replay", "fresh_context_replay", "vary"}
                 and outcome == "vulnerable_effect"
             ):
                 bundle.add_test(exchange)
-
-        bundle.oob_interactions = [
-            sanitize_text(str(item), extra_secrets)
-            for item in (validation_meta.get("oob_interactions") or [])
-        ]
-        bundle.screenshots = [
-            sanitize_text(str(item), extra_secrets)
-            for item in (validation_meta.get("screenshots") or [])
-        ]
 
     first_success: Optional[Any] = None
     for poc in pocs or []:
@@ -724,7 +784,7 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
             else:
                 bundle.add_test(exchange)
 
-    if first_success is not None:
+    if first_success is not None and not protocol_valid:
         payload = getattr(first_success, "payload", "")
         request = getattr(first_success, "request_summary", "") or payload
         bundle.reproduction_steps = [
@@ -736,14 +796,11 @@ def build_bundle_from_pocs(vuln_id: str, pocs: list[Any], *,
             "Run the matched negative control and confirm that the exploit "
             "effect is absent.",
         ]
-    if validation_meta.get("reproduction_steps"):
+    if protocol_valid:
         bundle.reproduction_steps = [
-            str(step) for step in validation_meta["reproduction_steps"]
+            str(step)
+            for step in (validation_protocol.get("reproduction_steps") or [])
         ]
-    if not bundle.causal_signal and validator_record is not None:
-        bundle.causal_signal = str(
-            getattr(validator_record, "response_excerpt", "") or ""
-        )
     bundle.proof_metadata = sanitize_structure(
         bundle.proof_metadata, extra_secrets,
     )

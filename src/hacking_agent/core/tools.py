@@ -28,7 +28,7 @@ import shlex
 import socket
 import ssl
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from hacking_agent.core import browser as browser_mod
@@ -49,7 +49,6 @@ from hacking_agent.integrations import shodan as shodan_mod
 # Configuration
 # ---------------------------------------------------------------------------
 CONTAINER_NAME = os.getenv("CONTAINER_NAME", "reynard-kali")
-COOKIE_JAR_PATH = "/data/cookies/cookies.txt"  # legacy default
 DEFAULT_TIMEOUT = 120  # seconds for shell commands
 MAX_OUTPUT_LENGTH = 50000  # truncate very long outputs
 
@@ -234,9 +233,9 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "http_request",
             "description": (
-                "Make an HTTP request using curl with a persistent cookie jar. "
-                "Cookies are automatically saved/loaded between requests at "
-                f"{COOKIE_JAR_PATH}. Supports all HTTP methods, custom headers, "
+                "Make an HTTP request with a persistent per-session cookie jar. "
+                "Production engagements use the scoped HTTP transport; benchmarks use curl. "
+                "Supports HTTP methods, custom headers, "
                 "request bodies, and follows redirects. Use this for web "
                 "application testing — login flows, CSRF, session management, etc."
             ),
@@ -272,7 +271,7 @@ TOOL_SCHEMAS = [
                     },
                     "insecure": {
                         "type": "boolean",
-                        "description": "Skip SSL certificate verification (default: true).",
+                        "description": "Skip SSL certificate verification (default: false).",
                     },
                     "session": {
                         "type": "string",
@@ -2381,6 +2380,7 @@ def _raw_http1_exchange(host: str, port: int, https: bool,
     started = time.monotonic()
     try:
         raw_sock = socket.create_connection((host, port), timeout=max(timeout, 1.0))
+        conn: socket.socket
         if https:
             ctx = ssl.create_default_context()
             ctx.set_alpn_protocols(["http/1.1"])
@@ -2646,8 +2646,7 @@ def write_file(path: str, content: str) -> str:
     dir_path = os.path.dirname(path) or "."
     _docker_exec(f"mkdir -p -- {shlex.quote(dir_path)}")
 
-    # Use heredoc to write content (handles special characters)
-    # Escape single quotes in content for safe shell transmission
+    # Path and content remain separate quoted shell arguments.
     result = _docker_exec(f"printf '%s' {shlex.quote(content)} > {shlex.quote(path)}")
 
     if result["exit_code"] != 0:
@@ -2686,7 +2685,10 @@ def http_request(
     session: str | None = None,
 ) -> str:
     """
-    Make an HTTP request using curl inside the container with persistent cookies.
+    Make an HTTP request with persistent cookies for the selected identity.
+
+    Attached engagements use the native scoped transport; benchmark/legacy
+    calls use curl inside the container.
 
     The `session` parameter selects which named auth session to use. If None,
     the registry's currently active session is used (default = legacy single
@@ -2696,10 +2698,9 @@ def http_request(
     jar = sess.cookie_jar_path()
 
     # Merge static session headers with per-request headers (per-request wins).
-    merged_headers: dict[str, str] = {}
-    merged_headers.update(sess.static_headers or {})
+    merged_headers = {str(key).lower(): str(value) for key, value in (sess.static_headers or {}).items()}
     if headers:
-        merged_headers.update(headers)
+        merged_headers.update({str(key).lower(): str(value) for key, value in headers.items()})
 
     from hacking_agent.core.http_transport import active_guard, request
     guard = active_guard()
@@ -2937,7 +2938,7 @@ def capture_baseline(name: str, url: str, method: str = "GET",
     """Send a request and store its response as a named baseline."""
     raw = http_request(
         url=url, method=method, headers=headers, data=data,
-        follow_redirects=True, insecure=True, session=session,
+        follow_redirects=True, insecure=False, session=session,
     )
     try:
         parsed = json.loads(raw)
@@ -2960,7 +2961,7 @@ def diff_against_baseline(baseline_name: str, url: str, method: str = "GET",
     """Send a request and compare its response to the named baseline."""
     raw = http_request(
         url=url, method=method, headers=headers, data=data,
-        follow_redirects=True, insecure=True, session=session,
+        follow_redirects=True, insecure=False, session=session,
     )
     try:
         parsed = json.loads(raw)
@@ -4336,7 +4337,7 @@ def flag_hunter(text: str = "", file_path: str = "",
 # =============================================================================
 
 # Maps tool names to their execution functions
-TOOL_FUNCTIONS: dict[str, callable] = {
+TOOL_FUNCTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
     "run_shell": lambda args: run_shell(
         command=args["command"],
         timeout=args.get("timeout", DEFAULT_TIMEOUT),

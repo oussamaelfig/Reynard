@@ -37,7 +37,8 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -56,6 +57,7 @@ from hacking_agent.agents import (
     ReporterAgent,
     ValidatorAgent,
 )
+from hacking_agent.agents.reporter import finalize_bundle_for_reporting
 from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
@@ -95,6 +97,7 @@ from hacking_agent.core.subagents import BoundedSubagentScheduler, SubagentPolic
 from hacking_agent.core import sessions as session_mod
 from hacking_agent.core import lab_intel as lab_intel_mod
 from hacking_agent.core.tool_selector import render_recommendations
+from hacking_agent.core.validation_provenance import sha256_text
 from hacking_agent.integrations import burp as burp_mod
 from hacking_agent.integrations import caido as caido_mod
 from hacking_agent.integrations import caido_local as caido_local_mod
@@ -190,13 +193,13 @@ class SessionLogger:
     def __init__(self):
         ensure_runtime_dirs()
         log_dir = LOG_DIR
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self.path = log_dir / f"orchestrator_{ts}.log"
         self._file = open(self.path, "w", encoding="utf-8")
         self.log(f"Session started at {ts}")
 
     def log(self, msg: str) -> None:
-        ts = datetime.utcnow().strftime("%H:%M:%S")
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
         self._file.write(line + "\n")
         self._file.flush()
@@ -350,10 +353,22 @@ class Orchestrator:
         exploit_server_url: str = "",
         mission_mode: str | None = None,
         engagement: Engagement | None = None,
+        engagement_id: str = "",
+        run_id: str = "",
     ):
         self.target_url = target_url
         self.objective = objective
         self.exploit_server_url = (exploit_server_url or "").strip()
+        self.validation_run_id = (
+            os.getenv("REYNARD_RUN_ID")
+            or run_id
+            or f"standalone-run:{uuid.uuid4().hex}"
+        )
+        self.validation_engagement_id = (
+            os.getenv("REYNARD_ENGAGEMENT_ID")
+            or engagement_id
+            or f"engagement:{sha256_text(target_url)[:16]}"
+        )
 
         # ---- mission mode: benchmark (labs) vs production (real assessment) --
         # Lab-specific behaviour (PortSwigger profile seeding, "solved" banner
@@ -362,7 +377,8 @@ class Orchestrator:
         # lab host implies benchmark; everything else defaults to production so
         # the default decision path carries no lab assumptions.
         self.mission = Mission.detect(
-            target_url, objective, explicit=mission_mode, lab_profile=lab_profile
+            target_url, objective, explicit=mission_mode, lab_profile=lab_profile,
+            engagement_attached=engagement is not None,
         )
         # In production, drop any lab profile so the decision path never routes
         # through lab-specific seeding/fast-paths. Benchmark keeps it enriched.
@@ -382,7 +398,7 @@ class Orchestrator:
         self.logger = SessionLogger()
         scope_domains = list(scope_domains or [])
         exploit_host = ""
-        if self.exploit_server_url:
+        if self.exploit_server_url and self.mission.is_benchmark:
             exploit_host = (urlparse(self.exploit_server_url).hostname or "").lower()
             if exploit_host and exploit_host not in scope_domains:
                 scope_domains.append(exploit_host)
@@ -2588,7 +2604,14 @@ class Orchestrator:
                 existing = self.bundles.by_vuln(vuln_id)
                 if existing:
                     bundle.id = existing[-1].id
+                else:
+                    bundle.id = f"bundle:{vuln_id}"
                 bundle.finding_id = vuln_id
+                finalize_bundle_for_reporting(
+                    bundle,
+                    parameter=parameter,
+                    extra_secrets=secrets,
+                )
                 self.bundles.add(bundle)
                 decision = evaluate_reportability(evidence_bundle=bundle)
                 attrs["reportability_reason_code"] = decision.reason_code
@@ -2689,6 +2712,8 @@ class Orchestrator:
                 "active_session": active_session,
                 "session_authenticated": session_authenticated,
                 "credential_hint": self.memory.get_fact("credential_hint", ""),
+                "run_id": self.validation_run_id,
+                "engagement_id": self.validation_engagement_id,
             },
         )
         try:

@@ -1,336 +1,377 @@
-<div align="center">
-
-```
-██████╗ ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ██████╗
-██╔══██╗██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔══██╗
-██████╔╝█████╗   ╚████╔╝ ██╔██╗ ██║███████║██████╔╝██║  ██║
-██╔══██╗██╔══╝    ╚██╔╝  ██║╚██╗██║██╔══██║██╔══██╗██║  ██║
-██║  ██║███████╗   ██║   ██║ ╚████║██║  ██║██║  ██║██████╔╝
-╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
-```
-
 # Reynard
 
-**Autonomous web security researcher for authorized pentests, bug bounties, and CTF/lab benchmarks.**
+**Multi-agent security research with explicit scope, bounded execution, and evidence-backed reports.**
 
-Multi-agent LLM reasoning · persistent attack surface · structured recon · authenticated differential testing · evidence-gated reporting · a local web console with copy-paste bug-bounty submissions.
+Reynard is a Python engine for authorized pentests, bug-bounty research, and
+isolated CTF/lab work. Specialist agents investigate candidates; a separate
+validator and deterministic export policy decide what can become a finding.
 
-<br/>
+[Quickstart](#quickstart) · [Architecture](#architecture) · [Validation](#how-a-candidate-becomes-a-finding) · [Development](#development-and-testing) · [Security review](docs/security-review.md)
 
-[![Version](https://img.shields.io/badge/version-3.0.0-0ea5e9?style=for-the-badge)](./pyproject.toml)
-[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](./pyproject.toml)
-[![Docker](https://img.shields.io/badge/runtime-Kali%20Linux-557C94?style=for-the-badge&logo=kalilinux&logoColor=white)](./Dockerfile)
-[![Use](https://img.shields.io/badge/use-authorized%20only-ef4444?style=for-the-badge)](#scope--safety)
+> **Current maturity:** the authorization and evidence boundaries are stronger
+> than the breadth of trusted detection adapters. Many tool capabilities are
+> available only in benchmark mode, and unsupported proof forms are suppressed.
+> A passing test suite is not evidence of complete vulnerability coverage or
+> superiority to another product.
 
-</div>
+## Quickstart
 
-> **Authorized use only.** Run Reynard against systems you own, intentionally vulnerable labs, CTF infrastructure, or targets covered by explicit written authorization (e.g. an in-scope bug-bounty program). You are responsible for every target, technique, and tool invocation.
-
----
-
-## What it is
-
-Reynard is a **structured multi-agent penetration engine**, not a script runner with an LLM bolted on. A coordinator routes specialist agents through one research loop:
-
-> understand scope → map attack surface → identify interesting behavior → hypothesize → test → learn → pivot/chain → **independently verify** → report
-
-| Layer | What you get |
-| --- | --- |
-| **Agents** | Coordinator · Recon · Analyst · Exploitation · Validator · Reporter · Pivot |
-| **Runtime** | Kali container with scanners + headless Chromium; every tool call gated by `ScopeGuard` |
-| **Attack surface** | Persistent, scope-annotated map (domains, hosts, URLs, APIs, params, JS, identities, roles…) with provenance + confidence |
-| **Memory** | Knowledge graph + SQLite cross-run store + methodology playbooks via RAG |
-| **Proof** | PoC evidence store + validator replay; reports are generated from evidence, not model claims |
-| **Console** | Local web harness: submit a target/scope, watch live model reasoning, export reports and bug-bounty submissions |
-
-Two mission modes: **`production`** (default — real assessments, evidence-gated, no lab shortcuts) and **`benchmark`** (PortSwigger/CTF labs).
-
----
-
-## How to run
-
-### Prerequisites
-
-- **Python 3.10+**
-- **Docker** (Docker Desktop on macOS/Windows) — the agents execute tools inside a `reynard-kali` container
-- An **LLM API key** (DeepSeek, OpenAI, Anthropic, or any OpenAI-compatible gateway)
-
-### 1. Configure your key
+Python **3.10+** is required. Local tests and offline checks need neither an LLM
+key nor a running Kali container.
 
 ```bash
-cp .env.example .env
+python -m venv .venv
+# macOS / Linux:
+source .venv/bin/activate
+# Windows PowerShell:
+# .\.venv\Scripts\Activate.ps1
+
+python -m pip install -e ".[dev,harness]"
+python -m pytest -q
+python scripts/audit_tools.py --check
+python scripts/quality_metrics.py --check
 ```
 
-Edit `.env` and set a provider (DeepSeek example):
+For engine-only installation, use `python -m pip install -e .`. Optional extras
+are `harness` (web console), `rag` (local embeddings), and `external` (Browser
+Use). They do not expand an engagement's authorization.
+
+### Configure a research run
+
+Copy [`.env.example`](.env.example) to `.env` and configure a provider:
 
 ```env
 LLM_DEFAULT_PROVIDER=deepseek
 LLM_DEFAULT_MODEL=deepseek-chat
-DEEPSEEK_API_KEY=sk-your-key
+DEEPSEEK_API_KEY=your-provider-key
 ```
 
-<details><summary>Other providers</summary>
+OpenAI, Anthropic, Qwen, and OpenAI-compatible gateways are also supported.
+Per-role settings use names such as `LLM_RECON_MODEL`,
+`LLM_VALIDATOR_PROVIDER`, and `LLM_PIVOT_MODEL`. Choose models available through
+your provider; the example configuration is not a performance recommendation.
 
-```env
-# OpenAI-compatible gateway
-LLM_DEFAULT_PROVIDER=openai-compatible
-LLM_DEFAULT_MODEL=your-model
-LLM_DEFAULT_BASE_URL=https://your-gateway/v1
-LLM_DEFAULT_API_KEY=sk-your-key
+Create a scope file for a local service you control, for example `scope.yaml`:
+
+```yaml
+engagement:
+  engagement_name: Local application review
+  authorized_url_prefixes:
+    - http://127.0.0.1:8080/
+  out_of_scope: []
+  max_requests_per_second: 2
+  max_total_requests: 200
+  allow_destructive: false
 ```
 
-`openai` / `gpt` → `OPENAI_API_KEY`, `anthropic` / `claude` → `ANTHROPIC_API_KEY`, `qwen` / `dashscope` → `QWEN_API_KEY`. Per-role overrides exist for every agent (`RECON_*`, `EXPLOITATION_*`, …); see [`.env.example`](./.env.example).
-
-</details>
-
-### 2. Install
+Validate it first. `--dry-run` checks the configuration and writes an empty
+report; it does not test the target.
 
 ```bash
-python -m venv venv
-source venv/bin/activate                 # Windows: .\venv\Scripts\Activate.ps1
-pip install -e ".[harness]"              # base engine + the web console
-# optional extras:  pip install -e ".[rag]"   (better embeddings)   /   ".[external]"   (Browser Use)
+reynard-assess --engagement scope.yaml --target http://127.0.0.1:8080/ --dry-run --out reports/local
 ```
 
-### 3. Start the Kali runtime
+For authorized execution, start the configured runtime and omit `--dry-run`:
 
 ```bash
-docker compose build      # first build is large (Kali + tools + Chromium)
+docker compose build
 docker compose up -d
-docker ps --filter "name=reynard-kali"
+reynard-assess --engagement scope.yaml --target http://127.0.0.1:8080/ --out reports/local
 ```
 
-### 4. Run — pick one
+Docker Desktop host-network behavior varies by configuration. Confirm how the
+container reaches your local service. The supplied Compose configuration grants
+broad capabilities; use a dedicated environment and read [Security and scope](#security-and-scope).
 
-**A) Web console (recommended)** — a self-serve dashboard: submit a target + scope, watch live reasoning, export reports and submissions.
+## Architecture
+
+```mermaid
+flowchart TD
+    A["CLI / local web console"] --> B["Engagement + target authorization"]
+    B --> C["Orchestrator: hypotheses, budgets, stalls"]
+    C --> D["Bounded independent subagents"]
+    C --> E["Recon / analyst / exploitation"]
+    D --> F["Shared knowledge + attack surface"]
+    E --> G["Tool executor + scope guard"]
+    G --> H["Authorized transport / permitted tools"]
+    H --> F
+    F --> C
+    F --> I["Independent validator"]
+    I --> G
+    G --> J["Signed observations + controlled replay receipt"]
+    J --> K["Reportability policy + signed projection"]
+    K --> L["Markdown / JSON / console / submission"]
+```
+
+| Component | Responsibility |
+| --- | --- |
+| [Orchestrator](src/hacking_agent/cli/orchestrator.py) | Routes specialists, maintains the hypothesis agenda, bounds work, handles stalls and escalation. |
+| [Agents](src/hacking_agent/agents/) | Recon, analysis, exploitation, validation, coordination, and report assembly. |
+| [Typed schemas](src/hacking_agent/core/schemas.py) | Validate cross-agent tasks, results, and tool decisions. |
+| [Tool boundary](src/hacking_agent/agents/base.py) | Scope checks, budget accounting, deduplication, captured observations, and state ingestion. |
+| [Scope and transport](src/hacking_agent/core/scope.py) | Target authorization, request limits, testing windows, production capability restrictions, and redirect checks. |
+| [State](src/hacking_agent/core/attack_surface.py) | Attack-surface records with provenance; knowledge graph, PoC ledger, and SQLite durable memory support investigations. |
+| [Validation authority](src/hacking_agent/core/validation_provenance.py) | Authenticates executor captures, protocol receipts, artifact manifests, findings, and reports. |
+
+Independent bootstrap work and reasoning can run in parallel. Identity-bearing
+tool execution, shared tool state, and exploitation/validation lanes are
+serialized by policy; subagent results retain a stable order. More agents
+increase cost and coordination overhead.
+`--max-subagents` bounds bootstrap concurrency; `--no-subagents` disables it.
+See [subagent architecture](docs/subagents-architecture.md).
+
+## Modes and commands
+
+| Command | Use |
+| --- | --- |
+| `reynard-assess` | Engagement-based assessment and consolidated report; always production mode. |
+| `reynard-orchestrator` | Direct multi-agent run; use explicit `--production` or `--benchmark`. |
+| `reynard-harness` | Local web console and run lifecycle. |
+| `reynard-lab-eval --pretty` | Offline lab-routing/readiness evaluation. This is not a solve-rate measurement. |
+| `reynard` | Legacy single-agent CLI retained for compatibility; prefer the orchestrator for new workflows. |
+
+Production is the default for ordinary targets. Recognized lab hosts or an
+explicit lab profile can select benchmark mode; an attached engagement takes
+precedence and forces production.
 
 ```bash
-export REYNARD_HARNESS_TOKEN="$(openssl rand -hex 24)"   # optional; auto-generated + printed if unset
-reynard-harness                                          # serves http://127.0.0.1:8787/
+# Validate an existing engagement or local bounty-scope export.
+reynard-assess --engagement eval/engagement.sample.yaml --dry-run
+reynard-assess --bounty-scope eval/bounty_scope.sample.json --dry-run
+
+# Explicitly authorized local target; add scope only when your authorization allows it.
+reynard-orchestrator --production --no-oob --max-iterations 10 http://127.0.0.1:8080/
+
+# Inspect arguments without starting research.
+reynard-assess --help
+reynard-orchestrator --help
+reynard-lab-eval --help
 ```
 
-Open **http://127.0.0.1:8787/** and launch a run from the form. See [Starting a scan](#starting-a-scan).
+Direct production runs receive a restrictive engagement inferred from the
+declared target and scope flags, with default limits of 2 scoped requests/second
+and 500 scoped requests. Use `reynard-assess` for explicit path restrictions,
+denylists, timing windows, and client rules.
 
-> Windows / PATH note: if `reynard-harness` isn't found, run `python -m hacking_agent.harness.server` instead.
-
-**B) CLI** — for scripted / headless use:
-
-```bash
-# Bug-bounty or client assessment (scope-gated, consolidated report)
-reynard-assess --engagement eval/engagement.sample.yaml --out reports/acme
-
-# Authorized pentest with the multi-agent orchestrator
-python orchestrator.py --production --ui \
-  "Authorized pentest for https://app.example.com. Scope: app.example.com only."
-```
-
----
-
-## Starting a scan
-
-### From the web console
-
-1. Open **http://127.0.0.1:8787/** and click **New run**.
-2. Fill the drawer:
-   - **Targets** — e.g. `https://app.example.com/`
-   - **Authorized domains** — `app.example.com` (subdomains included). Use **Authorized URL prefixes** for path-scoped assets like `https://example.com/docs`.
-   - **Out of scope** — hosts to never touch (overrides the allowlist).
-   - **Objective** — free text; this drives the agents (e.g. "Focus on IDOR/BOLA across the account API").
-   - Set rate limit / iterations, then tick **"I am authorized to test this scope"** and **Launch run**.
-3. Watch the **Live** tab (streaming model reasoning + tool activity) and **Console** (raw worker log).
-4. When it finishes, read the **Report** tab (Copy / Download `.md` / Export PDF), then open **Findings** to copy a ready-to-paste **bug-bounty submission** per finding.
-
-### Headless (same backend, from a script)
-
-```bash
-TOKEN="$REYNARD_HARNESS_TOKEN"
-# launch
-curl -s -H "x-harness-token: $TOKEN" -H 'content-type: application/json' \
-  -X POST http://127.0.0.1:8787/api/runs -d '{
-    "targets": ["https://app.example.com/"],
-    "authorized_domains": ["app.example.com"],
-    "out_of_scope": ["blog.example.com"],
-    "description": "Focus on IDOR/BOLA across the account API",
-    "max_requests_per_second": 2,
-    "max_iterations": 30,
-    "authorized": true
-  }'
-# -> {"run_id":"...","status":"queued"}
-
-curl -s -H "x-harness-token: $TOKEN" http://127.0.0.1:8787/api/runs                 # list runs
-curl -N -s "http://127.0.0.1:8787/api/runs/<id>/events?token=$TOKEN"                # live SSE
-curl -s -H "x-harness-token: $TOKEN" http://127.0.0.1:8787/api/runs/<id>/report.md  # report (markdown)
-curl -s -H "x-harness-token: $TOKEN" http://127.0.0.1:8787/api/findings.md          # all submissions
-```
-
-### Pure CLI (no console)
-
-```bash
-# from a bug-bounty program scope (offline file or HackerOne handle)
-reynard-assess --bounty-scope eval/bounty_scope.sample.json --out reports/acme
-reynard-assess --bounty-scope hackerone:acme --target https://app.acme.com/
-
-# from an engagement config (authorized domains/CIDRs, rate limits, window, destructive policy)
-reynard-assess --engagement eval/engagement.sample.yaml --dry-run     # validate scope only
-reynard-assess --engagement eval/engagement.sample.yaml --out reports/acme
-
-# authenticated / IDOR testing with controlled identities
-python orchestrator.py --production --ui --auth-file auth-sessions.json \
-  "Authorized pentest for https://app.example.com. Scope: app.example.com only."
-```
-
-`auth-sessions.json`:
+For controlled identities, the orchestrator accepts `--auth-file`:
 
 ```json
 {
   "sessions": {
-    "user1": { "headers": { "Cookie": "session=USER1_COOKIE" } },
-    "user2": { "headers": { "Cookie": "session=USER2_COOKIE" } }
+    "user-a": {"headers": {"Cookie": "session=YOUR_TEST_USER_A_COOKIE"}},
+    "user-b": {"headers": {"Cookie": "session=YOUR_TEST_USER_B_COOKIE"}}
   }
 }
 ```
 
-> **Reynard refuses to run without an authorized scope.** Every request is gated by the engagement's out-of-scope denylist, rate limit, request cap, destructive-action policy, and testing window.
+Treat that file as a credential. Keep it outside version control.
 
----
+## How a candidate becomes a finding
 
-## The web console (harness)
+The customer export policy uses **reportability schema v2**:
 
-A single-operator local dashboard over the same engine — no change to the agent architecture. Each run executes in its own subprocess (isolated globals) and is serialized for the single-operator MVP.
+1. The executor records request/response observations with run, identity,
+   context, and capture bindings.
+2. A supported deterministic adapter derives an effect. Model-authored proof
+   metadata, request echoes, notes, and confidence cannot manufacture evidence.
+3. Two distinct positive captures and a separate matched negative control form
+   an authenticated validation receipt.
+4. Required artifacts must exist in the authority's artifact store and match
+   their signed manifests.
+5. The evidence, full customer-facing finding projection, and report are
+   authenticated. JSON, Markdown, API, aggregate counts, and submission exports
+   recheck the same policy.
 
-- **New Run drawer** — target, scope (domains / CIDRs / URL prefixes), out-of-scope, objective, rate limits, and an explicit authorization ack.
-- **Live** — model reasoning streamed and coalesced into readable "thinking"/"output" blocks, plus tool/finding events.
-- **Console** — the raw worker log (exact model output as printed).
-- **Report** — the consolidated report with **Copy Markdown / Download .md / Export PDF**.
-- **Findings** — every finding across all runs, severity-filtered, each rendered as a complete **bug-bounty submission** (title, asset, severity, CVSS vector+score, CWE, summary, steps to reproduce, PoC request/response, impact, remediation, references) with **Copy submission / Download .md / Export PDF** and **Export all**.
-- **⌘K** command palette, light/dark theme.
+Missing, inconsistent, legacy, or unsupported evidence fails closed. Candidate
+observations remain useful for investigation but are excluded from confirmed
+customer findings.
 
-Security: binds `127.0.0.1` only and requires `REYNARD_HARNESS_TOKEN` on every call; the LLM key is read from the server env and never persisted. Full details: [`docs/harness.md`](./docs/harness.md).
+**Adapter coverage is currently narrow.** The trusted executor derives browser
+dialog execution and a specific template-evaluation signal. The broader proof
+vocabulary does not imply implemented detectors for every class. Browser tools
+are restricted in production pending a scoped transport; SQL, authorization,
+timing, and independently correlated OOB adapters need further work. Synthetic
+signed fixtures verify the policy without establishing those detectors.
 
----
+On first signing use, a local key is created under
+`~/.local/state/reynard/validation/`. Back up the authority key and artifact
+store together when reports must remain verifiable. Key loss or rotation makes
+old receipts fail closed. `REYNARD_HOST_EXEC` disables receipt creation and
+verification because host-executed model tools could access the signing key.
 
-## Production research capabilities
+The signatures establish local provenance, not the correctness of every
+detector or protection from a compromised host account. Read the
+[validation trust model](docs/validation-trust.md).
 
-| Capability | What it does |
-| --- | --- |
-| **Attack Surface model** | Persistent, scope-annotated map (domains/subdomains/hosts/URLs/APIs/params/JS/source-maps/websockets/tech/identities/roles/workflows) with provenance, confidence, first/last-seen. |
-| **Structured recon** | Typed wrappers for subfinder, dnsx, httpx, naabu, katana, waybackurls, crt.sh, urlscan → parsed into surface state (never raw dumps); graceful when tools/keys are absent. |
-| **Application mapper** | `browser_map` drives authenticated Chromium and captures XHR/fetch/APIs, WebSockets, JS bundles + source maps, links and forms into an endpoint/param inventory. |
-| **Authorization matrix** | `authz_matrix_scan` replays endpoints as anon/userA/userB/admin-test-role, compares semantically, and flags IDOR/BOLA/BFLA/privilege-escalation with control-vs-test evidence. |
-| **EvidenceBundle** | Sanitized exchanges, identity, endpoint, control tests, reproduction steps, OOB, verification status — the basis for every report and submission. |
-| **Delta hunting** | Prior attack surfaces persist across runs; newly-appeared subdomains/APIs/admin panels are prioritized next run. |
-| **Bug-bounty scope import** | Load a program's scope (offline file or `hackerone:<handle>`) into an engagement behind `ScopeGuard` — never mutable by a connector/webpage/MCP response. |
-| **Tiered escalation** | Stuck runs escalate to a high-reasoning `pivot`/`strong` role before concluding failure; token/cost budgets are enforced. |
-
-Architecture deep-dive: [`docs/production-research-architecture.md`](./docs/production-research-architecture.md).
-
----
-
-## Scope & safety
-
-**In scope by design:** intentionally vulnerable labs (DVWA, Juice Shop, WebGoat), PortSwigger Academy, HTB/THM/CTF boxes you may attack, authorized pentest environments, and in-scope bug-bounty assets.
-
-**Refused / out of scope:** targets without permission; DDoS, phishing, credential stuffing, social engineering; wireless deauth or disruptive testing unless explicitly authorized; production testing without rate limits, a test window, and written approval.
-
-Follow the target program's rules of engagement (allowed test types, rate caps, excluded paths). The engagement config **is** the authorization boundary.
-
----
-
-## Configuration
-
-Authoritative, commented list: [`.env.example`](./.env.example).
-
-| Area | Key knobs |
-| --- | --- |
-| Provider / models | `LLM_DEFAULT_PROVIDER`, `LLM_DEFAULT_MODEL`, `LLM_DEFAULT_API_KEY`/`DEEPSEEK_API_KEY`, per-role `RECON_*`/`EXPLOITATION_*`/… |
-| Reasoning / budgets | `LLM_*_REASONING_EFFORT`, `LLM_*_THINKING`, `LLM_MAX_TOKENS_BUDGET`, `LLM_MAX_COST_BUDGET` |
-| Harness | `REYNARD_HARNESS_TOKEN`, `REYNARD_HARNESS_HOST`, `REYNARD_HARNESS_PORT`, `REYNARD_HARNESS_MAX_CONCURRENCY`, `REYNARD_EVENT_LOG` |
-| Runtime | `CONTAINER_NAME` (default `reynard-kali`), `REYNARD_HOST_EXEC` (run tools on the host when no container) |
-| Memory / RAG | `REYNARD_DURABLE_MEMORY`, `REYNARD_MEMORY_DB`, `REYNARD_EMBEDDINGS`, `OLLAMA_BASE_URL` |
-| Eval / assess | `ASSESS_PER_TARGET_TIMEOUT`, `EVAL_PER_LAB_TIMEOUT` |
-
----
-
-## Integrations (optional)
-
-- **Caido** — Local Bridge (replay, HTTP history, findings) + Cloud API. See [`docs/caido-local-bridge.md`](./docs/caido-local-bridge.md).
-- **Burp MCP** — raw HTTP, scanner issues, Collaborator, Repeater/Intruder when the extension is online (`BURP_MCP_URL`).
-- **Browser Use + HexStrike AI** — two optional, untrusted specialist providers behind one adapter; they return structured observations into the AttackSurface (never findings), and every action still passes through `ScopeGuard`. `pip install -e ".[external]"`; details in [`docs/external-integrations.md`](./docs/external-integrations.md).
-- **OSINT** — Shodan / Censys / urlscan and web search when keys are set; graceful fallback otherwise.
-
----
-
-## Benchmarks (PortSwigger / CTF)
-
-Reynard keeps a deterministic lab layer for regression benchmarking (labs are **not** on the production path).
+## Web console
 
 ```bash
-reynard-lab-eval --pretty                                   # offline readiness (no attack)
-reynard-lab-eval --live --config eval/labs.sample.yaml      # live solve-rate scorecard
-python orchestrator.py --benchmark --ui --no-oob \
-  "Solve this authorized PortSwigger lab: <description>. Target: https://YOUR-LAB.web-security-academy.net/"
+reynard-harness
 ```
 
-Coverage matrix: [`docs/portswigger-coverage-matrix.md`](./docs/portswigger-coverage-matrix.md).
+Open [http://127.0.0.1:8787/](http://127.0.0.1:8787/) and enter the operator token.
+Set `REYNARD_HARNESS_TOKEN` before startup, or use the generated token printed
+by the server. Login establishes an HttpOnly, same-site browser session;
+API clients use `x-harness-token`. Tokens are not included in public bootstrap
+HTML or accepted through event-stream query strings.
 
----
+Create a run with targets, explicit scope, budgets, and the authorization
+acknowledgment. The console shows events and worker output, reports, and
+finding submissions. Runs execute in separate processes; the default job
+concurrency is one. Run artifacts live under `logs/runs/<run-id>/`.
 
-## Project structure
+The console checks loopback Host and same-origin requests. Do not publish it
+through a reverse proxy or expose its port. Model output and worker logs may
+contain sensitive information even when finding exports are sanitized.
+See [harness documentation](docs/harness.md).
 
-```text
-reynard/
-├── orchestrator.py / agent.py    # multi-agent / single-agent launchers
-├── Dockerfile · docker-compose.yml   # reynard-kali runtime
-├── pyproject.toml                # package metadata (v3.0.0) + console scripts
-├── .env.example                  # full, commented env template
-├── methodologies/                # bug-class playbooks (RAG corpus)
-├── eval/                         # lab corpus + sample engagement / bounty scope
-├── docs/                         # harness, production architecture, Caido, coverage…
-└── src/hacking_agent/
-    ├── agents/                   # coordinator, recon, analyst, exploitation, validator, reporter, pivot
-    ├── cli/                      # reynard, reynard-orchestrator, reynard-lab-eval, reynard-assess
-    ├── core/                     # strategy, memory, RAG, tools, scope, metering, evidence…
-    ├── harness/                  # web console: server, jobs, store, run worker, submission, UI
-    └── integrations/             # Burp, Caido, Shodan, external providers
-```
+## Configuration reference
 
-Console scripts: `reynard` · `reynard-orchestrator` · `reynard-lab-eval` · `reynard-assess` · `reynard-harness`.
+| Area | Settings |
+| --- | --- |
+| Provider routing | `LLM_DEFAULT_*`, `LLM_RECON_*`, `LLM_ANALYST_*`, `LLM_EXPLOITATION_*`, `LLM_VALIDATOR_*`, `LLM_PIVOT_*` |
+| Model budgets | `LLM_MAX_TOKENS_BUDGET`, `LLM_MAX_COST_BUDGET`; zero disables each cap. Cost limits require configured token prices. |
+| Cost estimates | `LLM_INPUT_PRICE_PER_1K`, `LLM_OUTPUT_PRICE_PER_1K`; zero prices do not measure actual spend. |
+| Dispatch limits | `MAX_ITERATIONS`, `MAX_SUBAGENTS`, `REYNARD_INNER_BUDGET` |
+| Timeouts | `ASSESS_PER_TARGET_TIMEOUT`, `EVAL_PER_LAB_TIMEOUT`, `BROWSER_EXEC_TIMEOUT` |
+| Runtime | `CONTAINER_NAME`; keep `REYNARD_HOST_EXEC` disabled for authenticated reports. |
+| Persistence | `REYNARD_MEMORY_DB`, `REYNARD_EMBEDDINGS`, `REYNARD_EVENT_LOG` |
+| Validation authority | `REYNARD_VALIDATION_STATE_DIR`, optional `REYNARD_VALIDATION_HMAC_KEY` |
+| Console | `REYNARD_HARNESS_TOKEN`, `REYNARD_HARNESS_HOST`, `REYNARD_HARNESS_PORT` |
+| Caido bridge | `CAIDO_LOCAL_BRIDGE_URL`, mandatory `CAIDO_LOCAL_BRIDGE_TOKEN` |
 
----
+Per-request output limits and dispatch budgets reduce runaway work; they are
+not guarantees against every provider's billing or an already submitted
+external job. Use nonzero limits appropriate to the engagement.
 
-## Common commands
+Provider budget admission is checked before each call and retry. In-flight
+calls or missing provider usage can still exceed the estimate. Engagement
+`max_total_requests` currently applies **per target**, not across the entire
+multi-target assessment; account for that when selecting target counts.
+
+## Tools and integrations
+
+Reynard keeps **75 dynamically dispatched tool implementations**, with exact
+alignment between the runtime registry, JSON schemas, and typed names.
+The audit found no registered tool proven dead. Absence from a static call
+search is insufficient because models select tools by name.
+
+Production availability is deliberately smaller: unrestricted shell commands,
+browser navigation, several scanners, stateful parallel probes, and external
+execution brokers are blocked until their downstream destinations can be
+enforced. A tool appearing in the inventory is not permission to execute it.
+
+| Integration | Current role |
+| --- | --- |
+| HTTPX transport | Bounded production HTTP; checks every redirect, charges additional hops, separates identity cookies, and drops sensitive headers across origins. |
+| Playwright / browser tools | Existing lab/browser capabilities; production execution restricted pending destination enforcement. |
+| Nuclei / ProjectDiscovery wrappers | Existing candidate discovery and recon capabilities; several are production-restricted. Scanner labels cannot become findings directly. |
+| [Caido local bridge](docs/caido-local-bridge.md) | Authenticated loopback Replay/history API. Set the same random token of at least 32 characters in Reynard and the selected Caido environment. Browser origins and CORS access are rejected. |
+| Burp, OSINT, Browser Use, HexStrike | Optional integrations; availability, credentials, and scope policy determine usable operations. External output is untrusted data. |
+| Bandit | Development-time Python security review; not a target scanner or a new agent capability. |
+
+Run `python scripts/audit_tools.py --check` for the inventory. Supply
+`--events PATH_TO_EVENTS_JSONL` to measure observed usage from existing runs.
+Static test references are not executed coverage.
+[Measurement details](docs/offline-quality.md).
+
+## Security and scope
+
+- Explicit engagement scope replaces inferred scope; deny rules win. Lab and
+  localhost exceptions do not widen an attached engagement.
+- Domain authorization includes subdomains. URL-prefix authorization retains
+  scheme, port, and path boundaries; use it when a whole host is not authorized.
+- Explicit assessment targets are checked before work starts. Testing windows
+  and request budgets are rechecked during execution.
+- Production HTTP disables ambient proxy settings and automatic redirects.
+  Response bodies are bounded to 64 KiB; redirects are bounded to 10.
+- An assessment target timeout terminates and reaps its owned host process
+  tree and discards incomplete findings. A later target may run after confirmed
+  cleanup; unconfirmed cleanup stops scheduling. Container or remote jobs already
+  submitted may need separate cleanup.
+- Scope checks are application controls, not a network sandbox. DNS rebinding,
+  same-account compromise, unknown tool side effects, and privileged container
+configuration require additional environmental defenses.
+- Keep provider keys, signing keys, sessions, and raw logs private. Review the
+  rules of engagement before every run.
+- Methodology caches use bounded, validated JSON and atomic replacement.
+  Legacy pickle caches are ignored and left on disk; they are never loaded.
+
+Use the supplied Docker configuration only in an isolated environment: it
+requests host networking, additional Linux capabilities, and an unconfined
+seccomp profile. These settings remain a hardening task.
+
+## Development and testing
 
 ```bash
-docker compose up -d                       # start the Kali runtime
-reynard-harness                            # web console at http://127.0.0.1:8787/
-reynard-assess --engagement eval/engagement.sample.yaml --out reports/acme
-python orchestrator.py --production --ui "Authorized target: https://TARGET"
-docker compose down                        # stop the runtime
+python -m pip install -e ".[dev,harness]"
+python -m pytest --collect-only -q
+python -m pytest -q
+python -m ruff check .
+python scripts/audit_tools.py --check
+python scripts/quality_metrics.py --check
+reynard-lab-eval --pretty
 ```
 
-Reports, evidence, and per-run logs land under `logs/` (gitignored); harness runs live in `logs/runs/<id>/`.
+Additional diagnostic checks:
 
----
+```bash
+python -m mypy src
+python -m bandit -r src -q
+```
 
-## Docs
+Repository-wide mypy still reports legacy typing errors. The Ruff configuration
+checks a focused correctness baseline, not all style rules. Bandit findings
+need review because this repository intentionally contains subprocess/tooling
+code. Neither command should be presented as clean without checking its output.
 
-| Doc | Topic |
+The recorded full run passed 817 tests and 56 subtests, with 61.04% statement
+coverage and one upstream Starlette/AnyIO deprecation warning. Coverage is not
+branch coverage or proof of safe tool behavior. Exact commands, a narrowly
+filtered strict-warning check, and the remaining type/security diagnostics are
+recorded in the [validation record](docs/security-review.md#validation-record).
+
+For the optional Caido plugin:
+
+```bash
+pnpm --dir integrations/caido-reynard-bridge install
+pnpm --dir integrations/caido-reynard-bridge test
+pnpm --dir integrations/caido-reynard-bridge typecheck
+pnpm --dir integrations/caido-reynard-bridge build
+```
+
+The offline evidence benchmark uses synthetic signed SQL/browser records and
+tampered or unauthenticated negatives. Its precision and false-positive rate
+describe that small stored-evidence corpus only. No live solve rate, operational
+false-positive rate, or comparison against XBOW has been established by this
+review. See the [audit and research report](docs/security-review.md).
+
+The separate `reynard-lab-eval --live` / `--train` path still uses a legacy
+daemon-thread timeout and can count candidate PoC success as solved. It needs
+process isolation and independent outcome grading before its scores can support
+reliable time-bounded performance claims. The checks above use offline readiness
+only.
+
+## Troubleshooting
+
+| Symptom | Check |
 | --- | --- |
-| [`docs/harness.md`](./docs/harness.md) | Web console: API, run lifecycle, security |
-| [`docs/production-research-architecture.md`](./docs/production-research-architecture.md) | Production research loop + subsystems |
-| [`docs/external-integrations.md`](./docs/external-integrations.md) | Browser Use + HexStrike adapters |
-| [`docs/caido-local-bridge.md`](./docs/caido-local-bridge.md) | Caido local bridge contract |
-| [`docs/portswigger-coverage-matrix.md`](./docs/portswigger-coverage-matrix.md) | Benchmark coverage |
+| CLI command is missing | Activate the environment and reinstall editable. The console also supports `python -m hacking_agent.harness.server`. |
+| A tool is blocked in production | Read the scope rejection; production restrictions are intentional. Do not switch modes to bypass client rules. |
+| No confirmed findings | Inspect suppression reasons, adapter coverage, scope, and budgets. Candidate count is not confirmed finding count. |
+| Old report shows zero confirmed findings | Check schema version, authority key, artifact store, and run/projection signatures. Edited or legacy reports fail closed. |
+| Harness returns 401/403 | Use its operator token/session, loopback address, and same-origin UI. Query-string tokens are not accepted. |
+| Caido returns 503/401 | Configure the same token of at least 32 characters in both applications; Caido uses its selected environment. |
+| Cost reads zero | Configure provider token prices; zero-priced metering is not free usage. |
+| Container tools are missing | Check the selected Docker build profiles. The registry includes optional capabilities not installed in every image. |
 
----
+## Further reading
 
-## Legal
-
-Reynard is for education, CTFs, research labs, and **authorized** security assessments only. Ensure every target, technique, and tool invocation is permitted by the applicable rules of engagement and law.
-
-<div align="center">
-<br/>
-
-**Reynard** · think like a fox · prove like an engineer · `v3.0.0`
-
-</div>
+[Validation trust](docs/validation-trust.md) ·
+[Offline quality](docs/offline-quality.md) ·
+[Security audit](docs/security-review.md) ·
+[Production architecture](docs/production-research-architecture.md) ·
+[Harness](docs/harness.md) ·
+[Caido](docs/caido-local-bridge.md) ·
+[External integrations](docs/external-integrations.md) ·
+[Lab coverage](docs/portswigger-coverage-matrix.md)

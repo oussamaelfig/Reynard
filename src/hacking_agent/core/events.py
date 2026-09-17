@@ -42,7 +42,7 @@ class EventBus:
         # Optional durable file sink (REYNARD_EVENT_LOG). Off unless the env var
         # is set; used by the run harness to stream/persist a single run's events
         # to logs/runs/<id>/events.jsonl without per-run ports. Guarded by its own
-        # lock so file I/O never blocks the emit fast-path's history/subscribers.
+        # lock for the file handle. Publication stays ordered with history.
         self._sink_lock = threading.Lock()
         self._sink_path: str | None = None
         self._sink_fh: Any = None
@@ -52,13 +52,14 @@ class EventBus:
             event = RuntimeEvent(self._next_id, event_type, payload or {})
             self._next_id += 1
             self._history.append(event)
-            subscribers = list(self._subscribers)
-        for subscriber in subscribers:
-            try:
-                subscriber.put_nowait(event)
-            except queue.Full:
-                pass
-        self._write_sink(event)
+            for subscriber in self._subscribers:
+                try:
+                    subscriber.put_nowait(event)
+                except queue.Full:
+                    pass
+            # Keep assignment, publication and durable append in one ordering
+            # boundary; otherwise concurrent emitters can write id 2 before 1.
+            self._write_sink(event)
         return event
 
     def _write_sink(self, event: RuntimeEvent) -> None:

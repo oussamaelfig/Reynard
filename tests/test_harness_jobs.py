@@ -20,7 +20,8 @@ _SUPPRESSED = (
     "import sys,json,pathlib;p=pathlib.Path(sys.argv[1]);"
     "(p/'report.json').write_text(json.dumps({"
     "'finding_count':9,'verified_count':9,'suppressed_count':2,"
-    "'targets_assessed':[]}));"
+    "'targets_assessed':[{'findings':["
+    "{'title':'legacy one'},{'title':'legacy two'}]}]}));"
     "(p/'result.json').write_text(json.dumps({"
     "'findings_count':9,'verified_count':9,'suppressed_count':99}))"
 )

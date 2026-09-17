@@ -144,7 +144,7 @@ class AnalystAgent(BaseAgent):
             stable.append(f"\n{task.context['tool_recommendations']}")
         if task.context.get("methodology"):
             stable.append(f"\n{task.context['methodology']}")
-        stable.append(f"\n{render_tool_catalog('exploitation')}")
+        stable.append(f"\n{render_tool_catalog('exploitation', production=bool(self.memory.get_fact('mission_production', False)))}")
         volatile = [
             f"\n{self.kg_summary()}",
             f"\n{task.context['surface_behaviour']}"
