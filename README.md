@@ -220,6 +220,17 @@ acknowledgment. The console shows events and worker output, reports, and
 finding submissions. Runs execute in separate processes; the default job
 concurrency is one. Run artifacts live under `logs/runs/<run-id>/`.
 
+The workspace uses a warm dark theme with an optional light appearance. Search
+and filter runs, switch between activity, console, report, and evidence, or open
+the quick switcher with **Ctrl/Cmd+K**. On mobile, runs and findings open in a
+dedicated detail view with a back button. Keyboard focus and reduced-motion
+preferences are supported; the UI's scripts, styles, and font are served locally.
+
+For a **synthetic UI preview that never launches research workers**, install the
+dev/harness extras and run `python scripts/preview_harness_ui.py` from the
+checkout. It uses a temporary store and prints its fixture-only login token.
+See [UI development and testing](docs/harness.md#ui-development-and-testing).
+
 The console checks loopback Host and same-origin requests. Do not publish it
 through a reverse proxy or expose its port. Model output and worker logs may
 contain sensitive information even when finding exports are sanitized.

@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import secrets
 import subprocess
 import time
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -23,6 +25,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    Response,
     StreamingResponse,
 )
 
@@ -61,10 +64,49 @@ def _build_revision() -> str:
 
 
 def _ui_fingerprint() -> str:
+    """Fingerprint the complete console release, including independent assets."""
+    digest = hashlib.sha256()
     try:
-        return hashlib.sha256(INDEX_HTML.read_bytes()).hexdigest()[:16]
+        paths = [("index.html", INDEX_HTML)] + [
+            (name, UI_DIR / name) for name in sorted(CONSOLE_ASSETS)
+        ]
+        for name, path in paths:
+            content = path.read_bytes()
+            digest.update(name.encode("utf-8") + b"\0")
+            digest.update(len(content).to_bytes(8, "big"))
+            digest.update(content)
+        return digest.hexdigest()[:16]
     except OSError:
         return "missing"
+
+
+def _nonce_console_script(html: str, nonce: str) -> str:
+    """Authorize only the known local script, preserving the HTML template.
+
+    Parse attributes rather than treating data-src or text inside an attribute
+    as a script destination. Inline scripts and other sources remain blocked.
+    """
+    offsets = [0] + [match.end() for match in re.finditer("\n", html)]
+    insertions: list[int] = []
+
+    class ConsoleScriptParser(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            sources = [value for key, value in attrs if key == "src"]
+            if (tag != "script" or sources != ["/assets/console.js"]
+                    or any(key == "nonce" for key, _ in attrs)):
+                return
+            raw = self.get_starttag_text() or ""
+            if not raw or raw.endswith("/>"):
+                return
+            line, column = self.getpos()
+            insertions.append(offsets[line - 1] + column + len(raw) - 1)
+
+    parser = ConsoleScriptParser()
+    parser.feed(html)
+    parser.close()
+    for offset in reversed(insertions):
+        html = html[:offset] + f' nonce="{nonce}"' + html[offset:]
+    return html
 
 
 def _read_report_json(store: RunStore, run_id: str) -> dict[str, Any]:
@@ -127,6 +169,11 @@ def _suppressed_count(store: RunStore) -> int:
 
 UI_DIR = Path(__file__).parent / "ui"
 INDEX_HTML = UI_DIR / "index.html"
+CONSOLE_ASSETS = {
+    "console.css": "text/css",
+    "console.js": "text/javascript",
+    "geist-latin.woff2": "font/woff2",
+}
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -261,14 +308,32 @@ def create_app(store: Optional[RunStore] = None,
             )
         html = INDEX_HTML.read_text(encoding="utf-8")
         nonce = secrets.token_urlsafe(24)
-        html = html.replace("<script>", f'<script nonce="{nonce}">')
+        html = _nonce_console_script(html, nonce)
         return HTMLResponse(html, headers={"Content-Security-Policy": (
             f"default-src 'self'; script-src 'nonce-{nonce}'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; img-src 'self' data:; "
             "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         ), "Pragma": "no-cache",
             "X-Reynard-Revision": app.state.revision,
+            "X-Reynard-UI-SHA256": app.state.ui_fingerprint,
+        })
+
+    @app.get("/assets/{asset_name:path}")
+    def console_asset(asset_name: str) -> Response:
+        # Public, secret-free bootstrap files only. Never mount the package,
+        # report store, or an arbitrary user-provided filesystem path.
+        media_type = CONSOLE_ASSETS.get(asset_name)
+        if media_type is None:
+            raise HTTPException(status_code=404, detail="asset not found")
+        asset_path = UI_DIR / asset_name
+        try:
+            if asset_path.is_symlink() or asset_path.resolve().parent != UI_DIR.resolve():
+                raise HTTPException(status_code=404, detail="asset not found")
+            content = asset_path.read_bytes()
+        except OSError:
+            raise HTTPException(status_code=404, detail="asset not found")
+        return Response(content, media_type=media_type, headers={
             "X-Reynard-UI-SHA256": app.state.ui_fingerprint,
         })
 

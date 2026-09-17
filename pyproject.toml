@@ -63,7 +63,7 @@ reynard-harness = "hacking_agent.harness.server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"hacking_agent.harness.ui" = ["*.html"]
+"hacking_agent.harness.ui" = ["*.html", "console.css", "console.js", "*.woff2", "FONT-LICENSE.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -39,6 +39,9 @@ it to each run's subprocess **via env only** — it is never written to disk.
   clients may continue using `x-harness-token`. SSE uses the cookie or header;
   URL query tokens are no longer accepted. Cross-origin requests are refused.
   Responses disable caching and framing; the UI uses a nonce-based script policy.
+  HTML, CSS, JavaScript, and the bundled font are served from the same origin;
+  there are no external font, analytics, or UI runtime requests. Static assets
+  use an explicit allowlist, not a general-purpose file server.
 - **Authorization gate.** A run is refused unless it declares an authorized
   scope (domain or CIDR) **and** the operator checks "I am authorized to test
   this scope" — mirroring `reynard-assess`. Targets outside scope or inside
@@ -59,7 +62,8 @@ it to each run's subprocess **via env only** — it is never written to disk.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET`  | `/` | The console (single HTML page). |
+| `GET`  | `/` | Console HTML with a fresh script nonce. |
+| `GET`  | `/assets/{name}` | Allowlisted local CSS, JavaScript, and font only. |
 | `GET`  | `/api/health` | Liveness + whether auth is required. |
 | `POST` | `/api/session` | Exchange `x-harness-token` for a browser session cookie. |
 | `POST` | `/api/runs` | Validate authorization + scope, persist, enqueue. Returns `run_id`. |
@@ -110,6 +114,95 @@ restart their internal counters. Each harness run owns its memory database.
 - **Advanced** — allow-destructive, Browser Use / HexStrike toggles, and
   optional auth sessions (JSON array of controlled identities for
   authenticated / authorization testing).
+
+## Workspace interactions
+
+| Area | Use |
+| --- | --- |
+| Runs | Search by objective, run ID, or target; filter by status. Selection stays stable while the list updates. |
+| Activity | Follow the event stream and connection state. The visible stream retains at most 300 blocks/rows; grouped output retains its last 16,000 characters. Full records remain in run artifacts. |
+| Console | Inspect raw worker output. Do not share it without checking for sensitive data. |
+| Report / Evidence | Review the stored report and its confirmed-finding snapshot. Older responses cannot overwrite a newly selected run. |
+| Findings | Review only independently confirmed findings and export submissions. Candidate counts are separate from confirmed results. |
+| Quick switcher | Ctrl+K or Cmd+K opens commands and run search. Arrow keys navigate; Enter opens; Escape closes. |
+| Appearance | Warm dark by default, with a light theme. Theme preference is local; storage failure falls back to a usable session-only theme. |
+
+Use Tab to move between controls. Run tabs also support Left/Right, Home, and
+End. The launch drawer and quick switcher contain keyboard focus and restore
+it when closed. On narrow screens, lists and details become separate views;
+**All runs** or **Findings** returns to the list. Motion respects
+`prefers-reduced-motion` and does not animate every incoming event.
+
+The console displays measured run state, not estimated agent productivity or
+fabricated success metrics. A completed run is not a guarantee of coverage.
+
+## UI development and testing
+
+The frontend is plain HTML/CSS/JavaScript: no bundler or npm runtime dependency.
+
+| File | Responsibility |
+| --- | --- |
+| `src/hacking_agent/harness/ui/index.html` | Accessible landmarks, forms, tabs, and view structure. |
+| `src/hacking_agent/harness/ui/console.css` | Warm neutral tokens, responsive layouts, and restrained motion. |
+| `src/hacking_agent/harness/ui/console.js` | API/session state, keyed lists, stream bounds, keyboard interaction, and safe report rendering. |
+| `src/hacking_agent/harness/ui/FONT-LICENSE.txt` | Geist font license, pinned upstream revision, and asset checksum. |
+
+The bundled [Geist font](https://github.com/vercel/geist-font) is unmodified and
+distributed with its SIL Open Font License. The visual reference informed the
+palette and pane hierarchy; no Conductor application code, trackers, or branding
+are bundled.
+
+Run regression checks from the repository root:
+
+```bash
+pip install -e ".[dev,harness]"
+python -m pytest tests/test_harness_server.py tests/test_harness_ui.py
+node --test tests/ui/*.test.cjs
+node --check src/hacking_agent/harness/ui/console.js
+```
+
+Node is needed only for the dependency-free JavaScript regression tests, not to
+run the harness. For visual checks without Docker, model keys, or assessments:
+
+```bash
+python scripts/preview_harness_ui.py --port 8891
+# Optional: start with no runs
+python scripts/preview_harness_ui.py --port 8892 --empty
+```
+
+The helper is checkout-only and reuses test signing fixtures. It binds only to
+`127.0.0.1`, creates a temporary store and signing authority, and prints a
+**fixture-only** token. Every displayed finding is synthetic and labeled DEMO.
+Launch/cancel actions change fixture state only: no worker, model, tool, or
+assessment process starts. The real authentication, scope admission, and
+report-validation gates remain enabled. Temporary state is cleaned on shutdown;
+never use this known preview token for real research.
+
+With the seeded preview on port 8891, an optional real-browser smoke check uses
+the [Playwright CLI](https://github.com/microsoft/playwright-cli):
+
+```bash
+npx --yes --package @playwright/cli playwright-cli -s=reynard-ui open http://127.0.0.1:8891
+npx --yes --package @playwright/cli playwright-cli -s=reynard-ui snapshot
+npx --yes --package @playwright/cli playwright-cli -s=reynard-ui run-code --filename scripts/harness_ui_smoke.js
+```
+
+The smoke script refuses non-fixture servers, blocks unexpected remote or
+mutating requests, and checks keyboard interaction, five viewport widths,
+Markdown download, reduced motion, offline recovery, and expired-session cache
+clearing. It never launches or cancels research, touches the clipboard, or opens
+a print dialog. This optional browser check downloads CLI tooling; the console
+itself has no JavaScript runtime dependency.
+
+Verify dark/light appearances, desktop/tablet/mobile layouts, keyboard-only
+navigation, reduced motion, empty states, offline recovery, and report exports.
+Keep local screenshots in ignored `output/playwright/`. Restart the server after
+asset changes to refresh the all-asset fingerprint returned by `/api/health`.
+
+If native imports fail after a Python upgrade, verify that the virtual
+environment's interpreter version matches its installed native wheels. Recreate
+the environment for the intended Python version; do not interpret skipped
+optional-import tests as a successful harness validation.
 
 ## Enabling the event log for a plain CLI run
 
