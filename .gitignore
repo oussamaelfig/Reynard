@@ -17,3 +17,5 @@ dist/
 .coverage
 coverage.xml
 htmlcov/
+output/playwright/
+.playwright-cli/

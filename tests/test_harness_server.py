@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 import time
 from copy import deepcopy
+from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +20,7 @@ from hacking_agent.agents.reporter import finding_to_report_dict  # noqa: E402
 from hacking_agent.harness.jobs import JobManager  # noqa: E402
 from hacking_agent.harness.models import RunRequest, RunStatus  # noqa: E402
 from hacking_agent.harness.server import create_app  # noqa: E402
+from hacking_agent.harness import server as server_mod  # noqa: E402
 from hacking_agent.harness.store import RunStore  # noqa: E402
 from test_finding_validation import (  # noqa: E402
     finding_for,
@@ -335,15 +339,153 @@ def test_report_md_download(tmp_path):
 
 def test_index_never_exposes_token(tmp_path):
     _, c = _client(tmp_path)
-    html = c.get("/").text
+    response = c.get("/")
+    html = response.text
     assert TOKEN not in html
     assert "__HARNESS_TOKEN__" not in html
-    assert "Launch run" in html
-    assert "confirmed ·" in html and "report-gate suppressions" in html
-    response = c.get("/")
+    assert 'src="/assets/console.js"' in html
+    assert 'href="/assets/console.css"' in html
     assert "no-store" in response.headers["cache-control"]
     assert response.headers["x-reynard-revision"]
     assert response.headers["x-reynard-ui-sha256"]
+
+
+@pytest.fixture
+def console_files(tmp_path, monkeypatch):
+    ui_dir = tmp_path / "ui-fixture"
+    ui_dir.mkdir()
+    (ui_dir / "index.html").write_text(
+        '<!doctype html><html><head><link rel="stylesheet" href="/assets/console.css">'
+        '</head><body><script src="/assets/console.js" defer></script></body></html>',
+        encoding="utf-8",
+    )
+    (ui_dir / "console.css").write_text("body { color: #102030; }", encoding="utf-8")
+    (ui_dir / "console.js").write_text("document.documentElement.dataset.ready = 'yes';", encoding="utf-8")
+    (ui_dir / "geist-latin.woff2").write_bytes(b"wOF2-fixture")
+    monkeypatch.setattr(server_mod, "UI_DIR", ui_dir)
+    monkeypatch.setattr(server_mod, "INDEX_HTML", ui_dir / "index.html")
+    return ui_dir
+
+
+def _script_attributes(html):
+    scripts = []
+
+    class Scripts(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "script":
+                scripts.append(dict(attrs))
+
+    Scripts().feed(html)
+    return scripts
+
+
+def test_external_console_script_has_matching_fresh_nonce(tmp_path, console_files):
+    _, c = _client(tmp_path / "runs")
+    responses = [c.get("/"), c.get("/")]
+    nonces = []
+    for response in responses:
+        scripts = _script_attributes(response.text)
+        assert len(scripts) == 1 and scripts[0]["src"] == "/assets/console.js"
+        nonce = scripts[0]["nonce"]
+        nonces.append(nonce)
+        policy = response.headers["content-security-policy"]
+        script_policy = next(part.strip() for part in policy.split(";") if part.strip().startswith("script-src "))
+        assert script_policy == f"script-src 'nonce-{nonce}'"
+        assert "unsafe-inline" not in script_policy
+        assert "fonts.googleapis.com" not in policy and "fonts.gstatic.com" not in policy
+        assert TOKEN not in response.text and "__HARNESS_TOKEN__" not in response.text
+        assert "set-cookie" not in response.headers
+    assert nonces[0] != nonces[1]
+
+
+def test_nonce_is_not_granted_to_inline_or_other_script_sources(tmp_path, console_files):
+    (console_files / "index.html").write_text(
+        '<script>window.inline = true;</script>\n'
+        '<script src="https://outside.invalid/code.js" data-src="/assets/console.js"></script>\n'
+        '<script src="/api/runs"></script>\n'
+        '<script src="/assets/console.js" src="https://outside.invalid/code.js"></script>\n'
+        '<script src="/assets/console.js" nonce="template-nonce"></script>\n'
+        '<script defer src="/assets/console.js"></script>',
+        encoding="utf-8",
+    )
+    _, c = _client(tmp_path / "runs")
+    response = c.get("/")
+    scripts = _script_attributes(response.text)
+    nonce = re.search(r"script-src 'nonce-([^']+)'", response.headers["content-security-policy"]).group(1)
+    assert [script.get("nonce") == nonce for script in scripts] == [False] * 5 + [True]
+
+
+@pytest.mark.parametrize("name,mime", [
+    ("console.css", "text/css"), ("console.js", "text/javascript"), ("geist-latin.woff2", "font/woff2"),
+])
+def test_public_console_assets_are_exact_secret_free_and_nosniff(tmp_path, console_files, name, mime):
+    _, c = _client(tmp_path / "runs")
+    response = c.get(f"/assets/{name}")
+    assert response.status_code == 200
+    assert response.content == (console_files / name).read_bytes()
+    assert response.headers["content-type"].split(";", 1)[0] == mime
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-reynard-ui-sha256"] == c.get("/api/health").json()["ui_sha256"]
+    assert TOKEN not in response.text and "__HARNESS_TOKEN__" not in response.text
+    assert "set-cookie" not in response.headers
+    assert c.get("/api/runs").status_code == 401  # static bootstrap does not authenticate
+
+
+@pytest.mark.parametrize("path", [
+    "/assets/index.html", "/assets/.env", "/assets/console.js.map", "/assets/console.css/extra",
+    "/assets/another-font.woff2", "/assets/FONT-LICENSE.txt",
+    "/assets/%2e%2e/server.py", "/assets/%2e%2e%2fserver.py",
+    "/assets/%252e%252e%252fserver.py", "/assets/..%5cserver.py", "/assets/CONSOLE.JS",
+])
+def test_asset_route_rejects_traversal_and_nonallowlisted_files(tmp_path, console_files, path):
+    (console_files / ".env").write_text("PRIVATE-ASSET-MARKER", encoding="utf-8")
+    _, c = _client(tmp_path / "runs")
+    response = c.get(path)
+    assert response.status_code == 404
+    assert "PRIVATE-ASSET-MARKER" not in response.text
+
+
+def test_allowlisted_asset_missing_or_symlink_is_not_served(tmp_path, console_files, monkeypatch):
+    _, c = _client(tmp_path / "runs")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path: (
+        True if path == console_files / "console.js" else original_is_symlink(path)
+    ))
+    assert c.get("/assets/console.js").status_code == 404
+    (console_files / "console.css").unlink()
+    assert c.get("/assets/console.css").status_code == 404
+
+
+def test_public_assets_still_require_local_host_and_origin(tmp_path, console_files):
+    _, c = _client(tmp_path / "runs")
+    assert c.get("/assets/console.js", headers={"Host": "outside.invalid"}).status_code == 400
+    assert c.get("/assets/console.js", headers={"Origin": "https://outside.invalid"}).status_code == 403
+    assert c.get("/assets/console.css", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert c.get("/assets/console.css", headers={"Origin": "http://127.0.0.1"}).status_code == 200
+
+
+@pytest.mark.parametrize("name", ["index.html", "console.css", "console.js", "geist-latin.woff2"])
+def test_ui_fingerprint_covers_every_asset_deterministically(tmp_path, console_files, name):
+    before = server_mod._ui_fingerprint()
+    assert before != "missing" and before == server_mod._ui_fingerprint()
+    _, old_client = _client(tmp_path / "old-runs")
+    path = console_files / name
+    original = path.read_bytes()
+    path.write_bytes(original + b"\nfixture revision")
+    after = server_mod._ui_fingerprint()
+    assert after != before and after != "missing"
+    _, new_client = _client(tmp_path / "new-runs")
+    assert old_client.get("/api/health").json()["ui_sha256"] == before
+    assert new_client.get("/api/health").json()["ui_sha256"] == after
+    path.write_bytes(original)
+    assert server_mod._ui_fingerprint() == before
+
+
+def test_incomplete_console_has_explicit_missing_fingerprint(console_files):
+    (console_files / "console.css").unlink()
+    assert server_mod._ui_fingerprint() == "missing"
 
 
 def test_cookie_login_and_sse_without_url_secrets(tmp_path):
