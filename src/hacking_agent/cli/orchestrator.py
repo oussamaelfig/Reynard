@@ -59,6 +59,7 @@ from hacking_agent.agents import (
 from hacking_agent.core.attack_surface import AttackSurface
 from hacking_agent.core.durable import open_durable_store
 from hacking_agent.core.evidence import EvidenceStore
+from hacking_agent.core.engagement import Engagement
 from hacking_agent.core.evidence_bundle import (
     EvidenceBundleStore, build_bundle_from_pocs,
     V_VERIFIED, V_REFUTED, V_UNVERIFIED,
@@ -348,6 +349,7 @@ class Orchestrator:
         max_subagents: int = 4,
         exploit_server_url: str = "",
         mission_mode: str | None = None,
+        engagement: Engagement | None = None,
     ):
         self.target_url = target_url
         self.objective = objective
@@ -389,6 +391,15 @@ class Orchestrator:
             extra_domains=scope_domains,
             extra_cidrs=scope_cidrs,
         )
+        if self.mission.is_production:
+            # The direct production CLI gets the same restrictive tool boundary
+            # as assessments. An explicit engagement replaces inferred scope.
+            self.scope_guard.attach_engagement(engagement or Engagement(
+                authorized_domains=list(self.scope_guard.allowed_domains),
+                authorized_cidrs=list(self.scope_guard.allowed_cidrs),
+                max_requests_per_second=2.0,
+                max_total_requests=500,
+            ))
 
         # ---- shared subsystems ----
         self.memory = AgentMemory(target_url=target_url)

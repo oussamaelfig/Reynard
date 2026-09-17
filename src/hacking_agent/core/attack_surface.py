@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlparse, urlsplit, parse_qsl
 
@@ -112,7 +112,7 @@ SCOPE_UNKNOWN = "unknown"
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def _max_confidence(a: str, b: str) -> str:

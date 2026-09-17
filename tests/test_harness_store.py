@@ -98,7 +98,7 @@ def test_store_paths_cannot_escape_root(tmp_path, run_id):
 def test_restart_marks_interrupted_runs_failed_without_pid_signals(tmp_path):
     store = RunStore(root=tmp_path)
     running = store.create(_req())
-    queued = store.create(_req())
+    queued = store.create(_req(auth_sessions=[{"name": "user", "cookie_header": "x=secret"}]))
     done = store.create(_req())
     store.update(running.id, status=RunStatus.running, pid=42)
     store.update(done.id, status=RunStatus.completed)
@@ -107,5 +107,6 @@ def test_restart_marks_interrupted_runs_failed_without_pid_signals(tmp_path):
     assert store.get(queued.id).status is RunStatus.failed
     assert store.get(done.id).status is RunStatus.completed
     assert "execution state unknown" in store.get(running.id).error
+    assert store.take_auth_sessions(queued.id) == []
     with pytest.raises(ValueError):
         store.update(running.id, **{"pid = 0 --": 1})

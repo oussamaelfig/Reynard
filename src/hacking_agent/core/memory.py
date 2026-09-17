@@ -31,7 +31,7 @@ import math
 import threading
 import time as _time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from hacking_agent.core.events import emit
@@ -80,7 +80,7 @@ class FailureRecord:
     reason: str
     lesson: str
     iteration: int
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
 
 
 @dataclass
@@ -106,7 +106,7 @@ class Entity:
     type: str
     attrs: dict[str, Any] = field(default_factory=dict)
     facts: dict[str, Fact] = field(default_factory=dict)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     pheromone_base: float = 0.5
     half_life_sec: int = 3600
     _created_ts: float = field(default_factory=_time.monotonic)

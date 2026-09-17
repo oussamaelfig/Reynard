@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -35,7 +35,7 @@ from hacking_agent.harness.submission import (
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def valid_bundle(

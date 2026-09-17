@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from rich.console import Console
@@ -600,7 +600,7 @@ def render_assessment_report(
     the centralized reportability predicate are rendered.  Suppressed details
     never cross this customer-facing boundary.
     """
-    generated_at = meta.get("generated_at") or datetime.utcnow().isoformat()
+    generated_at = meta.get("generated_at") or datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     verified, suppressed = partition_reportable(findings)
     # ``recon_summary`` remains in the signature for API compatibility, but
     # arbitrary KG/model prose can contain suppressed candidate details.
@@ -810,7 +810,7 @@ class ReporterAgent(BaseAgent):
 
     def _save_report(self, content: str) -> str:
         ensure_runtime_dirs()
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
         path = os.path.join(str(LOG_DIR), f"report_{ts}.md")
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)

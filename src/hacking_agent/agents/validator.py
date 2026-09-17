@@ -29,6 +29,7 @@ complete in the report.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -94,6 +95,9 @@ token and session cookie are refreshed together), then submit.
    or direct sensitive-resource proof; authz needs a controlled identity and
    ownership matrix; upload/traversal/cache/race/business logic/OAuth needs a
    concrete exploit effect and matched control.
+8. behavioral_signal must quote a short distinctive substring of the actual
+   recorded response. Request text, your descriptions, and fabricated context
+   labels are not observations. Copy context_id from the recorded attempt.
 
 # OUTPUT
 A SINGLE ValidationOutput JSON. While iterating, supply next_probe and
@@ -300,6 +304,12 @@ class ValidatorAgent(BaseAgent):
             or parsed.get("stdout")
             or raw
         )
+        if isinstance(response, dict):
+            response = response.get("raw_response") or response.get("body") or ""
+        status = parsed.get("status_code")
+        if not isinstance(status, int):
+            codes = re.findall(r"(?m)^HTTP/\S+\s+(\d{3})", str(response))
+            status = int(codes[-1]) if codes else None
         request = (
             args.get("raw_request")
             or args.get("request")
@@ -317,23 +327,23 @@ class ValidatorAgent(BaseAgent):
             "description": str(getattr(decision, "reasoning", "") or "")[:500],
             "request": str(request)[:4000],
             "response": str(response)[:5000],
-            "url": str(args.get("url") or context.get("target_url") or ""),
-            "method": str(args.get("method") or "GET").upper(),
+            "url": str(parsed.get("url") or args.get("url") or context.get("target_url") or ""),
+            "method": str(parsed.get("method") or args.get("method") or "GET").upper(),
             "identity": str(
-                args.get("session")
+                parsed.get("session")
+                or args.get("session")
                 or args.get("identity")
                 or context.get("active_session")
                 or "anonymous"
             ),
-            "status_code": (
-                parsed.get("status_code")
-                if parsed.get("status_code") is not None
-                else parsed.get("status")
-            ),
+            "status_code": status,
+            "context_id": f"probe-{index}-" + str(parsed.get("session") or args.get("session")
+                                                   or context.get("active_session") or "anonymous"),
             "timestamp": datetime.utcnow().isoformat(),
             "observation": observation[:1000],
             "signals": outcome.get("signals") or {},
-            "blocked": bool(outcome.get("blocked")),
+            "blocked": bool(outcome.get("blocked") or parsed.get("error")
+                            or parsed.get("truncated") or parsed.get("exit_code", 0) != 0),
         }
 
     def _validated_metadata(
@@ -372,6 +382,10 @@ class ValidatorAgent(BaseAgent):
                 return {}, prefix + "attempt behavioral signal missing"
             if len(result.context_id.strip()) < 4:
                 return {}, prefix + "attempt context identifier missing"
+            if result.context_id != attempt.get("context_id"):
+                return {}, prefix + "context identifier differs from recorded probe"
+            if result.behavioral_signal.lower() not in str(attempt.get("response", "")).lower():
+                return {}, prefix + "behavioral signal is absent from the actual response"
             seen.add(index)
             merged = dict(attempt)
             merged.update({
@@ -477,6 +491,7 @@ class ValidatorAgent(BaseAgent):
         attempts_str = (
             "\n".join(
                 f"  step {a['step']}: [{a['tool']}] {a['args'][:120]}\n"
+                f"    context_id: {a.get('context_id', '')}\n"
                 f"    -> {a['observation'][:200]}"
                 for a in attempts
             )

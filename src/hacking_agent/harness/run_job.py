@@ -102,7 +102,12 @@ def main(argv: list[str] | None = None) -> int:
                     cookie_header=s.cookie_header or "",
                     overwrite=True)
         except Exception as exc:
-            emit("reasoning_note", {"text": f"auth session load failed: {exc}"})
+            # A failed controlled identity cannot silently become anonymous.
+            msg = f"auth session load failed: {type(exc).__name__}"
+            emit("error", {"message": msg})
+            emit("run_end", {"error": msg})
+            _write_result(run_dir, error=msg)
+            return 1
 
     engagement = engagement_from_dict(req.to_engagement_dict())
     targets = req.resolved_targets()

@@ -136,7 +136,7 @@ class JobManager:
             findings_count=findings_count,
             verified_count=verified_count,
             suppressed_count=suppressed_count,
-            error=str(result.get("error", ""))[:500],
+            error="" if was_cancelled else str(result.get("error", ""))[:500],
         )
         self._drain()
 

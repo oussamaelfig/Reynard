@@ -367,7 +367,8 @@ class CoverageMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "matrix.md")
             path = generate_coverage_matrix(out_path=out, scorecard=scorecard)
-            text = open(path, encoding="utf-8").read()
+            with open(path, encoding="utf-8") as matrix_file:
+                text = matrix_file.read()
         self.assertIn("Coverage Matrix", text)
         self.assertIn("sql-injection", text)
         self.assertIn("`sqli`", text)

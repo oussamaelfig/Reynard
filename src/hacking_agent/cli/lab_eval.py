@@ -13,7 +13,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -311,10 +311,10 @@ def load_suite(path: str | None) -> list[str | dict[str, Any]]:
 
 def write_report(results: list[dict[str, Any]]) -> Path:
     ensure_runtime_dirs()
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
     path = LOG_DIR / f"lab_eval_{ts}.json"
     payload = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "case_count": len(results),
         "average_readiness": (
             round(sum(item["readiness_score"] for item in results) / len(results), 2)
@@ -572,7 +572,7 @@ def _md_table(results: list[dict[str, Any]]) -> str:
 def write_live_scorecard(results: list[dict[str, Any]]) -> tuple[Path, Path]:
     """Write the live scorecard as JSON and a human-readable markdown table."""
     ensure_runtime_dirs()
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
     solved = sum(1 for r in results if r["solved"])
     total = len(results)
     totals = {
@@ -584,7 +584,7 @@ def write_live_scorecard(results: list[dict[str, Any]]) -> tuple[Path, Path]:
         "wall_clock_seconds": round(sum(r["wall_clock_seconds"] for r in results), 1),
     }
     payload = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "summary": totals,
         "results": results,
     }
@@ -621,7 +621,7 @@ def _write_failure_transcript(
     final summary) for an unsolved lab. Best-effort; returns "" on failure."""
     try:
         ensure_runtime_dirs()
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:48] or "lab"
         path = LOG_DIR / f"failure_{slug}_{ts}.md"
 
@@ -752,7 +752,7 @@ def write_training_scorecard(
     per-level breakdowns, plus a stable ``training_scorecard_latest.json`` that
     the coverage-matrix generator reads."""
     ensure_runtime_dirs()
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
     run_rows = [r for r in results if not r.get("not_run")]
     solved = sum(1 for r in run_rows if r["solved"])
     total = len(results)
@@ -772,7 +772,7 @@ def write_training_scorecard(
         "wall_clock_seconds": round(sum(r["wall_clock_seconds"] for r in results), 1),
     }
     payload = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "summary": summary,
         "by_class": by_class,
         "by_level": by_level,

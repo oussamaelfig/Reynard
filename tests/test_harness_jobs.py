@@ -84,6 +84,7 @@ def test_cancel_running_marks_cancelled(tmp_path):
     assert jm.cancel(rec.id) is True
     final = _wait_terminal(store, rec.id)
     assert final.status is RunStatus.cancelled
+    assert final.error == ""
 
 
 def test_cancel_queued_before_start(tmp_path):

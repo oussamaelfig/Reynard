@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from hacking_agent.core import attack_surface as asm
@@ -56,7 +56,7 @@ MAX_RAW_INLINE = 2000
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def _sanitize(text: str) -> str:
@@ -224,7 +224,7 @@ def spill_raw(provider: str, capability: str, raw: str) -> str:
         ensure_runtime_dirs()
         out_dir = LOG_DIR / "external"
         out_dir.mkdir(parents=True, exist_ok=True)
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S_%f")
         safe_cap = "".join(c if c.isalnum() or c in "-_" else "_" for c in capability)[:60]
         path = out_dir / f"{provider}_{safe_cap}_{ts}.txt"
         path.write_text(_sanitize(str(raw)), encoding="utf-8")

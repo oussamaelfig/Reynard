@@ -19,7 +19,7 @@ part of the training loop, but can also be refreshed on demand:
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -163,7 +163,7 @@ def generate_coverage_matrix(
         classes.items(), key=lambda kv: (-kv[1]["total"], kv[0])
     )
 
-    generated_at = datetime.utcnow().isoformat()
+    generated_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     sc_note = "no scorecard found yet" if not scorecard else (
         f"scorecard generated {scorecard.get('generated_at', 'unknown')}"
     )

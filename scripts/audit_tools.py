@@ -94,7 +94,7 @@ def static_references(
                 elif isinstance(node, ast.Attribute):
                     tokens = {node.attr}
                 for name in tokens & registered:
-                    found.setdefault(name, set()).add(node.lineno)
+                    found.setdefault(name, set()).add(getattr(node, "lineno", 0))
             for name, lines in found.items():
                 references[name][category].append({"file": relative, "lines": sorted(lines)})
     return references, skipped

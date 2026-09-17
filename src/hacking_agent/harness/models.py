@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -24,7 +25,7 @@ class RunStatus(str, Enum):
 
 class AuthSessionSpec(BaseModel):
     """A controlled identity for authenticated / authorization testing."""
-    name: str = Field(min_length=1, max_length=128)
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
     role_hint: str = Field(default="user", max_length=128)
     cookie_header: str = Field(default="", max_length=32768)
     headers: dict[str, str] = Field(default_factory=dict, max_length=64)
@@ -36,6 +37,10 @@ class AuthSessionSpec(BaseModel):
         if any("\r" in item or "\n" in item or "\x00" in item or len(item) > 32768
                for item in values):
             raise ValueError("session headers must be bounded single-line values")
+        if isinstance(value, dict) and any(
+            not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key) for key in value
+        ):
+            raise ValueError("invalid session header name")
         return value
 
 

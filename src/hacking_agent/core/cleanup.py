@@ -28,7 +28,7 @@ import signal
 import threading
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable
 
 from rich.console import Console
@@ -43,7 +43,7 @@ class CleanupEntry:
     description: str
     agent: str = ""
     registered_at: str = field(
-        default_factory=lambda: datetime.utcnow().isoformat()
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     )
 
 

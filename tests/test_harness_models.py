@@ -76,6 +76,7 @@ def test_invalid_unbounded_options_rejected(fields):
 def test_session_header_injection_and_ambiguous_identities_rejected():
     for fields in ({"cookie_header": "cookie=x\r\nHost: evil.invalid"},
                    {"headers": {"X-Test\nInjected": "x"}},
+                   {"headers": {"X Test": "x"}},
                    {"headers": {"X-Test": "a\x00b"}}):
         with pytest.raises(ValidationError):
             AuthSessionSpec(name="user", **fields)
@@ -85,3 +86,9 @@ def test_session_header_injection_and_ambiguous_identities_rejected():
         RunRequest(auth_sessions=[AuthSessionSpec(name="user", headers={
             str(i): "x" * 32768 for i in range(9)
         })])
+
+
+@pytest.mark.parametrize("name", ["../admin", "a" * 65, "user name", ""])
+def test_session_name_matches_runtime_registry_contract(name):
+    with pytest.raises(ValidationError):
+        AuthSessionSpec(name=name)

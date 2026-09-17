@@ -107,3 +107,20 @@ def test_timeout_stops_remaining_targets_and_marks_run_failed(tmp_path, monkeypa
     assert calls == ["https://a.example.com/"]
     assert "timed out" in json.loads((tmp_path / "result.json").read_text())["error"]
     assert os.environ["REYNARD_MEMORY_DB"] == str(tmp_path / "memory.db")
+
+
+def test_auth_session_failure_does_not_silently_run_anonymous(tmp_path, monkeypatch):
+    monkeypatch.setattr("hacking_agent.harness.envload.load_operator_env", lambda: None)
+    monkeypatch.setattr("hacking_agent.harness.envload.llm_key_present", lambda: True)
+    req = RunRequest(authorized_domains=["example.com"], authorized=True,
+                     auth_sessions=[{"name": "user", "cookie_header": "x=secret"}])
+    (tmp_path / "config.json").write_text(req.model_dump_json(), encoding="utf-8")
+    def fail_registry():
+        raise RuntimeError("message might contain a credential")
+    monkeypatch.setattr("hacking_agent.core.sessions.get_registry", fail_registry)
+    monkeypatch.setattr("hacking_agent.cli.assess.run_target",
+                        lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("must not start")))
+    assert run_job_main([str(tmp_path)]) == 1
+    result = (tmp_path / "result.json").read_text()
+    assert "auth session load failed" in result
+    assert "message might contain" not in result

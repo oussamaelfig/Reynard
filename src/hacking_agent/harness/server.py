@@ -354,7 +354,7 @@ def create_app(store: Optional[RunStore] = None,
 
     @app.get("/api/runs/{run_id}/evidence")
     def run_evidence(run_id: str, _: None = Depends(require_token)) -> Any:
-        _, json_path = store.report_paths(run_id)
+        _md_path, json_path = store.report_paths(run_id)
         if not json_path.exists():
             raise HTTPException(status_code=404, detail="evidence not ready")
         try:

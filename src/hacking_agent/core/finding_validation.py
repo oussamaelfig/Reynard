@@ -741,30 +741,37 @@ def _evaluate_reportability(
         exchange = exchanges_by_attempt.get(
             _positive_int(_get(result, "attempt_index"))
         )
-        transcript = " ".join(
-            _text(_get(exchange, key))
-            for key in ("request", "response", "notes")
-        ).lower()
-        correlated = correlated and _substantive(signal) and signal in transcript
+        # Requests can contain the canary and notes are model-authored. Neither
+        # can establish that the target actually returned the claimed effect.
+        transcript = _text(_get(exchange, "response")).lower()
+        correlated = (correlated and _substantive(signal) and signal in transcript
+                      and _get(exchange, "context_id") == _get(result, "context_id"))
     for result in negative_controls:
         signal = _text(_get(result, "behavioral_signal")).lower()
         control = controls_by_attempt.get(
             _positive_int(_get(result, "attempt_index"))
         )
         exchange = _get(control, "exchange")
-        transcript = " ".join((
-            _text(_get(exchange, "request")),
-            _text(_get(exchange, "response")),
-            _text(_get(exchange, "notes")),
-            _text(_get(control, "result")),
-        )).lower()
-        correlated = correlated and _substantive(signal) and signal in transcript
+        transcript = _text(_get(exchange, "response")).lower()
+        correlated = (correlated and _substantive(signal) and signal in transcript
+                      and _get(exchange, "context_id") == _get(result, "context_id"))
     if (
         replay_count_int < 2
         or len(positive_replays) < 2
         or len(negative_controls) < 1
         or len(attempt_ids) < 3
         or 0 in attempt_ids
+        or len(attempt_ids) != len(positive_replays) + len(negative_controls)
+        or len(exchange_attempt_ids) != len(replay_exchanges)
+        or len(control_attempt_ids) != len(controls)
+        or bool(exchange_attempt_ids & control_attempt_ids)
+        or len({_text(_get(e, "method")) for e in replay_exchanges}
+               | {_text(_get(_get(c, "exchange"), "method")) for c in controls}) != 1
+        or any(
+            _text(_get(_get(c, "exchange"), "request")) == _text(_get(e, "request"))
+            and _text(_get(_get(c, "exchange"), "identity")) == _text(_get(e, "identity"))
+            for c in controls for e in replay_exchanges
+        )
         or len(positive_contexts) < 2
         or not correlated
         or not {

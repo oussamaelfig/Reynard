@@ -13,7 +13,7 @@ prose where structured data is expected.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -205,7 +205,7 @@ class PoC(BaseModel):
     response_excerpt: str = Field("", description="Up to ~500 chars of the relevant response.")
     verdict: ExploitVerdict
     agent_name: AgentName = "exploitation"
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     # Populated only by the independent Validator.  Discovery agents may carry
     # arbitrary confidence, but cannot make a finding reportable by setting
     # this field: the validator and central reportability policy both verify
@@ -359,7 +359,7 @@ class ReporterOutput(BaseModel):
     Used by the orchestrator to log session results programmatically."""
     title: str = Field("Penetration Test Report", description="Report title.")
     target_url: str
-    generated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     verified_count: int = 0
     informational_count: int = 0
     false_positive_count: int = 0

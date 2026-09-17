@@ -156,7 +156,7 @@ def run_target(
 
     registry = sessions._REGISTRY
     session_snapshot = {
-        "sessions": [asdict(registry.get(name)) for name in registry.names()],
+        "sessions": [registry.get(name).to_transfer_dict() for name in registry.names()],
         "active": registry.active().name,
     } if registry is not None else {}
     with tempfile.TemporaryDirectory(prefix="reynard-target-") as workspace:
@@ -213,7 +213,7 @@ def _run_target_worker(config: dict[str, Any]) -> dict[str, Any]:
 
         registry = sessions.get_registry()
         for session in snapshot.get("sessions", []):
-            registry.register(sessions.AuthSession(**session), overwrite=True)
+            registry.register(sessions.AuthSession.from_transfer_dict(session), overwrite=True)
         registry.set_active(snapshot.get("active", "default"))
     from hacking_agent.cli.orchestrator import Orchestrator
 
@@ -228,8 +228,8 @@ def _run_target_worker(config: dict[str, Any]) -> dict[str, Any]:
         scope_domains=list(engagement.authorized_domains),
         scope_cidrs=list(engagement.authorized_cidrs),
         mission_mode="production",
+        engagement=engagement,
     )
-    orch.scope_guard.attach_engagement(engagement)
     orch.run()
     orch._assemble_evidence_bundles()
     findings = extract_findings(orch.memory, orch.evidence, orch.bundles)

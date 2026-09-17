@@ -146,6 +146,7 @@ class RunStore:
                  RunStatus.queued.value, RunStatus.running.value),
             )
             self._conn.commit()
+            self._auth_sessions.clear()
             return cursor.rowcount
 
     def update(self, run_id: str, **fields: Any) -> None:

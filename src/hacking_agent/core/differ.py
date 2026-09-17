@@ -119,7 +119,7 @@ class BaselineStore:
 
     def capture(self, name: str, raw_response: str,
                 session_name: str = "") -> Baseline:
-        from datetime import datetime
+        from datetime import datetime, timezone
         status, headers_text, body = _split_response(raw_response)
         normalized = _normalize_for_compare(body)
         b = Baseline(
@@ -132,7 +132,7 @@ class BaselineStore:
             header_set={h.split(":", 1)[0].strip().lower()
                         for h in headers_text.splitlines() if ":" in h},
             body_excerpt=normalized[:3000],
-            captured_at=datetime.utcnow().isoformat(),
+            captured_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             captured_under_session=session_name,
         )
         with self._lock:

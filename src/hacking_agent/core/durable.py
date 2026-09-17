@@ -31,7 +31,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS evidence_bundles (
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def _json_dict(raw: Any) -> dict[str, Any]:
