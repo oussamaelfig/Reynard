@@ -1,0 +1,43 @@
+{
+  "origin": "http://127.0.0.1:8080",
+  "identities": [
+    {
+      "name": "user-a",
+      "role_hint": "disposable-test-user",
+      "setup": [
+        {"purpose": "login", "method": "GET", "url": "http://127.0.0.1:8080/login"},
+        {
+          "purpose": "login",
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/login",
+          "include_hidden_from": "http://127.0.0.1:8080/login",
+          "fields": {"username": "qa-a", "password": "REPLACE_WITH_TEST_PASSWORD_A"}
+        }
+      ],
+      "verification": {"url": "http://127.0.0.1:8080/api/me", "json_path": "/id", "expected": "qa-a"}
+    },
+    {
+      "name": "user-b",
+      "role_hint": "disposable-test-user",
+      "setup": [
+        {"purpose": "login", "method": "GET", "url": "http://127.0.0.1:8080/login"},
+        {
+          "purpose": "login",
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/login",
+          "include_hidden_from": "http://127.0.0.1:8080/login",
+          "fields": {"username": "qa-b", "password": "REPLACE_WITH_TEST_PASSWORD_B"}
+        }
+      ],
+      "verification": {"url": "http://127.0.0.1:8080/api/me", "json_path": "/id", "expected": "qa-b"}
+    }
+  ],
+  "allowed_mutations": [{"method": "POST", "url": "http://127.0.0.1:8080/login", "purpose": "login"}],
+  "allow_account_creation": false,
+  "read_prefixes": ["http://127.0.0.1:8080/app", "http://127.0.0.1:8080/api"],
+  "start_urls": ["http://127.0.0.1:8080/app"],
+  "max_requests": 120,
+  "max_pages": 20,
+  "max_depth": 3,
+  "deadline_seconds": 120.0
+}

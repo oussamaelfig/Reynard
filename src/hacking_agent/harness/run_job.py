@@ -68,7 +68,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if os.environ.pop("REYNARD_AUTH_SESSIONS_STDIN", "") == "1":
             # Credentials never enter config files, argv, or the child environment.
-            config["auth_sessions"] = json.loads(sys.stdin.buffer.read(1048577))
+            encoded_inputs = sys.stdin.buffer.read(1048577)
+            if len(encoded_inputs) > 1048576:
+                raise ValueError("private worker inputs exceed 1 MiB")
+            private_inputs = json.loads(encoded_inputs)
+            if isinstance(private_inputs, list):
+                config["auth_sessions"] = private_inputs
+            elif isinstance(private_inputs, dict) and set(private_inputs) <= {
+                "auth_sessions", "authenticated_research", "business_rules",
+            }:
+                config.update(private_inputs)
+            else:
+                raise ValueError("invalid private worker inputs")
         req = RunRequest.model_validate(config)
     except (ValueError, TypeError) as exc:
         _write_result(run_dir, error=f"invalid run configuration: {type(exc).__name__}")
@@ -117,6 +128,13 @@ def main(argv: list[str] | None = None) -> int:
     emit("run_start", {"targets": targets,
                        "description": (req.description or "")[:200]})
 
+    research_options: dict[str, Any] = {}
+    if req.authenticated_research is not None:
+        research_options = {
+            "authenticated_research": req.authenticated_research.model_dump(mode="json"),
+            "business_rules": [rule.model_dump(mode="json") for rule in req.business_rules],
+        }
+
     results: list[dict[str, Any]] = []
     for target in targets:
         try:
@@ -125,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_iterations=req.max_iterations,
                 per_target_timeout=req.per_target_timeout,
                 objective=req.description or None,
+                **research_options,
             )
         except ProcessCleanupError:
             row = {"target": target, "verdict": "error: target process cleanup could not be confirmed",

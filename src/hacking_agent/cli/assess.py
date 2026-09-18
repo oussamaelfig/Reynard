@@ -167,6 +167,8 @@ def run_target(
     per_target_timeout: float,
     objective: str | None = None,
     run_id: str = "",
+    authenticated_research: dict[str, Any] | None = None,
+    business_rules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run one target in an isolated process, joining it before returning.
 
@@ -181,6 +183,10 @@ def run_target(
     target_url = authorized_targets(engagement, [target_url])[0]
     if not engagement.is_within_window():
         raise EngagementError("Refusing to run outside the engagement testing window")
+    if authenticated_research is not None or business_rules:
+        from hacking_agent.core.research_pipeline import parse_research_inputs
+        parse_research_inputs(authenticated_research, business_rules or [],
+                              ScopeGuard.from_engagement(engagement), target_url)
     console.print(f"[bold cyan]▶ Assessing target:[/] {target_url}")
     started = time.monotonic()
     timed_out = False
@@ -200,9 +206,11 @@ def run_target(
             "max_iterations": max_iterations,
             "objective": objective,
             "session_snapshot": session_snapshot,
+            "authenticated_research": authenticated_research,
+            "business_rules": business_rules or [],
             "run_id": run_id or os.getenv("REYNARD_RUN_ID", ""),
             "engagement_id": os.getenv("REYNARD_ENGAGEMENT_ID") or _engagement_binding(engagement),
-        })
+        }, ensure_ascii=False)
         proc = subprocess.Popen(
             [sys.executable, "-m", "hacking_agent.cli.assess_worker",
              str(result_path)],
@@ -289,6 +297,12 @@ def _run_target_worker(config: dict[str, Any]) -> dict[str, Any]:
         engagement_id=config.get("engagement_id") or _engagement_binding(engagement),
         run_id=config.get("run_id", ""),
     )
+    if config.get("authenticated_research") is not None or config.get("business_rules"):
+        from hacking_agent.core.research_pipeline import prepare_authenticated_research
+        prepare_authenticated_research(
+            orch, config.get("authenticated_research"), config.get("business_rules") or [],
+            target_url,
+        )
     result = orch.run()
     if result is None or result.success is not True:
         return {"verdict": "error: orchestrator did not complete a successful report", "findings": []}

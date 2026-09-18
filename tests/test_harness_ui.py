@@ -154,6 +154,30 @@ def test_ui_tabs_and_dialogs_have_accessible_relationships(document):
         assert attrs.get("aria-label") or attrs.get("aria-labelledby") in document.ids
 
 
+def test_authenticated_research_is_explicit_labeled_and_not_a_browser_credential_draft(document):
+    section = document.ids["f-authenticated-section"]
+    assert section["tag"] == "details" and "open" not in section["attrs"]
+    enabled = document.ids["f-authenticated-enable"]["attrs"]
+    assert enabled["type"] == "checkbox" and "checked" not in enabled
+    assert enabled["aria-controls"] == "f-authenticated-fields"
+    assert enabled["aria-expanded"] == "false"
+    assert "hidden" in document.ids["f-authenticated-fields"]["attrs"]
+    for field_id in ("f-authenticated-plan", "f-business-rules"):
+        field = document.ids[field_id]
+        assert field["tag"] == "textarea" and "disabled" in field["attrs"]
+        assert section in field["ancestors"]
+        assert all(reference in document.ids for reference in field["attrs"]["aria-describedby"].split())
+    for field_id in ("f-authenticated-plan", "f-business-rules", "f-sessions"):
+        attrs = document.ids[field_id]["attrs"]
+        assert attrs["autocomplete"] == "off" and attrs["spellcheck"] == "false"
+    source = UI.read_text(encoding="utf-8")
+    assert "No automatic CAPTCHA/MFA handling or JS-only coverage" in source
+    assert "not confirmed findings" in source
+    assert "not saved as browser drafts" in source
+    assert "Plan identities replace legacy Auth sessions" in source
+    assert "f-sessions-help" in document.ids["f-sessions"]["attrs"]["aria-describedby"].split()
+
+
 def _preview_module():
     name = "preview_harness_ui"
     if name in sys.modules:

@@ -161,12 +161,27 @@
         <div><label for="f-rps">Max req/sec <span class="hint">0 = default</span></label><input type="number" id="f-rps" value="0" min="0" step="0.5" /></div>
         <div><label for="f-maxreq">Max total requests <span class="hint">per target; 0 = no cap</span></label><input type="number" id="f-maxreq" value="0" min="0" /></div>
       </div>
-      <details class="adv">
+      <details class="adv" id="f-advanced-section">
         <summary><svg aria-hidden="true" class="chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>Advanced configuration<span>Optional</span></summary>
         <label for="f-destructive" class="check"><input type="checkbox" id="f-destructive" /><span>Allow destructive actions <em style="color:var(--text-faint);font-style:normal">(off by default)</em></span></label>
         <label for="f-browser" class="check"><input type="checkbox" id="f-browser" /><span>Enable Browser Use (semantic exploration)</span></label>
         <label for="f-hexstrike" class="check"><input type="checkbox" id="f-hexstrike" /><span>Enable HexStrike (MCP capability broker)</span></label>
-        <label for="f-sessions">Auth sessions <span class="hint">JSON array, optional</span></label><textarea id="f-sessions" placeholder='[{"name":"userA","role_hint":"user","cookie_header":"session=…"}]'></textarea>
+        <label for="f-sessions">Auth sessions <span class="hint">JSON array, optional</span></label><textarea id="f-sessions" autocomplete="off" spellcheck="false" aria-describedby="f-sessions-help f-msg" placeholder='[{"name":"userA","role_hint":"user","cookie_header":"session=…"}]'></textarea>
+        <p class="hint" id="f-sessions-help">For legacy session-based testing. Authenticated research uses identities in its research plan instead; do not configure both.</p>
+      </details>
+      <details class="adv" id="f-authenticated-section">
+        <summary><svg aria-hidden="true" class="chev" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>Authenticated research<span>Opt-in</span></summary>
+        <p class="hint" id="f-authenticated-help">A server-rendered HTTP crawler for explicit identities and read prefixes. Only listed mutations are allowed. No automatic CAPTCHA/MFA handling or JS-only coverage.</p>
+        <label for="f-authenticated-enable" class="check"><input type="checkbox" id="f-authenticated-enable" aria-controls="f-authenticated-fields" aria-expanded="false" aria-describedby="f-authenticated-help" /><span>Enable authenticated research for this run</span></label>
+        <div id="f-authenticated-fields" hidden>
+          <label for="f-authenticated-plan">Research plan <span class="hint">JSON object, required when enabled</span></label>
+          <textarea id="f-authenticated-plan" rows="9" disabled autocomplete="off" spellcheck="false" aria-describedby="f-authenticated-plan-help f-authenticated-privacy f-msg" placeholder="Paste your reviewed research plan JSON"></textarea>
+          <p class="hint" id="f-authenticated-plan-help">Plan identities replace legacy Auth sessions. Define one origin, identities with verification checks, allowed mutations, read prefixes, and request/page/depth/time budgets. Account creation requires explicit permission in the plan.</p>
+          <label for="f-business-rules">Business rules <span class="hint">JSON array, optional</span></label>
+          <textarea id="f-business-rules" rows="5" disabled autocomplete="off" spellcheck="false" aria-describedby="f-business-rules-help f-authenticated-privacy f-msg" placeholder="Optional JSON array of reviewed business rules"></textarea>
+          <p class="hint" id="f-business-rules-help">Specify the owner and denied identities, URL, JSON path, expected value, and denied status codes. Rule outputs are candidates for review, not confirmed findings.</p>
+          <p class="hint" id="f-authenticated-privacy">Credentials are not saved as browser drafts. Research fields clear when disabled; all session and research fields clear on drawer close, successful launch, or session lock.</p>
+        </div>
       </details>
       <div class="callout">
         <label for="f-authorized" class="check"><input type="checkbox" id="f-authorized" required /><span><strong>I am authorized to test this scope.</strong> Reynard acts only within the declared engagement.</span></label>

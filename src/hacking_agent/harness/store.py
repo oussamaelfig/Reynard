@@ -58,6 +58,7 @@ class RunStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._auth_sessions: dict[str, list[dict[str, Any]]] = {}
+        self._research_inputs: dict[str, dict[str, Any]] = {}
         self._conn = sqlite3.connect(str(self.root / "runs.db"),
                                      check_same_thread=False, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
@@ -112,10 +113,17 @@ class RunStore:
         # Credentials are ephemeral: only the worker's stdin receives them.
         public_config = request.model_dump(mode="json")
         public_config["auth_sessions"] = []
+        public_config["authenticated_research"] = None
+        public_config["business_rules"] = []
         self.config_path(run_id).write_text(
             json.dumps(public_config, indent=2), encoding="utf-8")
         with self._lock:
             self._auth_sessions[run_id] = [s.model_dump(mode="json") for s in request.auth_sessions]
+            if request.authenticated_research is not None:
+                self._research_inputs[run_id] = {
+                    "authenticated_research": request.authenticated_research.model_dump(mode="json"),
+                    "business_rules": [rule.model_dump(mode="json") for rule in request.business_rules],
+                }
             self._conn.execute(
                 """INSERT INTO runs (id, status, created_at, updated_at, targets,
                        description, findings_count, verified_count,
@@ -133,6 +141,13 @@ class RunStore:
         with self._lock:
             return self._auth_sessions.pop(run_id, [])
 
+    def take_worker_inputs(self, run_id: str) -> dict[str, Any] | list[dict[str, Any]]:
+        """Consume all private inputs once; preserve legacy session-list IPC."""
+        with self._lock:
+            sessions = self._auth_sessions.pop(run_id, [])
+            research = self._research_inputs.pop(run_id, None)
+            return {"auth_sessions": sessions, **research} if research is not None else sessions
+
     def recover_interrupted(self) -> int:
         """Stale queued/running records require a fresh authorized submission.
 
@@ -147,6 +162,7 @@ class RunStore:
             )
             self._conn.commit()
             self._auth_sessions.clear()
+            self._research_inputs.clear()
             return cursor.rowcount
 
     def update(self, run_id: str, **fields: Any) -> None:
@@ -257,6 +273,7 @@ class RunStore:
     def close(self) -> None:
         with self._lock:
             self._auth_sessions.clear()
+            self._research_inputs.clear()
             try:
                 self._conn.close()
             except Exception:

@@ -21,6 +21,29 @@ from hacking_agent.harness.store import RunStore
 
 # A worker command factory: given a run_dir, return the argv to execute.
 WorkerCmd = Callable[[str], list]
+_INPUT_DELIVERY_TIMEOUT = 30.0
+
+
+def _deliver_inputs(proc: subprocess.Popen, payload: bytes,
+                    delivered: threading.Event, errors: list[str]) -> None:
+    """Never hold the manager lock while writing a possibly full child pipe."""
+    try:
+        if proc.stdin is None:
+            raise OSError("worker has no input pipe")
+        proc.stdin.write(payload)
+    except BrokenPipeError:
+        pass  # Exited/custom worker: its exit/result contract decides success.
+    except Exception:
+        errors.append("private worker input delivery failed")
+    finally:
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        except Exception:
+            errors.append("private worker input delivery failed")
+        delivered.set()
 
 
 def _default_worker_cmd(run_dir: str) -> list:
@@ -82,10 +105,16 @@ class JobManager:
         run_dir = str(self.store.run_dir(run_id))
         env = dict(os.environ)
         env.update(self._env_extra)
+        # The parent's UTF-8 file wrapper does not configure child stdout.
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         env["REYNARD_AUTH_SESSIONS_STDIN"] = "1"
-        sessions = self.store.take_auth_sessions(run_id)
+        private_inputs = self.store.take_worker_inputs(run_id)
         log_fh = open(self.store.worker_log_path(run_id), "w", encoding="utf-8")
         try:
+            encoded_inputs = json.dumps(private_inputs, ensure_ascii=False).encode("utf-8")
+            if len(encoded_inputs) > 1048576:
+                raise ValueError("private worker inputs exceed 1 MiB")
             proc = subprocess.Popen(
                 self._worker_cmd(run_dir),
                 cwd=str(PROJECT_ROOT), env=env,
@@ -93,12 +122,6 @@ class JobManager:
                 stdin=subprocess.PIPE,
                 start_new_session=True,  # own process group so cancel kills children
             )
-            if proc.stdin is not None:
-                try:
-                    proc.stdin.write(json.dumps(sessions).encode("utf-8"))
-                    proc.stdin.close()
-                except BrokenPipeError:
-                    pass  # failed/custom worker; monitor records its outcome
         except Exception as exc:
             log_fh.close()
             self.store.update(run_id, status=RunStatus.failed,
@@ -106,18 +129,39 @@ class JobManager:
             return
         self._running[run_id] = proc
         self.store.update(run_id, status=RunStatus.running, pid=proc.pid, error="")
-        threading.Thread(target=self._monitor, args=(run_id, proc, log_fh),
+        delivered = threading.Event()
+        delivery_errors: list[str] = []
+        threading.Thread(target=_deliver_inputs,
+                         args=(proc, encoded_inputs, delivered, delivery_errors), daemon=True).start()
+        threading.Thread(target=self._monitor,
+                         args=(run_id, proc, log_fh, delivered, delivery_errors),
                          daemon=True).start()
 
     # ---- monitoring ------------------------------------------------------
 
-    def _monitor(self, run_id: str, proc: subprocess.Popen, log_fh: Any) -> None:
+    def _monitor(self, run_id: str, proc: subprocess.Popen, log_fh: Any,
+                 delivered: threading.Event, delivery_errors: list[str]) -> None:
+        if not delivered.wait(_INPUT_DELIVERY_TIMEOUT):
+            delivery_errors.append("private worker input delivery timed out")
+        if delivery_errors and proc.poll() is None:
+            try:
+                _terminate(proc)
+            except Exception:
+                # Unknown live process state must not permit another run.
+                with self._lock:
+                    self._closed = True
+                self.store.update(run_id, status=RunStatus.failed,
+                                  error="worker input failed; process cleanup could not be confirmed")
+                log_fh.close()
+                return
         rc = proc.wait()
         try:
             log_fh.close()
         except Exception:
             pass
         result = self._read_result(run_id)
+        if delivery_errors:
+            result["error"] = delivery_errors[0]
         with self._lock:
             self._running.pop(run_id, None)
             was_cancelled = run_id in self._cancelled
@@ -177,7 +221,7 @@ class JobManager:
                 except ValueError:
                     pass
                 self.store.update(run_id, status=RunStatus.cancelled)
-                self.store.take_auth_sessions(run_id)
+                self.store.take_worker_inputs(run_id)
                 return True
             if proc is not None and proc.poll() is None:
                 self._cancelled.add(run_id)
@@ -195,7 +239,7 @@ class JobManager:
             self._closed = True
             for run_id in self._queue:
                 self.store.update(run_id, status=RunStatus.cancelled)
-                self.store.take_auth_sessions(run_id)
+                self.store.take_worker_inputs(run_id)
             self._queue.clear()
             procs = list(self._running.items())
             self._cancelled.update(self._running)

@@ -6,7 +6,7 @@ Reynard is a Python engine for authorized pentests, bug-bounty research, and
 isolated CTF/lab work. Specialist agents investigate candidates; a separate
 validator and deterministic export policy decide what can become a finding.
 
-[Quickstart](#quickstart) · [Architecture](#architecture) · [Validation](#how-a-candidate-becomes-a-finding) · [Development](#development-and-testing) · [Security review](docs/security-review.md)
+[Quickstart](#quickstart) · [Authenticated research](#authenticated-research) · [Architecture](#architecture) · [Validation](#how-a-candidate-becomes-a-finding) · [Development](#development-and-testing) · [Security review](docs/security-review.md)
 
 > **Current maturity:** the authorization and evidence boundaries are stronger
 > than the breadth of trusted detection adapters. Many tool capabilities are
@@ -89,6 +89,8 @@ broad capabilities; use a dedicated environment and read [Security and scope](#s
 flowchart TD
     A["CLI / local web console"] --> B["Engagement + target authorization"]
     B --> C["Orchestrator: hypotheses, budgets, stalls"]
+    B --> R["Opt-in account workflows + authenticated HTTP crawl"]
+    R --> F
     C --> D["Bounded independent subagents"]
     C --> E["Recon / analyst / exploitation"]
     D --> F["Shared knowledge + attack surface"]
@@ -165,6 +167,27 @@ For controlled identities, the orchestrator accepts `--auth-file`:
 ```
 
 Treat that file as a credential. Keep it outside version control.
+
+## Authenticated research
+
+Go beyond the public entry page with **explicit, scoped account workflows**:
+
+- Log in as up to four isolated test identities; optionally register disposable
+  accounts with separate, exact action permissions.
+- Carry hidden form fields such as CSRF tokens, verify the logged-in identity,
+  and crawl approved server-rendered paths with request/page/depth limits.
+- Replay declared owner-versus-other-user private-resource checks. Feed safe
+  discovery and candidate observations into the multi-agent knowledge graph.
+
+In the console, expand **Authenticated research** and adapt the
+[local plan template](eval/authenticated-research.sample.json). See the
+[configuration, registration and business-rule guide](docs/authenticated-research.md).
+
+This path uses the existing scoped HTTPX transport; no additional crawler
+dependency is required. It does not execute JavaScript, bypass MFA/CAPTCHA,
+automatically invent account mutations, or establish arbitrary business rules.
+Replayed rule violations remain **candidates**, not confirmed report findings.
+Existing unbounded browser tools remain production-restricted.
 
 ## How a candidate becomes a finding
 

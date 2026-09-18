@@ -6,7 +6,10 @@ from enum import Enum
 import re
 from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from hacking_agent.core.authenticated_research import AuthenticatedResearchPlan
+from hacking_agent.core.business_logic import BusinessRuleSpec
 
 ScopeEntry = Annotated[str, Field(min_length=1, max_length=4096)]
 
@@ -64,9 +67,24 @@ class RunRequest(BaseModel):
     max_total_requests: int = Field(default=0, ge=0, le=1000000)
     allow_destructive: bool = False
     auth_sessions: list[AuthSessionSpec] = Field(default_factory=list, max_length=20)
+    authenticated_research: AuthenticatedResearchPlan | None = Field(default=None, repr=False)
+    business_rules: list[BusinessRuleSpec] = Field(default_factory=list, max_length=20, repr=False)
     enable_browser_use: bool = False
     enable_hexstrike: bool = False
     authorized: bool = False          # explicit "I am authorized to test this scope"
+
+    @model_validator(mode="after")
+    def bound_research_inputs(self) -> RunRequest:
+        if self.business_rules and self.authenticated_research is None:
+            raise ValueError("business rules require an authenticated research plan")
+        if self.authenticated_research is not None:
+            if self.auth_sessions:
+                raise ValueError("use plan identities instead of mixing legacy auth sessions")
+            if len(self.resolved_targets()) != 1:
+                raise ValueError("authenticated research requires exactly one target per run")
+        if len(self.model_dump_json().encode("utf-8")) > 524288:
+            raise ValueError("combined run configuration exceeds 512 KiB")
+        return self
 
     @field_validator("auth_sessions")
     @classmethod
@@ -100,7 +118,16 @@ class RunRequest(BaseModel):
             guard = ScopeGuard.from_engagement(engagement_from_dict(self.to_engagement_dict()))
             if any(not guard.is_in_scope(target) for target in self.resolved_targets()):
                 return "Every target must be inside the authorized scope and outside exclusions."
+            if self.authenticated_research is not None:
+                from hacking_agent.core.research_pipeline import validate_research_inputs
+                validate_research_inputs(
+                    self.authenticated_research, self.business_rules, guard,
+                    self.resolved_targets()[0],
+                )
         except ValueError as exc:
+            # Research validation may inspect credentials and private object IDs.
+            if self.authenticated_research is not None:
+                return "Invalid authenticated research configuration: check origins, scope, identities and permitted actions."
             return f"Invalid authorized scope: {exc}"
         return None
 

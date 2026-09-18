@@ -64,7 +64,7 @@ class PreviewJobs:
         from hacking_agent.harness.models import RunStatus
 
         self.submitted.append(run_id)
-        self.store.take_auth_sessions(run_id)
+        self.store.take_worker_inputs(run_id)
         self.store.update(run_id, status=RunStatus.running)
         record = self.store.get(run_id)
         with self.store._lock:
@@ -92,7 +92,7 @@ class PreviewJobs:
         record = self.store.get(run_id)
         if record is None or record.status.is_terminal:
             return False
-        self.store.take_auth_sessions(run_id)
+        self.store.take_worker_inputs(run_id)
         self.store.update(run_id, status=RunStatus.cancelled)
         with self.store.events_path(run_id).open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(_event(999, "run_end", findings=0,

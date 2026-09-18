@@ -184,6 +184,38 @@ def test_worker_entrypoint_sanitizes_failure_and_returns_nonzero(tmp_path, monke
     assert assess_worker.main([]) == 2
 
 
+def test_research_plan_reaches_target_via_private_pipe_only(monkeypatch):
+    from test_research_pipeline import research_plan, business_rule
+    def launch(argv, **kwargs):
+        assert "private-test-cookie" not in str(argv) + str(kwargs)
+        path = Path(argv[-1])
+        proc = SimpleNamespace(returncode=0, stdin=io.StringIO())
+        def communicate(*, input, timeout):
+            config = json.loads(input)
+            assert config["authenticated_research"] == research_plan()
+            assert config["business_rules"] == [business_rule()]
+            assert list(path.parent.iterdir()) == []
+            path.write_text('{"verdict":"assessed","findings":[]}', encoding="utf-8")
+        proc.communicate = communicate
+        return proc
+    monkeypatch.setattr(assess.subprocess, "Popen", launch)
+    result = run(authenticated_research=research_plan(), business_rules=[business_rule()])
+    assert result["verdict"] == "assessed"
+
+
+def test_research_setup_failure_stops_orchestrator_before_run(monkeypatch):
+    from test_research_pipeline import research_plan
+    fake = SimpleNamespace(run=Mock(side_effect=AssertionError("must not run")))
+    monkeypatch.setattr("hacking_agent.cli.orchestrator.Orchestrator", lambda **_: fake)
+    prepare = Mock(side_effect=RuntimeError("authenticated research failed"))
+    monkeypatch.setattr("hacking_agent.core.research_pipeline.prepare_authenticated_research", prepare)
+    with pytest.raises(RuntimeError, match="authenticated research failed"):
+        assess._run_target_worker({"engagement": asdict(engagement()),
+            "target_url": "https://fixture.invalid/", "max_iterations": 2,
+            "authenticated_research": research_plan()})
+    fake.run.assert_not_called()
+
+
 @pytest.mark.parametrize("value", ["[]", "bad-json"])
 def test_worker_entrypoint_rejects_malformed_input(tmp_path, monkeypatch, value):
     monkeypatch.setattr(sys, "stdin", io.StringIO(value))
