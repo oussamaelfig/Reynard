@@ -19,3 +19,4 @@ coverage.xml
 htmlcov/
 output/playwright/
 .playwright-cli/
+.reynard-private/

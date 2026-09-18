@@ -38,7 +38,32 @@ function focusTrapTarget(items, active, backwards) {
 function confirmedFindings(items) {
   return items.filter((finding) => finding.verified === true && finding.verification_status === "verified");
 }
-function buildRunRequest(fields, sessions = []) {
+function parseAuthenticatedResearch(enabled, planText = "", rulesText = "", sessions = []) {
+  // Opt-out is checked before reading either draft: stale disabled secrets are
+  // neither parsed nor forwarded, even if an extension restored field values.
+  if (enabled !== true) return { research: null, rules: [] };
+  const invalid = (field, message) => { const error = new Error(message); error.field = field; throw error; };
+  if (sessions.length) invalid("f-sessions", "Plan identities replace Auth sessions. Clear Auth sessions or disable authenticated research.");
+  const source = planText.trim();
+  if (!source) invalid("f-authenticated-plan", rulesText.trim()
+    ? "Add a research plan before business rules."
+    : "Add a JSON research plan to enable authenticated research.");
+  let research;
+  try { research = JSON.parse(source); }
+  catch (_) { invalid("f-authenticated-plan", "Research plan must be valid JSON. Check its syntax."); }
+  if (!research || typeof research !== "object" || Array.isArray(research)) {
+    invalid("f-authenticated-plan", "Research plan must be a JSON object, not an array or a single value.");
+  }
+  let rules = [];
+  if (rulesText.trim()) {
+    try { rules = JSON.parse(rulesText); }
+    catch (_) { invalid("f-business-rules", "Business rules must be valid JSON. Check their syntax."); }
+    if (!Array.isArray(rules)) invalid("f-business-rules", "Business rules must be a JSON array.");
+  }
+  return { research, rules };
+}
+function buildRunRequest(fields, sessions = [], research = null, rules = []) {
+  const researchEnabled = fields["f-authenticated-enable"] === true;
   return {
     targets: splitList(fields["f-targets"]),
     authorized_domains: splitList(fields["f-domains"]),
@@ -54,6 +79,8 @@ function buildRunRequest(fields, sessions = []) {
     enable_browser_use: fields["f-browser"] === true,
     enable_hexstrike: fields["f-hexstrike"] === true,
     auth_sessions: sessions,
+    authenticated_research: researchEnabled ? research : null,
+    business_rules: researchEnabled && research ? rules : [],
     authorized: fields["f-authorized"] === true,
   };
 }
@@ -99,7 +126,7 @@ const gate = createRequestGate(), seen = createSeenWindow();
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { esc, count, statusName, severityName, filterRuns, runSummary, readTheme, writeTheme,
     boundedText, createRequestGate, createSeenWindow, reconcileKeyed, mdToHtml, runRow, findingRow,
-    badge, relTime, tabNavigationIndex, focusTrapTarget, confirmedFindings, buildRunRequest,
+    badge, relTime, tabNavigationIndex, focusTrapTarget, confirmedFindings, buildRunRequest, parseAuthenticatedResearch,
     emptyPrivateSession };
 }
 if (typeof document === "undefined") return;
@@ -166,7 +193,7 @@ function authError() {
   text("f-sel-title", "Select a finding"); text("f-count", "Sign in to load findings");
   text("runs-count", "—"); text("workspace-count", "Sign in to load runs");
   $("d-cancel").style.display = "none";
-  $("f-sessions").value = ""; $("toasts").innerHTML = "";
+  clearSensitiveDrafts(); $("toasts").innerHTML = "";
   cmdkItems = []; $("cmdk-list").innerHTML = ""; $("cmdk-input").value = "";
   if ($("workspace-welcome")) $("workspace-welcome").hidden = false;
   if ($("detail-content")) $("detail-content").hidden = true;
@@ -258,7 +285,7 @@ function closeOverlay(id, restore = true) {
   if (activeDialog !== id) return;
   const dialog = $(id); activeDialog = null;
   dialog.classList.remove("open"); dialog.setAttribute("aria-hidden", "true"); dialog.inert = true;
-  if (id === "drawer") $("drawer-scrim").classList.remove("open");
+  if (id === "drawer") { $("drawer-scrim").classList.remove("open"); clearSensitiveDrafts(); }
   const shell = $("app-shell") || document.querySelector(".shell"); if (shell) shell.inert = false;
   const previous = dialogReturn.get(id); dialogReturn.delete(id);
   if (restore && previous?.isConnected) previous.focus({ preventScroll: true });
@@ -273,6 +300,27 @@ function trapDialogFocus(event) {
   if (target) { event.preventDefault(); target.focus(); }
 }
 // ---------- drawer ----------
+function syncAuthenticatedFields() {
+  const enabled = $("f-authenticated-enable").checked === true;
+  $("f-authenticated-enable").setAttribute("aria-expanded", String(enabled));
+  $("f-authenticated-fields").hidden = !enabled;
+  $("f-authenticated-plan").required = enabled;
+  ["f-authenticated-plan", "f-business-rules"].forEach((id) => {
+    $(id).disabled = !enabled;
+    if (!enabled) { $(id).value = ""; $(id).setAttribute("aria-invalid", "false"); }
+  });
+}
+function clearSensitiveDrafts() {
+  $("f-sessions").value = "";
+  $("f-authenticated-enable").checked = false;
+  syncAuthenticatedFields();
+}
+on("f-authenticated-enable", "change", syncAuthenticatedFields);
+on("f-authenticated-plan", "invalid", () => {
+  $("f-authenticated-section").open = true;
+  $("f-authenticated-plan").setAttribute("aria-invalid", "true");
+});
+clearSensitiveDrafts();
 function openDrawer() { if (authenticated === false) { authError(); return; } openOverlay("drawer", "f-targets"); }
 function closeDrawer() { closeOverlay("drawer"); }
 $("btn-new").onclick = openDrawer; $("nav-new").onclick = openDrawer;
@@ -282,14 +330,25 @@ async function submit() {
   if ($("f-submit").disabled) return;
   const requestEpoch = authEpoch;
   const msg = $("f-msg"); msg.className = "msg"; msg.textContent = "";
+  ["f-sessions", "f-authenticated-plan", "f-business-rules"].forEach((id) => $(id).setAttribute("aria-invalid", "false"));
   let sessions = [];
   const sraw = $("f-sessions").value.trim();
   if (sraw) { try { sessions = JSON.parse(sraw); if (!Array.isArray(sessions)) throw new Error(); } catch (e) { msg.className = "msg err"; msg.textContent = "Auth sessions must be a JSON array of identities."; $("f-sessions").focus(); return; } }
+  let research, rules;
+  try {
+    ({ research, rules } = parseAuthenticatedResearch($("f-authenticated-enable").checked,
+      $("f-authenticated-plan").value, $("f-business-rules").value, sessions));
+  } catch (error) {
+    msg.className = "msg err"; msg.textContent = error.message;
+    const field = $(error.field);
+    $(error.field === "f-sessions" ? "f-advanced-section" : "f-authenticated-section").open = true;
+    field.setAttribute("aria-invalid", "true"); field.focus(); return;
+  }
   const invalid = Array.from($("drawer").querySelectorAll("input, textarea, select")).find((field) => !field.checkValidity());
   if (invalid) { invalid.reportValidity(); return; }
   const fields = Object.fromEntries(Array.from($("drawer").querySelectorAll("input, textarea, select"))
     .map((field) => [field.id, field.type === "checkbox" ? field.checked : field.value]));
-  const body = buildRunRequest(fields, sessions);
+  const body = buildRunRequest(fields, sessions, research, rules);
   $("f-submit").disabled = true;
   $("f-submit").textContent = "Launching…";
   $("drawer").setAttribute("aria-busy", "true");
@@ -297,7 +356,7 @@ async function submit() {
     const res = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
     if (authenticated !== true || requestEpoch !== authEpoch) return;
     toast("Run launched", res.run_id, "ok");
-    $("f-sessions").value = "";
+    clearSensitiveDrafts();
     closeDrawer();
     await refreshRuns(); selectRun(res.run_id);
     document.querySelector('.tab[data-tab="live"]').click();
@@ -464,10 +523,54 @@ function renderEvent(ev) {
   trimStream(s); if (follow) scroller.scrollTop = scroller.scrollHeight;
 }
 
+function researchSummaryText(payload) {
+  // This is an explicit public projection, never a dump of the private runner
+  // summary, URLs, identity names, response bodies, markers, or evidence.
+  const record = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const metric = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1000000 ? String(value) : "—";
+  const research = record(payload.research), rules = record(payload.business_rules), metrics = record(rules.metrics);
+  const reasons = new Set([
+    "identity_not_verified", "distinct_identities_not_proven", "identity_verification_failed",
+    "request_blocked_or_failed", "owner_baseline_missing", "malformed_response", "incomplete_response",
+    "resource_redirected", "marker_in_error_response", "marker_missing_or_ambiguous", "replay_inconsistent",
+    "anonymous_control_not_denied", "declared_access_denied", "private_marker_reproduced",
+  ]);
+  const lines = [];
+  if (Object.keys(research).length) {
+    lines.push(`${metric(research.page_count)} pages · ${metric(research.endpoint_count)} endpoints · ${metric(research.total_request_count)} total requests`);
+    lines.push(`Partial coverage: ${research.partial === true ? "yes" : research.partial === false ? "no" : "not reported"}`);
+  } else {
+    lines.push(payload.message === "Starting scoped authenticated research."
+      ? "Starting scoped authenticated research." : "Authenticated research update.");
+  }
+  if (Object.keys(metrics).length) {
+    lines.push(`Rules: ${metric(metrics.passed_count)} passed · ${metric(metrics.candidate_count)} candidates · ${metric(metrics.inconclusive_count)} inconclusive`);
+  }
+  const results = Array.isArray(rules.results) ? rules.results : [];
+  const rows = [];
+  for (const value of results.slice(0, 20)) {
+    const result = record(value);
+    if (!Number.isInteger(result.rule_index) || result.rule_index < 0 || result.rule_index >= 20) continue;
+    const classification = ["passed", "candidate", "inconclusive"].includes(result.classification) ? result.classification : "unknown";
+    const reason = reasons.has(result.reason) ? result.reason.slice(0, 64) : "unrecognized_reason";
+    rows.push(`Rule [${result.rule_index}]: ${classification} · ${reason}`);
+  }
+  if (rows.length) lines.push("Rule indices are zero-based positions in your plan:", ...rows);
+  if (results.length > 20) lines.push("Additional results omitted.");
+  lines.push("These rule outcomes are not confirmed findings.");
+  return lines.join("\n").slice(0, 3500);
+}
+
 function addRow(s, ev) {
   const kind = ev.type || "event";
   const p = ev.payload && typeof ev.payload === "object" && !Array.isArray(ev.payload) ? ev.payload : {};
   const t = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString([], { hour12: false }) : "";
+  if (kind === "research_summary") {
+    const block = document.createElement("div"); block.className = "block";
+    block.dataset.eventType = "research_summary";
+    block.innerHTML = `<div class="bh">${esc(t)}${t ? " · " : ""}Authenticated research</div><pre class="txt">${esc(researchSummaryText(p))}</pre>`;
+    s.appendChild(block); return;
+  }
   let summary = "";
   switch (kind) {
     case "reasoning_note": summary = (p.agent ? "[" + p.agent + "] " : "") + (p.text || ""); break;

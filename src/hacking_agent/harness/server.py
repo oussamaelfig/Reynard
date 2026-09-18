@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -268,6 +269,12 @@ def create_app(store: Optional[RunStore] = None,
     @app.exception_handler(RunPathError)
     async def invalid_run_path(_request: Request, _exc: RunPathError) -> JSONResponse:
         return JSONResponse({"detail": "invalid run identifier"}, status_code=400)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_submission(_request: Request, _exc: RequestValidationError) -> JSONResponse:
+        # Pydantic's default response includes the rejected input, which can be
+        # an entire credential-bearing workflow. Do not echo it to UI/logs.
+        return JSONResponse({"detail": "Invalid request configuration. Check field types, bounds, identity names and required workflow fields."}, status_code=422)
 
     @app.middleware("http")
     async def local_boundary(request: Request, call_next: Any) -> Any:

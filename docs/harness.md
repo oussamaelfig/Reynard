@@ -114,6 +114,20 @@ restart their internal counters. Each harness run owns its memory database.
 - **Advanced** — allow-destructive, Browser Use / HexStrike toggles, and
   optional auth sessions (JSON array of controlled identities for
   authenticated / authorization testing).
+- **Authenticated research** — opt-in private plan and read-only business-rule
+  contracts. Plan identities replace legacy auth sessions. Account registration
+  needs explicit permission; login is verified before bounded HTTP crawling.
+  See [the complete guide and local template](authenticated-research.md).
+
+The new plan and private rule markers use the same ephemeral stdin path as
+credentials. They are not saved in `config.json` or browser drafts. One plan is
+limited to one target/origin per run. The combined configuration is capped at
+512 KiB in UTF-8; worker IPC has a separate 1 MiB byte cap. Validation errors do
+not echo rejected secret input. `research_summary` events show discovery and
+rule outcomes; business-rule candidates do not enter confirmed Findings.
+
+Worker stdout/stderr is forced to UTF-8 at launch, including redirected Windows
+logs, so Unicode progress markers do not fail under the legacy system code page.
 
 ## Workspace interactions
 

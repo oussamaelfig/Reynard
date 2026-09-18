@@ -156,6 +156,105 @@ def test_credentials_reach_worker_over_stdin_only(tmp_path):
     assert store.take_auth_sessions(rec.id) == []
 
 
+def test_research_secrets_use_private_stdin_and_windows_logs_are_utf8(tmp_path):
+    from test_research_pipeline import research_request
+    store = RunStore(root=tmp_path)
+    script = (
+        "import sys,json,pathlib,os;p=pathlib.Path(sys.argv[1]);"
+        "s=json.load(sys.stdin);"
+        "assert s['authenticated_research']['identities'][0]['cookie_header']=='sid=private-test-cookie';"
+        "assert s['business_rules'][0]['expected_value']=='private-object-42';"
+        "assert 'private-test-cookie' not in str(os.environ);"
+        "print(chr(0x25b6));"
+        "(p/'result.json').write_text('{}')"
+    )
+    jobs = JobManager(store, worker_cmd=_cmd(script),
+                      env_extra={"PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"})
+    rec = store.create(research_request())
+    jobs.submit(rec.id)
+    assert _wait_terminal(store, rec.id).status is RunStatus.completed
+    assert "\u25b6" in store.worker_log_path(rec.id).read_text(encoding="utf-8")
+    assert store.take_worker_inputs(rec.id) == []
+
+
+def test_cancel_queued_research_discards_all_private_inputs(tmp_path):
+    from test_research_pipeline import research_request
+    store = RunStore(root=tmp_path)
+    jobs = JobManager(store, worker_cmd=_cmd(_SLOW))
+    blocker = store.create(_req())
+    jobs.submit(blocker.id)
+    try:
+        rec = store.create(research_request())
+        jobs.submit(rec.id)
+        assert jobs.cancel(rec.id)
+        assert store.take_worker_inputs(rec.id) == []
+    finally:
+        jobs.shutdown()
+
+
+def test_large_unicode_plan_uses_consistent_utf8_byte_bound(tmp_path):
+    from test_research_pipeline import research_request, research_plan
+    plan = research_plan()
+    plan["allowed_mutations"] = [{"url": "https://fixture.invalid/setup", "purpose": "workflow"}]
+    plan["identities"][0]["setup"] = [
+        {"method": "POST", "url": "https://fixture.invalid/setup", "purpose": "workflow",
+         "fields": {f"field{index}": "é" * 3000 for index in range(32)}} for _ in range(2)
+    ]
+    store = RunStore(root=tmp_path)
+    script = (
+        "import sys,json,pathlib;p=pathlib.Path(sys.argv[1]);raw=sys.stdin.buffer.read(1048577);"
+        "assert len(raw)<=1048576;s=json.loads(raw);"
+        "assert s['authenticated_research']['identities'][0]['setup'][0]['fields']['field0']==chr(233)*3000;"
+        "(p/'result.json').write_text('{}')"
+    )
+    jobs = JobManager(store, worker_cmd=_cmd(script))
+    rec = store.create(research_request(authenticated_research=plan))
+    jobs.submit(rec.id)
+    assert _wait_terminal(store, rec.id).status is RunStatus.completed
+
+
+@pytest.mark.parametrize("cancel", [True, False])
+def test_worker_not_reading_large_private_pipe_remains_cancellable_and_bounded(tmp_path, monkeypatch, cancel):
+    from hacking_agent.harness import jobs as jobs_module
+    from test_research_pipeline import research_request, research_plan
+    plan = research_plan()
+    plan["allowed_mutations"] = [{"url": "https://fixture.invalid/setup", "purpose": "workflow"}]
+    plan["identities"][0]["setup"] = [{
+        "method": "POST", "url": "https://fixture.invalid/setup", "purpose": "workflow",
+        "fields": {str(index): "x" * 4000 for index in range(32)},
+    }]
+    monkeypatch.setattr(jobs_module, "_INPUT_DELIVERY_TIMEOUT", 0.4)
+    store = RunStore(root=tmp_path)
+    jobs = JobManager(store, worker_cmd=_cmd(_SLOW))
+    rec = store.create(research_request(authenticated_research=plan))
+    started = time.monotonic()
+    jobs.submit(rec.id)
+    assert time.monotonic() - started < 3
+    if cancel:
+        assert jobs.cancel(rec.id)
+    final = _wait_terminal(store, rec.id, timeout=10)
+    assert final.status is (RunStatus.cancelled if cancel else RunStatus.failed)
+    if not cancel:
+        assert "input delivery timed out" in final.error
+    assert not jobs.is_running(rec.id)
+    assert store.take_worker_inputs(rec.id) == []
+
+
+def test_input_write_failure_closes_pipe_and_omits_secret_exception_text():
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from hacking_agent.harness.jobs import _deliver_inputs
+    stream = Mock()
+    stream.write.side_effect = OSError("private-test-cookie")
+    delivered = threading.Event()
+    errors = []
+    _deliver_inputs(SimpleNamespace(stdin=stream), b"private-test-cookie", delivered, errors)
+    assert delivered.is_set()
+    stream.close.assert_called_once()
+    assert errors == ["private worker input delivery failed"]
+
+
 def test_shutdown_cancels_queue_and_prevents_later_launch(tmp_path):
     store = RunStore(root=tmp_path)
     jm = JobManager(store, worker_cmd=_cmd(_SLOW))

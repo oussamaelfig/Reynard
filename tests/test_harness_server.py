@@ -88,6 +88,17 @@ def test_health_is_public(tmp_path):
     assert r.json()["reportability_policy_version"] == 2
 
 
+def test_invalid_private_workflow_is_not_echoed_by_validation_errors(tmp_path):
+    _, client = _client(tmp_path)
+    response = client.post("/api/runs", headers=AUTH, json={
+        "authorized": True, "authorized_domains": ["fixture.invalid"],
+        "authenticated_research": {"password": "DO-NOT-ECHO-THIS-SECRET"},
+    })
+    assert response.status_code == 422
+    assert "DO-NOT-ECHO" not in response.text
+    assert "Invalid request configuration" in response.json()["detail"]
+
+
 def test_token_gate(tmp_path):
     _, c = _client(tmp_path)
     assert c.get("/api/runs").status_code == 401

@@ -209,6 +209,7 @@ test("launch request preserves domains-only scope and explicit zero budget value
   assert.equal(body.max_requests_per_second, 0); assert.equal(body.max_total_requests, 0);
   assert.equal(body.authorized, true); assert.equal(body.allow_destructive, false);
   assert.equal(body.enable_hexstrike, false); assert.deepEqual(body.auth_sessions, []);
+  assert.equal(body.authenticated_research, null); assert.deepEqual(body.business_rules, []);
 });
 
 test("launch identity and explicit opt-ins remain in the request only", () => {
@@ -226,4 +227,56 @@ test("relative timestamps tolerate malformed and timezone-aware server values", 
   assert.equal(ui.relTime("not-a-date"), "");
   assert.equal(ui.relTime(null), "");
   assert.equal(ui.relTime("2999-01-01T00:00:00+02:00"), "0s ago");
+});
+
+test("disabled authenticated research never reads, parses, or forwards stale drafts", () => {
+  const unreadable = { trim() { throw new Error("disabled draft was read"); } };
+  for (const enabled of [false, undefined, "true"]) {
+    assert.deepEqual(ui.parseAuthenticatedResearch(enabled, unreadable, unreadable), { research: null, rules: [] });
+    const body = ui.buildRunRequest({ "f-authenticated-enable": enabled }, [], { secret: "stale-cookie" }, [{ secret: "stale-rule" }]);
+    assert.equal(body.authenticated_research, null); assert.deepEqual(body.business_rules, []);
+    assert.doesNotMatch(JSON.stringify(body), /stale-cookie|stale-rule/);
+  }
+});
+
+test("explicit authenticated opt-in passes JSON plan and business-rule arrays to the request", () => {
+  const plan = { origin: "https://lab.test", identities: [{ name: "owner", cookie_header: "fixture-only" }], allow_account_creation: false };
+  const rules = [{ name: "Owner-only invoice", owner_identity: "owner", denied_identity: "other" }];
+  const parsed = ui.parseAuthenticatedResearch(true, JSON.stringify(plan), JSON.stringify(rules));
+  assert.deepEqual(parsed, { research: plan, rules });
+  const body = ui.buildRunRequest({ "f-authenticated-enable": true }, [], parsed.research, parsed.rules);
+  assert.deepEqual(body.authenticated_research, plan); assert.deepEqual(body.business_rules, rules);
+  assert.deepEqual(ui.parseAuthenticatedResearch(true, "{}", "  "), { research: {}, rules: [] });
+});
+
+test("research plan errors are fixed safe messages and reject every non-object JSON shape", () => {
+  for (const source of ["", "null", "[]", '"private-cookie"', "123", "true", '{"cookie":"private-cookie"']) {
+    assert.throws(() => ui.parseAuthenticatedResearch(true, source), (error) => {
+      assert.equal(error.field, "f-authenticated-plan");
+      assert.doesNotMatch(error.message, /private-cookie|Unexpected|SyntaxError/);
+      return true;
+    });
+  }
+});
+
+test("business rules require a plan and array shape without exposing malformed input", () => {
+  assert.throws(() => ui.parseAuthenticatedResearch(true, "", "[]"), /Add a research plan before business rules/);
+  for (const source of ["null", "{}", '"private-rule"', "123", "true", '["private-rule"']) {
+    assert.throws(() => ui.parseAuthenticatedResearch(true, "{}", source), (error) => {
+      assert.equal(error.field, "f-business-rules");
+      assert.doesNotMatch(error.message, /private-rule|Unexpected|SyntaxError/);
+      return true;
+    });
+  }
+});
+
+test("authenticated research rejects legacy session mixing with a fixed credential-free error", () => {
+  const sessions = [{ name: "legacy", cookie_header: "private-cookie" }];
+  assert.throws(() => ui.parseAuthenticatedResearch(true, "{}", "[]", sessions), (error) => {
+    assert.equal(error.field, "f-sessions");
+    assert.equal(error.message, "Plan identities replace Auth sessions. Clear Auth sessions or disable authenticated research.");
+    assert.doesNotMatch(error.message, /private-cookie/);
+    return true;
+  });
+  assert.deepEqual(ui.parseAuthenticatedResearch(false, "stale plan", "stale rules", sessions), { research: null, rules: [] });
 });
