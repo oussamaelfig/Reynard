@@ -507,6 +507,12 @@
   padding-block: clamp(7rem, 18vh, 12rem);
 }
 
+/* Keeps the list above the fixed cursor preview (z-index 0). */
+.work > .container {
+  position: relative;
+  z-index: 1;
+}
+
 .work__header {
   display: flex;
   flex-wrap: wrap;
@@ -683,7 +689,7 @@
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 60;
+  z-index: 0;
   width: clamp(15rem, 22vw, 22rem);
   aspect-ratio: 4 / 5;
   pointer-events: none;
