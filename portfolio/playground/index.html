@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- @include head -->
+    <title data-i18n="meta.playgroundTitle">Playground — Your Name</title>
+    <meta
+      name="description"
+      content="Small interactive experiments: physics, motion and code sketches."
+      data-i18n-attr="content:meta.playgroundDescription"
+    />
+    <script type="module" src="/src/pages/playground.js"></script>
+  </head>
+
+  <body data-theme="dark" class="playground-page">
+    <!-- @include transition -->
+    <!-- @include header -->
+
+    <main id="main" class="playground">
+      <canvas
+        class="playground__canvas"
+        role="img"
+        aria-label="Interactive physics playground"
+        data-i18n-attr="aria-label:playground.canvas"
+      ></canvas>
+
+      <div class="playground__intro">
+        <h1 class="playground__title page-title">
+          <span class="line-mask"><span data-i18n="playground.title">Playground</span></span>
+        </h1>
+        <p class="playground__text" data-i18n="playground.intro">Small experiments that don't fit anywhere else.</p>
+      </div>
+
+      <div class="playground__bar">
+        <p class="playground__hint" data-i18n="playground.hint">
+          Drag the shapes · Click to add more · Scroll to flip gravity
+        </p>
+        <button class="playground__reset" type="button" data-i18n="playground.reset">Reset</button>
+      </div>
+    </main>
+  </body>
+</html>

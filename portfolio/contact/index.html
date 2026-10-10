@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- @include head -->
+    <title data-i18n="meta.contactTitle">Contact — Your Name</title>
+    <meta
+      name="description"
+      content="Get in touch for freelance projects, full-time roles or collaborations."
+      data-i18n-attr="content:meta.contactDescription"
+    />
+    <script type="module" src="/src/pages/basic.js"></script>
+  </head>
+
+  <body data-theme="light">
+    <!-- @include transition -->
+    <!-- @include header -->
+
+    <main id="main" class="contact-page container">
+      <p class="eyebrow" data-i18n="contactPage.eyebrow">Contact</p>
+
+      <h1 class="contact-page__title page-title">
+        <span class="line-mask"><span data-i18n="contactPage.titleLine1">Let's build</span></span>
+        <span class="line-mask"><span data-i18n="contactPage.titleLine2">something together.</span></span>
+      </h1>
+
+      <p class="contact-page__intro" data-reveal data-i18n="contactPage.intro">
+        Freelance projects, full-time roles or a simple hello — my inbox is open.
+      </p>
+
+      <div class="contact-page__email-row" data-reveal>
+        <a class="contact-page__email" href="mailto:hello@example.com">hello@example.com</a>
+        <button class="contact-page__copy" type="button" data-copy="hello@example.com">
+          <span data-i18n="contactPage.copy">Copy email</span>
+        </button>
+      </div>
+
+      <div class="contact-page__grid" data-reveal>
+        <div>
+          <h2 class="eyebrow" data-i18n="contactPage.socials">Find me online</h2>
+          <ul class="contact-page__links">
+            <li><a class="text-link" href="https://github.com/your-handle" target="_blank" rel="noreferrer">GitHub ↗</a></li>
+            <li>
+              <a class="text-link" href="https://www.linkedin.com/in/your-handle/" target="_blank" rel="noreferrer">
+                LinkedIn ↗
+              </a>
+            </li>
+            <li>
+              <a class="text-link" href="https://www.instagram.com/your-handle/" target="_blank" rel="noreferrer">
+                Instagram ↗
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div>
+          <h2 class="eyebrow" data-i18n="footer.time">Local time</h2>
+          <p class="contact-page__clock">
+            <time data-clock>--:--</time> — <span data-i18n="footer.city">Your City</span>
+          </p>
+          <p class="contact-page__response" data-i18n="contactPage.response">I usually reply within 48 hours.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- @include footer -->
+  </body>
+</html>

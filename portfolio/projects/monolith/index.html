@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- @include head -->
+    <title>Monolith — Your Name</title>
+    <meta
+      name="description"
+      content="A bold identity and editorial website for a fictional architecture studio."
+      data-i18n-attr="content:projects.monolith.summary"
+    />
+    <script type="module" src="/src/pages/project.js"></script>
+  </head>
+
+  <body data-theme="light" style="--cover-a: #17171b; --cover-b: #c6f432; --cover-c: #efece6">
+    <!-- @include transition -->
+    <!-- @include header -->
+
+    <main id="main">
+      <section class="project-hero container">
+        <a class="project-hero__back text-link" href="/#work">
+          <span aria-hidden="true">←</span> <span data-i18n="project.back">All projects</span>
+        </a>
+        <p class="eyebrow">02 — <span data-i18n="projects.monolith.category">Brand &amp; website</span></p>
+        <h1 class="project-hero__title page-title"><span class="line-mask"><span>Monolith</span></span></h1>
+        <p class="project-hero__summary" data-reveal data-i18n="projects.monolith.summary">
+          A bold identity and editorial website for a fictional architecture studio.
+        </p>
+        <dl class="project-meta" data-reveal>
+          <div>
+            <dt data-i18n="project.role">Role</dt>
+            <dd data-i18n="projects.monolith.role">Art direction &amp; development</dd>
+          </div>
+          <div>
+            <dt data-i18n="project.year">Year</dt>
+            <dd>2025</dd>
+          </div>
+          <div>
+            <dt data-i18n="project.stack">Stack</dt>
+            <dd>Vite · GSAP · Lenis</dd>
+          </div>
+          <div>
+            <dt data-i18n="project.link">Live site</dt>
+            <dd data-i18n="project.linkPlaceholder">Coming soon</dd>
+          </div>
+        </dl>
+      </section>
+
+      <figure class="project-cover">
+        <div class="project-cover__art cover-art"><span class="cover-art__glyph">M</span></div>
+      </figure>
+
+      <section class="project-section container">
+        <h2 class="project-section__title" data-i18n="project.context">Context</h2>
+        <p class="project-section__text" data-reveal data-i18n="projects.monolith.context">
+          Describe the brief here: who the client was, what problem they had and what success looked like. Two short
+          paragraphs are usually enough.
+        </p>
+      </section>
+
+      <section class="project-gallery container" aria-label="Gallery">
+        <figure class="project-gallery__item project-gallery__item--wide" data-reveal>
+          <div class="cover-art cover-art--deep"></div>
+          <figcaption data-i18n="project.gallery">Placeholder visual — replace with your own</figcaption>
+        </figure>
+        <figure class="project-gallery__item" data-reveal>
+          <div class="cover-art"></div>
+          <figcaption data-i18n="project.gallery">Placeholder visual — replace with your own</figcaption>
+        </figure>
+        <figure class="project-gallery__item" data-reveal>
+          <div class="cover-art cover-art--mirror"></div>
+          <figcaption data-i18n="project.gallery">Placeholder visual — replace with your own</figcaption>
+        </figure>
+      </section>
+
+      <section class="project-section container">
+        <h2 class="project-section__title" data-i18n="project.approach">Approach</h2>
+        <p class="project-section__text" data-reveal data-i18n="projects.monolith.approach">
+          Explain your process: moodboards, typography, layout system, motion principles and how the design translated
+          into code.
+        </p>
+      </section>
+
+      <section class="project-section container">
+        <h2 class="project-section__title" data-i18n="project.outcome">Outcome</h2>
+        <p class="project-section__text" data-reveal data-i18n="projects.monolith.outcome">
+          Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is
+          still online.
+        </p>
+      </section>
+
+      <a class="project-next container" href="/projects/tidal/" style="--next-accent: #0b3b5c">
+        <span class="eyebrow" data-i18n="project.next">Next project</span>
+        <span class="project-next__title">Tidal</span>
+      </a>
+    </main>
+
+    <!-- @include footer -->
+  </body>
+</html>

@@ -1,0 +1,195 @@
+/* ==========================================================================
+   Contact page
+   ========================================================================== */
+
+.contact-page {
+  display: grid;
+  gap: clamp(1.5rem, 4vh, 2.5rem);
+  padding-top: calc(var(--header-height) + clamp(3rem, 10vh, 6rem));
+  padding-bottom: clamp(5rem, 14vh, 9rem);
+}
+
+.contact-page__title {
+  font-size: clamp(3.25rem, 11vw, 11.5rem);
+}
+
+.contact-page__intro {
+  max-width: 32rem;
+  font-size: clamp(1.125rem, 1.6vw, 1.5rem);
+  color: var(--fg-muted);
+}
+
+.contact-page__email-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+}
+
+.contact-page__email {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 5vw, 4.5rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  border-bottom: 3px solid currentColor;
+  transition: color 0.3s;
+}
+
+.contact-page__copy {
+  padding: 0.6rem 1.15rem;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: transform 0.4s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .contact-page__email:hover {
+    color: var(--accent);
+  }
+
+  .contact-page__copy:hover {
+    transform: scale(1.05);
+  }
+}
+
+.contact-page__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2rem;
+  max-width: 48rem;
+  margin-top: clamp(1rem, 4vh, 3rem);
+  padding-top: 2rem;
+  border-top: 1px solid var(--line);
+}
+
+.contact-page__links {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  font-size: 1.125rem;
+}
+
+.contact-page__clock {
+  margin-top: 1rem;
+  font-size: 1.125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.contact-page__response {
+  margin-top: 0.5rem;
+  color: var(--fg-muted);
+}
+
+@media (max-width: 34rem) {
+  .contact-page__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Legal page
+   ========================================================================== */
+
+.legal {
+  max-width: 60rem;
+  padding-top: calc(var(--header-height) + clamp(3rem, 10vh, 6rem));
+  padding-bottom: clamp(5rem, 14vh, 9rem);
+}
+
+.legal__title {
+  font-size: clamp(3rem, 9vw, 8rem);
+}
+
+.legal__intro {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.75rem;
+  color: var(--fg-muted);
+}
+
+.legal__section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 1rem 2rem;
+  padding-block: 2rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.legal__section:first-of-type {
+  margin-top: clamp(2rem, 6vh, 4rem);
+  border-top: 1px solid var(--line);
+}
+
+.legal__section h2 {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.legal__section p {
+  color: var(--fg-muted);
+}
+
+.legal__updated {
+  margin-top: 2rem;
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
+@media (max-width: 40rem) {
+  .legal__section {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   404
+   ========================================================================== */
+
+.not-found {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 1.25rem;
+  min-height: 100svh;
+  padding-block: calc(var(--header-height) + 2rem) 3rem;
+}
+
+.not-found__code {
+  font-size: clamp(7rem, 30vw, 26rem);
+  color: var(--lime);
+}
+
+.not-found__title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.not-found__text {
+  max-width: 28rem;
+  color: var(--fg-muted);
+}
+
+.not-found__cta {
+  margin-top: 1rem;
+  padding: 0.75rem 1.4rem;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--ink);
+  font-weight: 700;
+  transition: transform 0.4s var(--ease-out);
+}
+
+@media (hover: hover) {
+  .not-found__cta:hover {
+    transform: scale(1.05);
+  }
+}
