@@ -20,13 +20,13 @@ const SWATCHES = [
 const GLYPHS = ['✦', '●', '▲', '■']
 const MAX_BODIES = 70
 const WALL = 400
-const FLOOR_GAP = 72
 const STEP = 1000 / 60
 
 const { enter } = initApp({ smoothScroll: false })
 enter.then(() => playTitleIntro())
 
 const canvas = document.querySelector('.playground__canvas')
+const bar = document.querySelector('.playground__bar')
 const context = canvas.getContext('2d')
 const engine = Engine.create()
 const mouse = Mouse.create(canvas)
@@ -34,6 +34,7 @@ const bodies = []
 let walls = []
 let width = 0
 let height = 0
+let floor = 0
 let ratio = 1
 let gravityTimeline = null
 let spawnCalls = []
@@ -46,11 +47,13 @@ Composite.add(
 const fontSize = () => Math.round(Math.min(34, Math.max(18, width * 0.026)))
 const pick = (list) => list[Math.floor(Math.random() * list.length)]
 
-// The floor sits above the hint bar so resting shapes never cover it.
+// The floor sits just above the hint bar (which wraps on narrow screens and in
+// longer languages) so resting shapes never cover it.
 function buildWalls() {
+  floor = bar ? bar.getBoundingClientRect().top - canvas.getBoundingClientRect().top - 12 : height
   Composite.remove(engine.world, walls)
   walls = [
-    Bodies.rectangle(width / 2, height - FLOOR_GAP + WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
+    Bodies.rectangle(width / 2, floor + WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
     Bodies.rectangle(width / 2, -WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
     Bodies.rectangle(-WALL / 2, height / 2, WALL, height + WALL * 2, { isStatic: true }),
     Bodies.rectangle(width + WALL / 2, height / 2, WALL, height + WALL * 2, { isStatic: true }),
@@ -71,7 +74,7 @@ function resize() {
   bodies.forEach((body) => {
     Body.setPosition(body, {
       x: Math.min(Math.max(body.position.x, 40), width - 40),
-      y: Math.min(body.position.y, height - FLOOR_GAP - 40),
+      y: Math.min(body.position.y, floor - 40),
     })
   })
 }
@@ -177,21 +180,27 @@ canvas.addEventListener('pointerup', (event) => {
   addBody(body)
 })
 
-// Scrolling flips gravity for a moment, then it settles back.
+// Gravity flips for a moment, then settles back.
+function pulseGravity(strength) {
+  gravityTimeline?.kill()
+  gravityTimeline = gsap
+    .timeline()
+    .to(engine.gravity, { y: strength, duration: 0.3 })
+    .to(engine.gravity, { y: 1, duration: 1, delay: 1.2 })
+}
+
 Observer.create({
   target: canvas,
   type: 'wheel',
-  onChangeY: (self) => {
-    gravityTimeline?.kill()
-    gravityTimeline = gsap
-      .timeline()
-      .to(engine.gravity, { y: self.deltaY < 0 ? -1 : 1.8, duration: 0.3 })
-      .to(engine.gravity, { y: 1, duration: 1, delay: 1.2 })
-  },
+  onChangeY: (self) => pulseGravity(self.deltaY < 0 ? -1 : 1.8),
 })
 
-document.querySelector('.playground__reset')?.addEventListener('click', spawnInitial)
-window.addEventListener('i18n:change', spawnInitial)
+document.querySelector('[data-gravity-flip]')?.addEventListener('click', () => pulseGravity(-1))
+document.querySelector('[data-reset]')?.addEventListener('click', spawnInitial)
+window.addEventListener('i18n:change', () => {
+  resize()
+  spawnInitial()
+})
 window.addEventListener('resize', resize)
 
 resize()

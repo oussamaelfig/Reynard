@@ -33,10 +33,18 @@
       </div>
 
       <div class="playground__bar">
-        <p class="playground__hint" data-i18n="playground.hint">
-          Drag the shapes · Click to add more · Scroll to flip gravity
+        <p class="playground__hint">
+          <span class="playground__hint-mouse" data-i18n="playground.hint">
+            Drag the shapes · Click to add more · Scroll to flip gravity
+          </span>
+          <span class="playground__hint-touch" data-i18n="playground.hintTouch">Drag the shapes · Tap to add more</span>
         </p>
-        <button class="playground__reset" type="button" data-i18n="playground.reset">Reset</button>
+        <div class="playground__actions">
+          <button class="playground__button" type="button" data-gravity-flip data-i18n="playground.flip">
+            Flip gravity
+          </button>
+          <button class="playground__button" type="button" data-reset data-i18n="playground.reset">Reset</button>
+        </div>
       </div>
     </main>
   </body>

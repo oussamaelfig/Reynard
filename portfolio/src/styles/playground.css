@@ -59,17 +59,36 @@
   color: var(--fg-muted);
 }
 
-.playground__reset {
+.playground__hint-touch {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .playground__hint-mouse {
+    display: none;
+  }
+
+  .playground__hint-touch {
+    display: inline;
+  }
+}
+
+.playground__actions {
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.playground__button {
   padding: 0.55rem 1.1rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   font-size: 0.875rem;
-  pointer-events: auto;
   transition: border-color 0.3s;
 }
 
 @media (hover: hover) {
-  .playground__reset:hover {
+  .playground__button:hover {
     border-color: currentColor;
   }
 }

@@ -151,6 +151,8 @@
     "title": "Terrain de jeu",
     "intro": "De petites expériences qui ne rentrent nulle part ailleurs.",
     "hint": "Attrapez les formes · Cliquez pour en ajouter · Défilez pour inverser la gravité",
+    "hintTouch": "Attrapez les formes · Touchez pour en ajouter",
+    "flip": "Inverser la gravité",
     "reset": "Réinitialiser",
     "canvas": "Terrain de jeu physique interactif",
     "items": ["Shaders", "Physique", "Motion", "Typo", "WebGL", "Génératif", "Son", "Prototypes", "Particules", "Interaction"]

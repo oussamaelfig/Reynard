@@ -151,6 +151,8 @@
     "title": "Playground",
     "intro": "Small experiments that don't fit anywhere else.",
     "hint": "Drag the shapes · Click to add more · Scroll to flip gravity",
+    "hintTouch": "Drag the shapes · Tap to add more",
+    "flip": "Flip gravity",
     "reset": "Reset",
     "canvas": "Interactive physics playground",
     "items": ["Shaders", "Physics", "Motion", "Type", "WebGL", "Generative", "Sound", "Prototypes", "Particles", "Interaction"]
