@@ -10,8 +10,6 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "decoders": "node scripts/copy-decoders.mjs",
-    "postinstall": "node scripts/copy-decoders.mjs",
     "model:optimize": "gltf-transform optimize models/hero.glb public/models/hero.glb --compress draco --texture-compress webp",
     "model:inspect": "gltf-transform inspect public/models/hero.glb"
   },

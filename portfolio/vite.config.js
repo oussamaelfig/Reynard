@@ -44,6 +44,9 @@ function htmlPartials() {
 export default defineConfig({
   plugins: [glsl(), htmlPartials()],
   build: {
+    // three.js core is ~560 kB minified; it gets its own long-cached chunk
+    // while its addons (glTF loaders) stay in the lazily imported chunk.
+    chunkSizeWarningLimit: 700,
     rolldownOptions: {
       input: Object.fromEntries(
         findPages().map((file) => [
@@ -51,6 +54,15 @@ export default defineConfig({
           file,
         ]),
       ),
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: (id) => (id.replaceAll('\\', '/').includes('/node_modules/three/build/') ? 'three' : null),
+            },
+          ],
+        },
+      },
     },
   },
 })
