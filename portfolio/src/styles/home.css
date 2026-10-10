@@ -594,14 +594,13 @@
   display: none;
 }
 
-@media (hover: hover) {
-  .work__list[data-view='list']:has(.work__link:hover) .work__link:not(:hover) {
-    opacity: 0.28;
-  }
+/* Set from work.js for mouse pointers only, in list view. */
+.work__list.is-hovering .work__link:not(.is-hovered) {
+  opacity: 0.28;
+}
 
-  .work__list[data-view='list'] .work__link:hover {
-    transform: translateX(1rem);
-  }
+.work__link.is-hovered {
+  transform: translateX(1rem);
 }
 
 @media (max-width: 48rem) {
