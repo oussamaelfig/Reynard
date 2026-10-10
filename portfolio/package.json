@@ -1,0 +1,29 @@
+{
+  "name": "portfolio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "decoders": "node scripts/copy-decoders.mjs",
+    "postinstall": "node scripts/copy-decoders.mjs",
+    "model:optimize": "gltf-transform optimize models/hero.glb public/models/hero.glb --compress draco --texture-compress webp",
+    "model:inspect": "gltf-transform inspect public/models/hero.glb"
+  },
+  "dependencies": {
+    "gsap": "^3.15.0",
+    "lenis": "^1.3.26",
+    "matter-js": "^0.20.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.5.1",
+    "vite": "^8.3.4",
+    "vite-plugin-glsl": "^1.6.2"
+  }
+}
