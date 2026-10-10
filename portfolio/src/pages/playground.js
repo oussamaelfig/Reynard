@@ -4,7 +4,6 @@ import { Observer } from 'gsap/Observer'
 import Matter from 'matter-js'
 import { initApp } from '../core/app.js'
 import { gsap } from '../core/gsap.js'
-import { t } from '../core/i18n.js'
 import { playTitleIntro } from '../core/reveal.js'
 
 gsap.registerPlugin(Observer)
@@ -28,6 +27,10 @@ enter.then(() => playTitleIntro())
 const canvas = document.querySelector('.playground__canvas')
 const bar = document.querySelector('.playground__bar')
 const context = canvas.getContext('2d')
+const words = (canvas.dataset.words ?? '')
+  .split(',')
+  .map((word) => word.trim())
+  .filter(Boolean)
 const engine = Engine.create()
 const mouse = Mouse.create(canvas)
 const bodies = []
@@ -117,9 +120,8 @@ function spawnInitial() {
   spawnCalls.forEach((call) => call.kill())
   bodies.splice(0).forEach((body) => Composite.remove(engine.world, body))
 
-  const labels = t('playground.items')
   const factories = [
-    ...(Array.isArray(labels) ? labels : []).map((label) => (x, y) => createPill(label, x, y)),
+    ...words.map((word) => (x, y) => createPill(word, x, y)),
     ...Array.from({ length: 8 }, () => createBadge),
   ].sort(() => Math.random() - 0.5)
 
@@ -172,10 +174,9 @@ canvas.addEventListener('pointerup', (event) => {
   pressed = null
   if (moved > 6) return
 
-  const labels = t('playground.items')
   const body =
-    Math.random() < 0.5 && Array.isArray(labels)
-      ? createPill(pick(labels), event.offsetX, event.offsetY)
+    Math.random() < 0.5 && words.length
+      ? createPill(pick(words), event.offsetX, event.offsetY)
       : createBadge(event.offsetX, event.offsetY)
   addBody(body)
 })
@@ -197,10 +198,6 @@ Observer.create({
 
 document.querySelector('[data-gravity-flip]')?.addEventListener('click', () => pulseGravity(-1))
 document.querySelector('[data-reset]')?.addEventListener('click', spawnInitial)
-window.addEventListener('i18n:change', () => {
-  resize()
-  spawnInitial()
-})
 window.addEventListener('resize', resize)
 
 resize()

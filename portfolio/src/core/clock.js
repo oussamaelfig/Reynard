@@ -1,5 +1,4 @@
 import { site } from '../config.js'
-import { getLanguage } from './i18n.js'
 
 export function initClocks() {
   document.querySelectorAll('[data-year]').forEach((element) => {
@@ -9,12 +8,13 @@ export function initClocks() {
   const clocks = document.querySelectorAll('[data-clock]')
   if (!clocks.length) return
 
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: site.timeZone,
+  })
+
   const update = () => {
-    const formatter = new Intl.DateTimeFormat(getLanguage(), {
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: site.timeZone,
-    })
     const time = formatter.format(new Date())
     clocks.forEach((clock) => {
       clock.textContent = time
@@ -23,5 +23,4 @@ export function initClocks() {
 
   update()
   setInterval(update, 15_000)
-  window.addEventListener('i18n:change', update)
 }

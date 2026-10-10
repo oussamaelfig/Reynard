@@ -1,8 +1,8 @@
 import { ScrollTrigger } from '../core/gsap.js'
-import { applyTranslations } from '../core/i18n.js'
 import { scrollToTarget } from '../core/smooth-scroll.js'
 
-// Builds the side navigation from every <section data-section id="..."> on the page.
+// Builds the side navigation from every <section data-section id="..."> on the
+// page, labelled with its data-section-label.
 export function initScrollIndicator() {
   const nav = document.querySelector('.scroll-indicator')
   const sections = [...document.querySelectorAll('[data-section][id]')]
@@ -16,8 +16,7 @@ export function initScrollIndicator() {
 
     const label = document.createElement('span')
     label.className = 'scroll-indicator__label'
-    label.dataset.i18n = section.dataset.sectionLabel
-    label.textContent = section.id
+    label.textContent = section.dataset.sectionLabel ?? section.id
 
     const number = document.createElement('span')
     number.className = 'scroll-indicator__number'
@@ -36,8 +35,6 @@ export function initScrollIndicator() {
     nav.append(link)
     return link
   })
-
-  applyTranslations(nav)
 
   const setActive = (activeIndex) => {
     items.forEach((item, index) => {

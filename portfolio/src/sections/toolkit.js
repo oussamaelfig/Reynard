@@ -1,8 +1,7 @@
 import { gsap } from '../core/gsap.js'
-import { t } from '../core/i18n.js'
 
 // Cards sit on a CSS 3D cylinder; scrolling rotates it so each card passes
-// the front once, and the heading follows the group of the front card.
+// the front once, and the heading shows the data-group-label of the front card.
 export function initToolkit() {
   const section = document.querySelector('.toolkit')
   if (!section) return
@@ -16,17 +15,16 @@ export function initToolkit() {
   let currentGroup = cards[0].dataset.group
   let labelTimeline = null
 
-  function showGroup(group) {
-    if (group === currentGroup) return
-    currentGroup = group
+  function showGroup(card) {
+    if (card.dataset.group === currentGroup) return
+    currentGroup = card.dataset.group
 
     labelTimeline?.kill()
     labelTimeline = gsap
       .timeline()
       .to(label, { yPercent: -110, duration: 0.22, ease: 'power2.in' })
       .add(() => {
-        label.dataset.i18n = `focus.groups.${group}`
-        label.textContent = t(label.dataset.i18n)
+        label.textContent = card.dataset.groupLabel
       })
       .fromTo(label, { yPercent: 110 }, { yPercent: 0, duration: 0.45, ease: 'power3.out' })
   }
@@ -42,7 +40,7 @@ export function initToolkit() {
 
     const front = (((Math.round(-state.rotation / step) % cards.length) + cards.length) % cards.length)
     cards.forEach((card, index) => card.classList.toggle('is-front', index === front))
-    showGroup(cards[front].dataset.group)
+    showGroup(cards[front])
   }
 
   function layout() {

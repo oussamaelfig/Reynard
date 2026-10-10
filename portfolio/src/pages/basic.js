@@ -1,7 +1,6 @@
 import '../styles/base.css'
 import '../styles/pages.css'
 import { initApp } from '../core/app.js'
-import { t } from '../core/i18n.js'
 import { initReveals, playTitleIntro } from '../core/reveal.js'
 
 const { enter } = initApp()
@@ -9,13 +8,8 @@ initReveals()
 enter.then(() => playTitleIntro())
 
 document.querySelectorAll('[data-copy]').forEach((button) => {
-  const label = button.querySelector('[data-i18n]')
+  const label = button.textContent.trim()
   let timer = null
-
-  const setLabel = (key) => {
-    label.dataset.i18n = key
-    label.textContent = t(key)
-  }
 
   button.addEventListener('click', async () => {
     try {
@@ -25,8 +19,10 @@ document.querySelectorAll('[data-copy]').forEach((button) => {
       return
     }
 
-    setLabel('contactPage.copied')
+    button.textContent = button.dataset.copiedLabel
     clearTimeout(timer)
-    timer = setTimeout(() => setLabel('contactPage.copy'), 2000)
+    timer = setTimeout(() => {
+      button.textContent = label
+    }, 2000)
   })
 })

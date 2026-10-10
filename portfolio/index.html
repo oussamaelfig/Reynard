@@ -16,11 +16,10 @@
       })()
     </script>
     <!-- @include head -->
-    <title data-i18n="meta.homeTitle">Fiona — Finance, Data &amp; Growth</title>
+    <title>Fiona — Finance, Data &amp; Growth</title>
     <meta
       name="description"
       content="Portfolio of Fiona, a Financial Mathematics student at the University of Waterloo with internships in finance and growth."
-      data-i18n-attr="content:meta.homeDescription"
     />
     <meta property="og:title" content="Fiona — Finance, Data &amp; Growth" />
     <meta
@@ -34,7 +33,7 @@
   <body data-theme="dark">
     <!-- @include transition -->
 
-    <div class="loader" role="status" aria-label="Loading" data-i18n-attr="aria-label:common.loading">
+    <div class="loader" role="status" aria-label="Loading">
       <canvas class="loader__canvas" aria-hidden="true"></canvas>
       <p class="loader__count" aria-hidden="true"><span class="loader__value">0</span><small>%</small></p>
       <p class="loader__label eyebrow">Fiona — Portfolio</p>
@@ -42,55 +41,43 @@
 
     <!-- @include header -->
 
-    <nav class="scroll-indicator" aria-label="Sections" data-i18n-attr="aria-label:nav.sections"></nav>
+    <nav class="scroll-indicator" aria-label="Sections"></nav>
 
     <main id="main">
       <!-- HERO -->
-      <section
-        class="hero"
-        id="hero"
-        data-section
-        data-section-label="sections.hero"
-        data-section-theme="dark"
-      >
+      <section class="hero" id="hero" data-section data-section-label="Home" data-section-theme="dark">
         <canvas class="hero__canvas" aria-hidden="true"></canvas>
 
         <div class="hero__meta">
-          <p data-hero-fade data-i18n="hero.eyebrow">Financial Mathematics — University of Waterloo</p>
-          <p data-hero-fade data-i18n="hero.location">Currently in San Jose, CA</p>
+          <p data-hero-fade>Financial Mathematics — University of Waterloo</p>
+          <p data-hero-fade>Currently in San Jose, CA</p>
           <p class="hero__status" data-hero-fade>
             <span class="status-dot" aria-hidden="true"></span>
-            <span data-i18n="hero.status">Finance Intern at Venu (YC W21)</span>
+            <span>Finance Intern at Venu (YC W21)</span>
           </p>
         </div>
 
         <h1 class="hero__title">
           <span class="visually-hidden">Fiona — </span>
-          <span class="line-mask"><span data-i18n="hero.titleLine1">Finance, data</span></span>
-          <span class="line-mask hero__title-second"><span data-i18n="hero.titleLine2">&amp; growth</span></span>
+          <span class="line-mask"><span>Finance, data</span></span>
+          <span class="line-mask hero__title-second"><span>&amp; growth</span></span>
         </h1>
 
         <a class="hero__scroll" href="#about" data-hero-fade>
-          <span data-i18n="hero.scroll">Scroll</span>
+          <span>Scroll</span>
           <span class="hero__scroll-line" aria-hidden="true"></span>
         </a>
       </section>
 
       <!-- ABOUT -->
-      <section
-        class="about"
-        id="about"
-        data-section
-        data-section-label="sections.about"
-        data-section-theme="light"
-      >
+      <section class="about" id="about" data-section data-section-label="About" data-section-theme="light">
         <div class="container about__inner">
-          <h2 class="eyebrow" data-i18n="about.label">About</h2>
-          <p class="about__statement" data-i18n="about.statement">
+          <h2 class="eyebrow">About</h2>
+          <p class="about__statement">
             I'm Fiona — a Financial Mathematics student at the University of Waterloo, working where finance, data
             and growth meet.
           </p>
-          <p class="about__body" data-reveal data-i18n="about.body">
+          <p class="about__body" data-reveal>
             Right now I'm a Finance Intern at Venu (YC W21) in San Jose. Before that I spent six months as a Growth
             Intern at Phydata, and I'm a member of the Waterloo Data Science Club.
           </p>
@@ -102,7 +89,7 @@
         class="journey"
         id="experience"
         data-section
-        data-section-label="sections.experience"
+        data-section-label="Experience"
         data-section-theme="dark"
       >
         <div class="journey__track">
@@ -110,7 +97,7 @@
             <canvas class="journey__canvas" aria-hidden="true"></canvas>
 
             <div class="journey__header">
-              <h2 class="eyebrow" data-i18n="experience.title">Experience</h2>
+              <h2 class="eyebrow">Experience</h2>
               <p class="journey__counter" aria-hidden="true">
                 <span class="journey__current">01</span> / 03
               </p>
@@ -118,36 +105,34 @@
 
             <ol class="journey__chapters">
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="experience.phydata.label">Apr – Sep 2026 · Phydata Inc.</p>
+                <p class="journey__label">Apr – Sep 2026 · Phydata Inc.</p>
                 <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="experience.phydata.line1">Growth Intern</span></span>
-                  <span class="line-mask"><span data-i18n="experience.phydata.line2">at Phydata.</span></span>
+                  <span class="line-mask"><span>Growth Intern</span></span>
+                  <span class="line-mask"><span>at Phydata.</span></span>
                 </p>
-                <p class="journey__detail" data-i18n="experience.phydata.detail">
+                <p class="journey__detail">
                   Phydata builds custom training data for physical AI. Six months on-site in Canada.
                 </p>
               </li>
 
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="experience.dsc.label">
-                  Aug 2026 – Present · Waterloo Data Science Club
-                </p>
+                <p class="journey__label">Aug 2026 – Present · Waterloo Data Science Club</p>
                 <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="experience.dsc.line1">Data Science</span></span>
-                  <span class="line-mask"><span data-i18n="experience.dsc.line2">Club member.</span></span>
+                  <span class="line-mask"><span>Data Science</span></span>
+                  <span class="line-mask"><span>Club member.</span></span>
                 </p>
-                <p class="journey__detail" data-i18n="experience.dsc.detail">
+                <p class="journey__detail">
                   Member of the Waterloo Data Science Club, a student community at the University of Waterloo.
                 </p>
               </li>
 
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="experience.venu.label">Sep 2026 – Present · Venu (YC W21)</p>
+                <p class="journey__label">Sep 2026 – Present · Venu (YC W21)</p>
                 <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="experience.venu.line1">Finance Intern</span></span>
-                  <span class="line-mask"><span data-i18n="experience.venu.line2">at Venu.</span></span>
+                  <span class="line-mask"><span>Finance Intern</span></span>
+                  <span class="line-mask"><span>at Venu.</span></span>
                 </p>
-                <p class="journey__detail" data-i18n="experience.venu.detail">
+                <p class="journey__detail">
                   Finance internship at Venu, a Y Combinator W21 company, in San Jose, California.
                 </p>
               </li>
@@ -159,87 +144,77 @@
       </section>
 
       <!-- FOCUS -->
-      <section
-        class="toolkit"
-        id="focus"
-        data-section
-        data-section-label="sections.focus"
-        data-section-theme="light"
-      >
+      <section class="toolkit" id="focus" data-section data-section-label="Focus" data-section-theme="light">
         <div class="toolkit__track">
           <div class="toolkit__stage">
             <div class="toolkit__header">
-              <h2 class="toolkit__title" data-i18n="focus.title">Focus</h2>
+              <h2 class="toolkit__title">Focus</h2>
               <div class="toolkit__aside">
-                <p class="toolkit__group">
-                  <span class="toolkit__group-label" data-i18n="focus.groups.finance">Finance</span>
-                </p>
-                <p class="toolkit__intro" data-i18n="focus.intro">
-                  The fields my studies and internships have taken me into.
-                </p>
+                <p class="toolkit__group"><span class="toolkit__group-label">Finance</span></p>
+                <p class="toolkit__intro">The fields my studies and internships have taken me into.</p>
               </div>
             </div>
 
             <div class="toolkit__scene">
               <ul class="toolkit__ring">
-                <li class="tool-card" data-group="finance">
+                <li class="tool-card" data-group="finance" data-group-label="Finance">
                   <span class="tool-card__top">
                     <span class="tool-card__index">01</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.financialMath">Financial Mathematics</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.financialMath">University of Waterloo</span>
+                    <span class="tool-card__name">Financial Mathematics</span>
+                    <span class="tool-card__tag">University of Waterloo</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="finance">
+                <li class="tool-card" data-group="finance" data-group-label="Finance">
                   <span class="tool-card__top">
                     <span class="tool-card__index">02</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.finance">Finance</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.finance">Intern at Venu</span>
+                    <span class="tool-card__name">Finance</span>
+                    <span class="tool-card__tag">Intern at Venu</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="data">
+                <li class="tool-card" data-group="data" data-group-label="Data">
                   <span class="tool-card__top">
                     <span class="tool-card__index">03</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.dataScience">Data Science</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.dataScience">UW Data Science Club</span>
+                    <span class="tool-card__name">Data Science</span>
+                    <span class="tool-card__tag">UW Data Science Club</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="data">
+                <li class="tool-card" data-group="data" data-group-label="Data">
                   <span class="tool-card__top">
                     <span class="tool-card__index">04</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.physicalAi">Physical AI</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.physicalAi">Phydata · training data</span>
+                    <span class="tool-card__name">Physical AI</span>
+                    <span class="tool-card__tag">Phydata · training data</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="growth">
+                <li class="tool-card" data-group="growth" data-group-label="Growth">
                   <span class="tool-card__top">
                     <span class="tool-card__index">05</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.growth">Growth</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.growth">Intern at Phydata</span>
+                    <span class="tool-card__name">Growth</span>
+                    <span class="tool-card__tag">Intern at Phydata</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="growth">
+                <li class="tool-card" data-group="growth" data-group-label="Growth">
                   <span class="tool-card__top">
                     <span class="tool-card__index">06</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name" data-i18n="focus.cards.startups">Startups</span>
-                    <span class="tool-card__tag" data-i18n="focus.tags.startups">Venu · YC W21</span>
+                    <span class="tool-card__name">Startups</span>
+                    <span class="tool-card__tag">Venu · YC W21</span>
                   </span>
                 </li>
               </ul>
             </div>
 
-            <p class="toolkit__hint eyebrow" data-i18n="focus.hint">Keep scrolling to spin the wheel</p>
+            <p class="toolkit__hint eyebrow">Keep scrolling to spin the wheel</p>
           </div>
         </div>
       </section>
@@ -249,61 +224,53 @@
         class="education"
         id="education"
         data-section
-        data-section-label="sections.education"
+        data-section-label="Education"
         data-section-theme="dark"
       >
         <div class="container education__inner">
-          <h2 class="eyebrow" data-i18n="education.label">Education</h2>
-          <p class="education__school" data-reveal data-i18n="education.school">University of Waterloo</p>
+          <h2 class="eyebrow">Education</h2>
+          <p class="education__school" data-reveal>University of Waterloo</p>
           <dl class="education__meta" data-reveal>
             <div>
-              <dt data-i18n="education.degreeLabel">Degree</dt>
-              <dd data-i18n="education.degree">Bachelor's Degree</dd>
+              <dt>Degree</dt>
+              <dd>Bachelor's Degree</dd>
             </div>
             <div>
-              <dt data-i18n="education.fieldLabel">Field of study</dt>
-              <dd data-i18n="education.field">Financial Mathematics</dd>
+              <dt>Field of study</dt>
+              <dd>Financial Mathematics</dd>
             </div>
           </dl>
         </div>
       </section>
 
       <!-- CONTACT -->
-      <section
-        class="contact"
-        id="contact"
-        data-section
-        data-section-label="sections.contact"
-        data-section-theme="light"
-      >
+      <section class="contact" id="contact" data-section data-section-label="Contact" data-section-theme="light">
         <div class="marquee" aria-hidden="true">
           <div class="marquee__track">
             <div class="marquee__group">
-              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
+              <span class="marquee__item">Let's connect</span>
               <span class="marquee__star">✦</span>
-              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
+              <span class="marquee__item">Let's connect</span>
               <span class="marquee__star">✦</span>
             </div>
             <div class="marquee__group">
-              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
+              <span class="marquee__item">Let's connect</span>
               <span class="marquee__star">✦</span>
-              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
+              <span class="marquee__item">Let's connect</span>
               <span class="marquee__star">✦</span>
             </div>
           </div>
         </div>
 
         <div class="container contact__body">
-          <h2 class="visually-hidden" data-i18n="sections.contact">Contact</h2>
-          <p class="contact__lead" data-reveal data-i18n="contact.lead">
-            Want to talk finance, data or growth? Send me a message.
-          </p>
+          <h2 class="visually-hidden">Contact</h2>
+          <p class="contact__lead" data-reveal>Want to talk finance, data or growth? Send me a message.</p>
           <a class="contact__email" href="mailto:hello@example.com" data-reveal>
             hello@example.com<span aria-hidden="true">↗</span>
           </a>
           <p class="contact__availability" data-reveal>
             <span class="status-dot" aria-hidden="true"></span>
-            <span data-i18n="contact.location">Currently in San Jose, California</span>
+            <span>Currently in San Jose, California</span>
           </p>
         </div>
       </section>

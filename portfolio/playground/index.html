@@ -4,12 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- @include head -->
-    <title data-i18n="meta.playgroundTitle">Playground — Fiona</title>
-    <meta
-      name="description"
-      content="A small physics toy made from the keywords of Fiona's path."
-      data-i18n-attr="content:meta.playgroundDescription"
-    />
+    <title>Playground — Fiona</title>
+    <meta name="description" content="A small physics toy made from the keywords of Fiona's path." />
     <script type="module" src="/src/pages/playground.js"></script>
   </head>
 
@@ -22,28 +18,24 @@
         class="playground__canvas"
         role="img"
         aria-label="Interactive physics playground"
-        data-i18n-attr="aria-label:playground.canvas"
+        data-words="Finance, Data science, Growth, Financial math, Waterloo, Venu, Phydata, YC W21, San Jose, Startups, Physical AI, Internships"
       ></canvas>
 
       <div class="playground__intro">
         <h1 class="playground__title page-title">
-          <span class="line-mask"><span data-i18n="playground.title">Playground</span></span>
+          <span class="line-mask"><span>Playground</span></span>
         </h1>
-        <p class="playground__text" data-i18n="playground.intro">My path so far, in words you can throw around.</p>
+        <p class="playground__text">My path so far, in words you can throw around.</p>
       </div>
 
       <div class="playground__bar">
         <p class="playground__hint">
-          <span class="playground__hint-mouse" data-i18n="playground.hint">
-            Drag the words · Click to add more · Scroll to flip gravity
-          </span>
-          <span class="playground__hint-touch" data-i18n="playground.hintTouch">Drag the words · Tap to add more</span>
+          <span class="playground__hint-mouse">Drag the words · Click to add more · Scroll to flip gravity</span>
+          <span class="playground__hint-touch">Drag the words · Tap to add more</span>
         </p>
         <div class="playground__actions">
-          <button class="playground__button" type="button" data-gravity-flip data-i18n="playground.flip">
-            Flip gravity
-          </button>
-          <button class="playground__button" type="button" data-reset data-i18n="playground.reset">Reset</button>
+          <button class="playground__button" type="button" data-gravity-flip>Flip gravity</button>
+          <button class="playground__button" type="button" data-reset>Reset</button>
         </div>
       </div>
     </main>

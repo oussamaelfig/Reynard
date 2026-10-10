@@ -308,35 +308,6 @@ p {
   }
 }
 
-.lang-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.4rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 0.8125rem;
-  letter-spacing: 0.06em;
-  transition: border-color 0.3s;
-}
-
-.lang-toggle [data-lang],
-.lang-toggle [aria-hidden] {
-  opacity: 0.4;
-  transition: opacity 0.3s;
-}
-
-html[lang='en'] .lang-toggle [data-lang='en'],
-html[lang='fr'] .lang-toggle [data-lang='fr'] {
-  opacity: 1;
-}
-
-@media (hover: hover) {
-  .lang-toggle:hover {
-    border-color: currentColor;
-  }
-}
-
 @media (max-width: 40rem) {
   .site-header__name {
     display: none;
@@ -348,7 +319,7 @@ html[lang='fr'] .lang-toggle [data-lang='fr'] {
 }
 
 /* The playground stays reachable from the footer on the narrowest screens. */
-@media (max-width: 30rem) {
+@media (max-width: 22rem) {
   .site-header__link--secondary {
     display: none;
   }
