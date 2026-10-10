@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Show the loader once per session; decided before first paint.
+      ;(() => {
+        let seen = false
+        try {
+          seen = sessionStorage.getItem('loader:seen') === '1'
+          sessionStorage.setItem('loader:seen', '1')
+        } catch {}
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        document.documentElement.dataset.loader = seen || reduce ? 'skip' : 'pending'
+      })()
+    </script>
+    <!-- @include head -->
+    <title data-i18n="meta.homeTitle">Your Name — Creative Developer &amp; Designer</title>
+    <meta
+      name="description"
+      content="Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences."
+      data-i18n-attr="content:meta.homeDescription"
+    />
+    <meta property="og:title" content="Your Name — Creative Developer &amp; Designer" />
+    <meta
+      property="og:description"
+      content="Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences."
+    />
+    <meta property="og:type" content="website" />
+    <script type="module" src="/src/pages/home.js"></script>
+  </head>
+
+  <body data-theme="dark">
+    <!-- @include transition -->
+
+    <div class="loader" role="status" aria-label="Loading" data-i18n-attr="aria-label:common.loading">
+      <canvas class="loader__canvas" aria-hidden="true"></canvas>
+      <p class="loader__count" aria-hidden="true"><span class="loader__value">0</span><small>%</small></p>
+      <p class="loader__label eyebrow">Your Name — Portfolio</p>
+    </div>
+
+    <!-- @include header -->
+
+    <nav class="scroll-indicator" aria-label="Sections" data-i18n-attr="aria-label:nav.sections"></nav>
+
+    <main id="main">
+      <!-- HERO -->
+      <section
+        class="hero"
+        id="hero"
+        data-section
+        data-section-label="sections.hero"
+        data-section-theme="dark"
+      >
+        <canvas class="hero__canvas" aria-hidden="true"></canvas>
+
+        <div class="hero__meta">
+          <p data-hero-fade data-i18n="hero.eyebrow">Portfolio — Selected work</p>
+          <p data-hero-fade data-i18n="hero.location">Based in Your City</p>
+          <p class="hero__status" data-hero-fade>
+            <span class="status-dot" aria-hidden="true"></span>
+            <span data-i18n="hero.availability">Available for freelance &amp; full-time</span>
+          </p>
+        </div>
+
+        <h1 class="hero__title">
+          <span class="visually-hidden">Your Name — </span>
+          <span class="line-mask"><span data-i18n="hero.titleLine1">Creative developer</span></span>
+          <span class="line-mask hero__title-second"><span data-i18n="hero.titleLine2">&amp; designer</span></span>
+        </h1>
+
+        <a class="hero__scroll" href="#about" data-hero-fade>
+          <span data-i18n="hero.scroll">Scroll</span>
+          <span class="hero__scroll-line" aria-hidden="true"></span>
+        </a>
+      </section>
+
+      <!-- ABOUT -->
+      <section
+        class="about"
+        id="about"
+        data-section
+        data-section-label="sections.about"
+        data-section-theme="light"
+      >
+        <div class="container about__inner">
+          <h2 class="eyebrow" data-i18n="about.label">About</h2>
+          <p class="about__statement" data-i18n="about.statement">
+            I build interfaces that move, react and tell stories — where every pixel is designed and every
+            interaction is engineered.
+          </p>
+          <p class="about__body" data-reveal data-i18n="about.body">
+            Write two or three sentences about yourself here: your background, the kind of projects you enjoy and
+            what you bring to a team.
+          </p>
+        </div>
+      </section>
+
+      <!-- JOURNEY -->
+      <section
+        class="journey"
+        id="journey"
+        data-section
+        data-section-label="sections.journey"
+        data-section-theme="dark"
+      >
+        <div class="journey__track">
+          <div class="journey__stage">
+            <canvas class="journey__canvas" aria-hidden="true"></canvas>
+
+            <div class="journey__header">
+              <h2 class="eyebrow" data-i18n="journey.title">Journey</h2>
+              <p class="journey__counter" aria-hidden="true">
+                <span class="journey__current">01</span> / 03
+              </p>
+            </div>
+
+            <ol class="journey__chapters">
+              <li class="journey__chapter">
+                <p class="journey__label" data-i18n="journey.chapter1.label">2018 — The spark</p>
+                <p class="journey__statement">
+                  <span class="line-mask"><span data-i18n="journey.chapter1.line1">It began</span></span>
+                  <span class="line-mask"><span data-i18n="journey.chapter1.line2">with curiosity.</span></span>
+                </p>
+                <p class="journey__detail" data-i18n="journey.chapter1.detail">
+                  Where did it all start? A first sketch, a first line of code, a first job.
+                </p>
+              </li>
+
+              <li class="journey__chapter">
+                <p class="journey__label" data-i18n="journey.chapter2.label">2021 — The craft</p>
+                <p class="journey__statement">
+                  <span class="line-mask"><span data-i18n="journey.chapter2.line1">Then came</span></span>
+                  <span class="line-mask"><span data-i18n="journey.chapter2.line2">the craft.</span></span>
+                </p>
+                <p class="journey__detail" data-i18n="journey.chapter2.detail">
+                  The years spent learning: schools, studios, side projects and late nights.
+                </p>
+              </li>
+
+              <li class="journey__chapter">
+                <p class="journey__label" data-i18n="journey.chapter3.label">Today — The blend</p>
+                <p class="journey__statement">
+                  <span class="line-mask"><span data-i18n="journey.chapter3.line1">Now I build</span></span>
+                  <span class="line-mask"><span data-i18n="journey.chapter3.line2">what I imagine.</span></span>
+                </p>
+                <p class="journey__detail" data-i18n="journey.chapter3.detail">
+                  What you do today and the kind of work you want to do next.
+                </p>
+              </li>
+            </ol>
+
+            <div class="journey__progress" aria-hidden="true"><span class="journey__progress-bar"></span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TOOLKIT -->
+      <section
+        class="toolkit"
+        id="toolkit"
+        data-section
+        data-section-label="sections.toolkit"
+        data-section-theme="light"
+      >
+        <div class="toolkit__track">
+          <div class="toolkit__stage">
+            <div class="toolkit__header">
+              <h2 class="toolkit__title" data-i18n="toolkit.title">Toolkit</h2>
+              <div class="toolkit__aside">
+                <p class="toolkit__group">
+                  <span class="toolkit__group-label" data-i18n="toolkit.groups.code">Code</span>
+                </p>
+                <p class="toolkit__intro" data-i18n="toolkit.intro">
+                  The tools I reach for, from first sketch to production.
+                </p>
+              </div>
+            </div>
+
+            <div class="toolkit__scene">
+              <ul class="toolkit__ring">
+                <li class="tool-card" data-group="code">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">01</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">JavaScript</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.language">Language</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="code">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">02</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">TypeScript</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.language">Language</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="code">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">03</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Vue</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.framework">Framework</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="code">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">04</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">React</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.framework">Framework</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="code">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">05</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Node.js</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.runtime">Runtime</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="motion">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">06</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Three.js</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.engine">3D engine</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="motion">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">07</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">GLSL</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.shaders">Shaders</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="motion">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">08</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">GSAP</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.animation">Animation</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="motion">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">09</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Blender</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.modeling">3D modeling</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="design">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">10</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Figma</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.interface">Interface design</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="design">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">11</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">Photoshop</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.imaging">Image editing</span>
+                  </span>
+                </li>
+                <li class="tool-card" data-group="design">
+                  <span class="tool-card__top">
+                    <span class="tool-card__index">12</span><span class="tool-card__shape" aria-hidden="true"></span>
+                  </span>
+                  <span class="tool-card__bottom">
+                    <span class="tool-card__name">After Effects</span>
+                    <span class="tool-card__tag" data-i18n="toolkit.tags.motion">Motion design</span>
+                  </span>
+                </li>
+              </ul>
+            </div>
+
+            <p class="toolkit__hint eyebrow" data-i18n="toolkit.hint">Keep scrolling to spin the wheel</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORK -->
+      <section
+        class="work"
+        id="work"
+        data-section
+        data-section-label="sections.work"
+        data-section-theme="dark"
+      >
+        <div class="container">
+          <div class="work__header">
+            <h2 class="work__title" data-i18n="work.title">Selected work</h2>
+            <div class="work__views" role="group" aria-label="Layout" data-i18n-attr="aria-label:work.views">
+              <button class="work__view is-active" type="button" data-view="list" aria-pressed="true" data-i18n="work.list">
+                List
+              </button>
+              <button class="work__view" type="button" data-view="grid" aria-pressed="false" data-i18n="work.grid">
+                Grid
+              </button>
+            </div>
+          </div>
+
+          <ul class="work__list" data-view="list">
+            <li class="work__item">
+              <a
+                class="work__link"
+                href="/projects/aurora/"
+                style="--cover-a: #5b4dff; --cover-b: #ff5fa2; --cover-c: #c6f432"
+              >
+                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">A</span></span>
+                <span class="work__index">01</span>
+                <span class="work__name">Aurora</span>
+                <span class="work__category" data-i18n="projects.aurora.category">WebGL experience</span>
+                <span class="work__year">2026</span>
+              </a>
+            </li>
+            <li class="work__item">
+              <a
+                class="work__link"
+                href="/projects/monolith/"
+                style="--cover-a: #17171b; --cover-b: #c6f432; --cover-c: #efece6"
+              >
+                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">M</span></span>
+                <span class="work__index">02</span>
+                <span class="work__name">Monolith</span>
+                <span class="work__category" data-i18n="projects.monolith.category">Brand &amp; website</span>
+                <span class="work__year">2025</span>
+              </a>
+            </li>
+            <li class="work__item">
+              <a
+                class="work__link"
+                href="/projects/tidal/"
+                style="--cover-a: #0b3b5c; --cover-b: #35d6c8; --cover-c: #efece6"
+              >
+                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">T</span></span>
+                <span class="work__index">03</span>
+                <span class="work__name">Tidal</span>
+                <span class="work__category" data-i18n="projects.tidal.category">E-commerce</span>
+                <span class="work__year">2025</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <div class="work__preview" aria-hidden="true">
+          <div class="cover-art"><span class="cover-art__glyph"></span></div>
+        </div>
+      </section>
+
+      <!-- CONTACT -->
+      <section
+        class="contact"
+        id="contact"
+        data-section
+        data-section-label="sections.contact"
+        data-section-theme="light"
+      >
+        <div class="marquee" aria-hidden="true">
+          <div class="marquee__track">
+            <div class="marquee__group">
+              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__star">✦</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__star">✦</span>
+            </div>
+            <div class="marquee__group">
+              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__star">✦</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__star">✦</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="container contact__body">
+          <h2 class="visually-hidden" data-i18n="sections.contact">Contact</h2>
+          <p class="contact__lead" data-reveal data-i18n="contact.lead">
+            Have a project, a role or an idea in mind? I'd love to hear about it.
+          </p>
+          <a class="contact__email" href="mailto:hello@example.com" data-reveal>
+            hello@example.com<span aria-hidden="true">↗</span>
+          </a>
+          <p class="contact__availability" data-reveal>
+            <span class="status-dot" aria-hidden="true"></span>
+            <span data-i18n="contact.availability">Currently available — let's talk</span>
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <!-- @include footer -->
+  </body>
+</html>
