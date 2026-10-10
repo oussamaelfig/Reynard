@@ -27,7 +27,7 @@
   position: absolute;
   top: calc(var(--header-height) + 1.5rem);
   left: var(--gutter);
-  max-width: 40rem;
+  right: var(--gutter);
   pointer-events: none;
 }
 
@@ -36,6 +36,7 @@
 }
 
 .playground__text {
+  max-width: 30rem;
   margin-top: 1rem;
   color: var(--fg-muted);
 }

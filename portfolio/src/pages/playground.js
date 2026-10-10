@@ -20,6 +20,8 @@ const SWATCHES = [
 const GLYPHS = ['✦', '●', '▲', '■']
 const MAX_BODIES = 70
 const WALL = 400
+const FLOOR_GAP = 72
+const STEP = 1000 / 60
 
 const { enter } = initApp({ smoothScroll: false })
 enter.then(() => playTitleIntro())
@@ -34,6 +36,7 @@ let width = 0
 let height = 0
 let ratio = 1
 let gravityTimeline = null
+let spawnCalls = []
 
 Composite.add(
   engine.world,
@@ -43,10 +46,11 @@ Composite.add(
 const fontSize = () => Math.round(Math.min(34, Math.max(18, width * 0.026)))
 const pick = (list) => list[Math.floor(Math.random() * list.length)]
 
+// The floor sits above the hint bar so resting shapes never cover it.
 function buildWalls() {
   Composite.remove(engine.world, walls)
   walls = [
-    Bodies.rectangle(width / 2, height + WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
+    Bodies.rectangle(width / 2, height - FLOOR_GAP + WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
     Bodies.rectangle(width / 2, -WALL / 2, width + WALL * 2, WALL, { isStatic: true }),
     Bodies.rectangle(-WALL / 2, height / 2, WALL, height + WALL * 2, { isStatic: true }),
     Bodies.rectangle(width + WALL / 2, height / 2, WALL, height + WALL * 2, { isStatic: true }),
@@ -67,12 +71,13 @@ function resize() {
   bodies.forEach((body) => {
     Body.setPosition(body, {
       x: Math.min(Math.max(body.position.x, 40), width - 40),
-      y: Math.min(body.position.y, height - 40),
+      y: Math.min(body.position.y, height - FLOOR_GAP - 40),
     })
   })
 }
 
 function addBody(body) {
+  body.plugin.bornAt = performance.now()
   bodies.push(body)
   Composite.add(engine.world, body)
 
@@ -104,19 +109,22 @@ function createBadge(x, y) {
   return body
 }
 
+// Shapes appear one by one inside the top of the canvas (below the ceiling).
 function spawnInitial() {
+  spawnCalls.forEach((call) => call.kill())
   bodies.splice(0).forEach((body) => Composite.remove(engine.world, body))
 
   const labels = t('playground.items')
-  const items = Array.isArray(labels) ? labels : []
+  const factories = [
+    ...(Array.isArray(labels) ? labels : []).map((label) => (x, y) => createPill(label, x, y)),
+    ...Array.from({ length: 8 }, () => createBadge),
+  ].sort(() => Math.random() - 0.5)
 
-  items.forEach((label, index) => {
-    addBody(createPill(label, width * (0.15 + Math.random() * 0.7), -100 - index * 90))
-  })
-
-  for (let index = 0; index < 8; index++) {
-    addBody(createBadge(width * (0.1 + Math.random() * 0.8), -200 - index * 140))
-  }
+  spawnCalls = factories.map((create, index) =>
+    gsap.delayedCall(index * 0.09, () =>
+      addBody(create(width * (0.12 + Math.random() * 0.76), height * (0.1 + Math.random() * 0.25))),
+    ),
+  )
 }
 
 function draw() {
@@ -124,13 +132,16 @@ function draw() {
   context.clearRect(0, 0, width, height)
   context.textAlign = 'center'
   context.textBaseline = 'middle'
+  const now = performance.now()
 
   for (const body of bodies) {
     const shape = body.plugin.shape
+    const grow = 1 - (1 - Math.min(1, (now - body.plugin.bornAt) / 350)) ** 3
 
     context.save()
     context.translate(body.position.x, body.position.y)
     context.rotate(body.angle)
+    context.scale(grow, grow)
     context.fillStyle = shape.swatch.fill
     context.beginPath()
 
@@ -187,8 +198,15 @@ resize()
 
 document.fonts.load(`700 ${fontSize()}px "Cabinet Grotesk"`).finally(() => {
   spawnInitial()
+
+  // Fixed 60 Hz steps keep the simulation stable at any frame rate.
+  let pending = 0
   gsap.ticker.add((time, deltaTime) => {
-    Engine.update(engine, Math.min(deltaTime, 1000 / 30))
+    pending = Math.min(pending + deltaTime, STEP * 4)
+    while (pending >= STEP) {
+      Engine.update(engine, STEP)
+      pending -= STEP
+    }
     draw()
   })
 })
