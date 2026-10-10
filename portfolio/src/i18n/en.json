@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "homeTitle": "Your Name — Creative Developer & Designer",
+    "homeDescription": "Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences.",
+    "playgroundTitle": "Playground — Your Name",
+    "playgroundDescription": "Small interactive experiments: physics, motion and code sketches.",
+    "contactTitle": "Contact — Your Name",
+    "contactDescription": "Get in touch for freelance projects, full-time roles or collaborations.",
+    "legalTitle": "Legal notice — Your Name",
+    "legalDescription": "Publisher, hosting, intellectual property and personal data information.",
+    "notFoundTitle": "Page not found — Your Name"
+  },
+  "common": {
+    "skip": "Skip to content",
+    "loading": "Loading",
+    "home": "Home"
+  },
+  "nav": {
+    "main": "Main navigation",
+    "work": "Work",
+    "playground": "Playground",
+    "contact": "Contact",
+    "language": "Switch the website to French",
+    "sections": "Sections"
+  },
+  "sections": {
+    "hero": "Home",
+    "about": "About",
+    "journey": "Journey",
+    "toolkit": "Toolkit",
+    "work": "Work",
+    "contact": "Contact"
+  },
+  "hero": {
+    "eyebrow": "Portfolio — Selected work",
+    "location": "Based in Your City",
+    "availability": "Available for freelance & full-time",
+    "titleLine1": "Creative developer",
+    "titleLine2": "& designer",
+    "scroll": "Scroll"
+  },
+  "about": {
+    "label": "About",
+    "statement": "I build interfaces that move, react and tell stories — where every pixel is designed and every interaction is engineered.",
+    "body": "Write two or three sentences about yourself here: your background, the kind of projects you enjoy and what you bring to a team."
+  },
+  "journey": {
+    "title": "Journey",
+    "chapter1": {
+      "label": "2018 — The spark",
+      "line1": "It began",
+      "line2": "with curiosity.",
+      "detail": "Where did it all start? A first sketch, a first line of code, a first job."
+    },
+    "chapter2": {
+      "label": "2021 — The craft",
+      "line1": "Then came",
+      "line2": "the craft.",
+      "detail": "The years spent learning: schools, studios, side projects and late nights."
+    },
+    "chapter3": {
+      "label": "Today — The blend",
+      "line1": "Now I build",
+      "line2": "what I imagine.",
+      "detail": "What you do today and the kind of work you want to do next."
+    }
+  },
+  "toolkit": {
+    "title": "Toolkit",
+    "intro": "The tools I reach for, from first sketch to production.",
+    "hint": "Keep scrolling to spin the wheel",
+    "groups": {
+      "code": "Code",
+      "motion": "3D & Motion",
+      "design": "Design"
+    },
+    "tags": {
+      "language": "Language",
+      "framework": "Framework",
+      "runtime": "Runtime",
+      "engine": "3D engine",
+      "shaders": "Shaders",
+      "animation": "Animation",
+      "modeling": "3D modeling",
+      "interface": "Interface design",
+      "imaging": "Image editing",
+      "motion": "Motion design"
+    }
+  },
+  "work": {
+    "title": "Selected work",
+    "views": "Layout",
+    "list": "List",
+    "grid": "Grid"
+  },
+  "projects": {
+    "aurora": {
+      "category": "WebGL experience",
+      "role": "Creative development",
+      "summary": "An immersive 3D experience exploring light, colour and motion in the browser.",
+      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
+      "approach": "Explain your process: the concept, the technical choices (shaders, physics, performance budgets) and the trade-offs you made along the way.",
+      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
+    },
+    "monolith": {
+      "category": "Brand & website",
+      "role": "Art direction & development",
+      "summary": "A bold identity and editorial website for a fictional architecture studio.",
+      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
+      "approach": "Explain your process: moodboards, typography, layout system, motion principles and how the design translated into code.",
+      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
+    },
+    "tidal": {
+      "category": "E-commerce",
+      "role": "Front-end development",
+      "summary": "A fluid shopping experience for a fictional surf brand, built for speed.",
+      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
+      "approach": "Explain your process: component architecture, performance work, accessibility and the interactions that make the store feel alive.",
+      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
+    }
+  },
+  "project": {
+    "role": "Role",
+    "year": "Year",
+    "stack": "Stack",
+    "link": "Live site",
+    "linkPlaceholder": "Coming soon",
+    "context": "Context",
+    "approach": "Approach",
+    "outcome": "Outcome",
+    "gallery": "Placeholder visual — replace with your own",
+    "next": "Next project",
+    "back": "All projects"
+  },
+  "contact": {
+    "marquee": "Let's work together",
+    "lead": "Have a project, a role or an idea in mind? I'd love to hear about it.",
+    "availability": "Currently available — let's talk"
+  },
+  "footer": {
+    "role": "Creative developer & designer",
+    "explore": "Explore",
+    "elsewhere": "Elsewhere",
+    "time": "Local time",
+    "city": "Your City",
+    "legal": "Legal notice",
+    "top": "Back to top",
+    "rights": "All rights reserved."
+  },
+  "playground": {
+    "title": "Playground",
+    "intro": "Small experiments that don't fit anywhere else.",
+    "hint": "Drag the shapes · Click to add more · Scroll to flip gravity",
+    "reset": "Reset",
+    "canvas": "Interactive physics playground",
+    "items": ["Shaders", "Physics", "Motion", "Type", "WebGL", "Generative", "Sound", "Prototypes", "Particles", "Interaction"]
+  },
+  "contactPage": {
+    "eyebrow": "Contact",
+    "titleLine1": "Let's build",
+    "titleLine2": "something together.",
+    "intro": "Freelance projects, full-time roles or a simple hello — my inbox is open.",
+    "copy": "Copy email",
+    "copied": "Copied!",
+    "socials": "Find me online",
+    "response": "I usually reply within 48 hours."
+  },
+  "legal": {
+    "title": "Legal notice",
+    "intro": "Fill in this template with your own details before publishing.",
+    "publisherTitle": "Publisher",
+    "publisherBody": "Your Name — independent creative developer. Contact: hello@example.com.",
+    "hostingTitle": "Hosting",
+    "hostingBody": "This website is hosted by [hosting provider — company name, address and phone number].",
+    "ipTitle": "Intellectual property",
+    "ipBody": "Unless credited otherwise, the texts, visuals, design and code of this website belong to Your Name. Please ask before reusing any of it.",
+    "dataTitle": "Personal data",
+    "dataBody": "This website does not collect personal data and uses no tracking cookies. Your language preference is stored locally in your browser only.",
+    "updated": "Last updated: [date]"
+  },
+  "notFound": {
+    "title": "Lost in space",
+    "body": "The page you are looking for doesn't exist or has moved.",
+    "cta": "Back to home"
+  }
+}

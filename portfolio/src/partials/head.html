@@ -1,0 +1,18 @@
+<script>
+  ;(() => {
+    const root = document.documentElement
+    root.classList.add('js')
+    try {
+      if (sessionStorage.getItem('transition:pending') === '1') {
+        sessionStorage.removeItem('transition:pending')
+        root.dataset.transition = 'in'
+      }
+    } catch {}
+  })()
+</script>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+<link rel="preconnect" href="https://cdn.fontshare.com" crossorigin />
+<!-- One request per family: Fontshare mis-parses multi-family queries. -->
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" />
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@500,700,800&display=swap" />

@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "homeTitle": "Your Name — Développeur créatif & designer",
+    "homeDescription": "Portfolio de Your Name, développeur créatif et designer qui conçoit des expériences web interactives et animées.",
+    "playgroundTitle": "Terrain de jeu — Your Name",
+    "playgroundDescription": "Petites expériences interactives : physique, animation et croquis de code.",
+    "contactTitle": "Contact — Your Name",
+    "contactDescription": "Prenez contact pour un projet freelance, un poste ou une collaboration.",
+    "legalTitle": "Mentions légales — Your Name",
+    "legalDescription": "Éditeur, hébergement, propriété intellectuelle et données personnelles.",
+    "notFoundTitle": "Page introuvable — Your Name"
+  },
+  "common": {
+    "skip": "Aller au contenu",
+    "loading": "Chargement",
+    "home": "Accueil"
+  },
+  "nav": {
+    "main": "Navigation principale",
+    "work": "Projets",
+    "playground": "Terrain de jeu",
+    "contact": "Contact",
+    "language": "Passer le site en anglais",
+    "sections": "Sections"
+  },
+  "sections": {
+    "hero": "Accueil",
+    "about": "À propos",
+    "journey": "Parcours",
+    "toolkit": "Outils",
+    "work": "Projets",
+    "contact": "Contact"
+  },
+  "hero": {
+    "eyebrow": "Portfolio — Projets choisis",
+    "location": "Basé à Votre Ville",
+    "availability": "Disponible en freelance & CDI",
+    "titleLine1": "Développeur créatif",
+    "titleLine2": "& designer",
+    "scroll": "Défiler"
+  },
+  "about": {
+    "label": "À propos",
+    "statement": "Je conçois des interfaces qui bougent, réagissent et racontent des histoires — où chaque pixel est dessiné et chaque interaction est pensée.",
+    "body": "Écrivez ici deux ou trois phrases sur vous : votre parcours, les projets que vous aimez et ce que vous apportez à une équipe."
+  },
+  "journey": {
+    "title": "Parcours",
+    "chapter1": {
+      "label": "2018 — L'étincelle",
+      "line1": "Tout a commencé",
+      "line2": "par la curiosité.",
+      "detail": "Où tout a-t-il commencé ? Un premier croquis, une première ligne de code, un premier poste."
+    },
+    "chapter2": {
+      "label": "2021 — Le métier",
+      "line1": "Puis est venu",
+      "line2": "le savoir-faire.",
+      "detail": "Les années d'apprentissage : écoles, studios, projets personnels et nuits blanches."
+    },
+    "chapter3": {
+      "label": "Aujourd'hui — La synthèse",
+      "line1": "Aujourd'hui je crée",
+      "line2": "ce que j'imagine.",
+      "detail": "Ce que vous faites aujourd'hui et le type de projets que vous visez ensuite."
+    }
+  },
+  "toolkit": {
+    "title": "Outils",
+    "intro": "Les outils que j'utilise, du premier croquis à la mise en production.",
+    "hint": "Continuez à défiler pour faire tourner la roue",
+    "groups": {
+      "code": "Code",
+      "motion": "3D & Motion",
+      "design": "Design"
+    },
+    "tags": {
+      "language": "Langage",
+      "framework": "Framework",
+      "runtime": "Environnement",
+      "engine": "Moteur 3D",
+      "shaders": "Shaders",
+      "animation": "Animation",
+      "modeling": "Modélisation 3D",
+      "interface": "Design d'interface",
+      "imaging": "Retouche d'image",
+      "motion": "Motion design"
+    }
+  },
+  "work": {
+    "title": "Projets choisis",
+    "views": "Affichage",
+    "list": "Liste",
+    "grid": "Grille"
+  },
+  "projects": {
+    "aurora": {
+      "category": "Expérience WebGL",
+      "role": "Développement créatif",
+      "summary": "Une expérience 3D immersive qui explore la lumière, la couleur et le mouvement dans le navigateur.",
+      "context": "Décrivez le brief : qui était le client, quel était son problème et à quoi ressemblait la réussite. Deux courts paragraphes suffisent généralement.",
+      "approach": "Expliquez votre démarche : le concept, les choix techniques (shaders, physique, budgets de performance) et les compromis faits en chemin.",
+      "outcome": "Terminez par le résultat : chiffres, prix, retours ou simplement ce que vous avez appris. Ajoutez le lien du projet s'il est en ligne."
+    },
+    "monolith": {
+      "category": "Identité & site web",
+      "role": "Direction artistique & développement",
+      "summary": "Une identité forte et un site éditorial pour un studio d'architecture fictif.",
+      "context": "Décrivez le brief : qui était le client, quel était son problème et à quoi ressemblait la réussite. Deux courts paragraphes suffisent généralement.",
+      "approach": "Expliquez votre démarche : moodboards, typographie, système de mise en page, principes d'animation et passage du design au code.",
+      "outcome": "Terminez par le résultat : chiffres, prix, retours ou simplement ce que vous avez appris. Ajoutez le lien du projet s'il est en ligne."
+    },
+    "tidal": {
+      "category": "E-commerce",
+      "role": "Développement front-end",
+      "summary": "Une expérience d'achat fluide pour une marque de surf fictive, pensée pour la vitesse.",
+      "context": "Décrivez le brief : qui était le client, quel était son problème et à quoi ressemblait la réussite. Deux courts paragraphes suffisent généralement.",
+      "approach": "Expliquez votre démarche : architecture des composants, performance, accessibilité et interactions qui rendent la boutique vivante.",
+      "outcome": "Terminez par le résultat : chiffres, prix, retours ou simplement ce que vous avez appris. Ajoutez le lien du projet s'il est en ligne."
+    }
+  },
+  "project": {
+    "role": "Rôle",
+    "year": "Année",
+    "stack": "Stack",
+    "link": "Site en ligne",
+    "linkPlaceholder": "Bientôt",
+    "context": "Contexte",
+    "approach": "Approche",
+    "outcome": "Résultat",
+    "gallery": "Visuel provisoire — remplacez-le par le vôtre",
+    "next": "Projet suivant",
+    "back": "Tous les projets"
+  },
+  "contact": {
+    "marquee": "Travaillons ensemble",
+    "lead": "Un projet, un poste ou une idée en tête ? J'aimerais beaucoup en entendre parler.",
+    "availability": "Actuellement disponible — parlons-en"
+  },
+  "footer": {
+    "role": "Développeur créatif & designer",
+    "explore": "Explorer",
+    "elsewhere": "Ailleurs",
+    "time": "Heure locale",
+    "city": "Votre Ville",
+    "legal": "Mentions légales",
+    "top": "Haut de page",
+    "rights": "Tous droits réservés."
+  },
+  "playground": {
+    "title": "Terrain de jeu",
+    "intro": "De petites expériences qui ne rentrent nulle part ailleurs.",
+    "hint": "Attrapez les formes · Cliquez pour en ajouter · Défilez pour inverser la gravité",
+    "reset": "Réinitialiser",
+    "canvas": "Terrain de jeu physique interactif",
+    "items": ["Shaders", "Physique", "Motion", "Typo", "WebGL", "Génératif", "Son", "Prototypes", "Particules", "Interaction"]
+  },
+  "contactPage": {
+    "eyebrow": "Contact",
+    "titleLine1": "Construisons",
+    "titleLine2": "quelque chose ensemble.",
+    "intro": "Projets freelance, postes à temps plein ou simple bonjour — ma boîte mail est ouverte.",
+    "copy": "Copier l'e-mail",
+    "copied": "Copié !",
+    "socials": "Me retrouver en ligne",
+    "response": "Je réponds généralement sous 48 heures."
+  },
+  "legal": {
+    "title": "Mentions légales",
+    "intro": "Complétez ce modèle avec vos propres informations avant la mise en ligne.",
+    "publisherTitle": "Éditeur",
+    "publisherBody": "Your Name — développeur créatif indépendant. Contact : hello@example.com.",
+    "hostingTitle": "Hébergement",
+    "hostingBody": "Ce site est hébergé par [hébergeur — raison sociale, adresse et numéro de téléphone].",
+    "ipTitle": "Propriété intellectuelle",
+    "ipBody": "Sauf mention contraire, les textes, visuels, design et code de ce site appartiennent à Your Name. Merci de demander avant toute réutilisation.",
+    "dataTitle": "Données personnelles",
+    "dataBody": "Ce site ne collecte aucune donnée personnelle et n'utilise aucun cookie de suivi. Seule votre préférence de langue est enregistrée localement dans votre navigateur.",
+    "updated": "Dernière mise à jour : [date]"
+  },
+  "notFound": {
+    "title": "Perdu dans l'espace",
+    "body": "La page que vous cherchez n'existe pas ou a été déplacée.",
+    "cta": "Retour à l'accueil"
+  }
+}
