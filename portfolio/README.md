@@ -1,7 +1,7 @@
 # Fiona — portfolio (Vite · three.js · GSAP · Lenis)
 
-Fiona's bilingual (EN/FR) portfolio, built with the same open-source toolchain
-as [guillaumezhu.com](https://guillaumezhu.com/): a vanilla-JS Vite multi-page
+Fiona's portfolio, built with the same open-source toolchain as
+[guillaumezhu.com](https://guillaumezhu.com/): a vanilla-JS Vite multi-page
 site with a WebGL hero, scroll-driven sections, page transitions and a physics
 playground. Her experience and education come from her LinkedIn profile.
 
@@ -53,8 +53,7 @@ portfolio/
 └── src/
     ├── config.js              Name, email, time zone, optional hero model URL
     ├── partials/              head, header, footer, transition (<!-- @include name -->)
-    ├── i18n/en.json, fr.json  Every translatable string
-    ├── core/                  Lenis + GSAP, i18n, transitions, header, themes, reveals
+    ├── core/                  Lenis + GSAP, transitions, header, themes, reveals, clock
     ├── components/            Loader, section indicator
     ├── sections/              Hero, about, journey (experience), toolkit (focus wheel), contact
     ├── webgl/                 Hero scene, glTF loader, GLSL shaders
@@ -80,9 +79,6 @@ portfolio/
 - **Page transitions:** a cover wipes in on internal links. The next page reads a
   `sessionStorage` flag before first paint and wipes it away. This also handles
   the back/forward cache.
-- **i18n:** `data-i18n="key"` (text) and `data-i18n-attr="attr:key"`
-  (attributes). The choice is stored in `localStorage`, and the browser language
-  is used on first visit.
 - **Accessibility:** skip link, visible focus, `prefers-reduced-motion` support
   (no smooth scroll or loader, slowed WebGL), semantic landmarks.
 
@@ -94,18 +90,19 @@ These details weren't in the profile, so they are still placeholders:
    page, legal notice, `src/config.js`).
 2. **LinkedIn URL:** replace `https://www.linkedin.com/in/your-handle/` in
    `src/partials/footer.html` and `contact/index.html`.
-3. **Hosting:** fill in the hosting provider in the legal notice
-   (`legal.hostingBody` in both dictionaries) and remove the reminder box
-   (`legal.intro`).
+3. **Hosting:** fill in the hosting provider in `legal/index.html` and remove
+   the reminder box at the top of that page.
 4. **Full name (optional):** the site uses "Fiona". Search and replace it to add
    a last name.
 
 ## Editing
 
-1. **Copy:** edit `src/i18n/en.json` and `src/i18n/fr.json`. The HTML keeps the
-   English text as a no-JS fallback.
-2. **Experience:** each chapter is a `.journey__chapter` in `index.html` with
-   its strings under `experience.*`. The particle field supports three chapters.
+1. **Copy:** all text lives in the HTML files (`index.html`, the pages and
+   `src/partials/`). A few labels that scripts display sit in attributes:
+   `data-section-label` (side navigation), `data-group-label` (focus wheel
+   heading), `data-words` (playground) and `data-copied-label` (copy button).
+2. **Experience:** each chapter is a `.journey__chapter` in `index.html`. The
+   particle field supports three chapters.
 3. **Look:** colors, fonts, spacing and easing are tokens at the top of
    `src/styles/base.css`.
 4. **Projects:** the first version of this site had a project list and a
