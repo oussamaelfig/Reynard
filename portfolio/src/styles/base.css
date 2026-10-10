@@ -347,6 +347,13 @@ html[lang='fr'] .lang-toggle [data-lang='fr'] {
   }
 }
 
+/* The playground stays reachable from the footer on the narrowest screens. */
+@media (max-width: 30rem) {
+  .site-header__link--secondary {
+    display: none;
+  }
+}
+
 /* ==========================================================================
    Page transition
    ========================================================================== */
@@ -504,42 +511,6 @@ html[data-loader='pending'] .loader {
   .scroll-indicator {
     display: none;
   }
-}
-
-/* ==========================================================================
-   Cover art — generated placeholders until real project images exist
-   ========================================================================== */
-
-.cover-art {
-  position: relative;
-  overflow: hidden;
-  background:
-    radial-gradient(120% 90% at 18% 12%, var(--cover-b, var(--pink)) 0%, transparent 55%),
-    radial-gradient(90% 120% at 88% 92%, var(--cover-c, var(--lime)) 0%, transparent 50%),
-    linear-gradient(140deg, var(--cover-a, var(--indigo)), var(--ink));
-  color: var(--paper);
-}
-
-.cover-art::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: var(--noise);
-  mix-blend-mode: overlay;
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-.cover-art__glyph {
-  position: absolute;
-  right: 6%;
-  bottom: -0.12em;
-  font-family: var(--font-display);
-  font-size: clamp(6rem, 18vw, 18rem);
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: -0.06em;
-  mix-blend-mode: overlay;
 }
 
 /* ==========================================================================

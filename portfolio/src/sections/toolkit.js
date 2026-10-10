@@ -25,7 +25,7 @@ export function initToolkit() {
       .timeline()
       .to(label, { yPercent: -110, duration: 0.22, ease: 'power2.in' })
       .add(() => {
-        label.dataset.i18n = `toolkit.groups.${group}`
+        label.dataset.i18n = `focus.groups.${group}`
         label.textContent = t(label.dataset.i18n)
       })
       .fromTo(label, { yPercent: 110 }, { yPercent: 0, duration: 0.45, ease: 'power3.out' })

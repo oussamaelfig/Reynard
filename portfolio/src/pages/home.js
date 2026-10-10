@@ -10,7 +10,6 @@ import { initContact } from '../sections/contact.js'
 import { initHero } from '../sections/hero.js'
 import { initJourney } from '../sections/journey.js'
 import { initToolkit } from '../sections/toolkit.js'
-import { initWork } from '../sections/work.js'
 
 const loader = createLoader()
 const { lenis, enter } = initApp()
@@ -21,7 +20,6 @@ const hero = initHero({ onProgress: loader.setProgress })
 initAbout()
 initJourney()
 initToolkit()
-initWork()
 initContact()
 initScrollIndicator()
 initReveals()

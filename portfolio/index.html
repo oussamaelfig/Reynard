@@ -16,16 +16,16 @@
       })()
     </script>
     <!-- @include head -->
-    <title data-i18n="meta.homeTitle">Your Name — Creative Developer &amp; Designer</title>
+    <title data-i18n="meta.homeTitle">Fiona — Finance, Data &amp; Growth</title>
     <meta
       name="description"
-      content="Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences."
+      content="Portfolio of Fiona, a Financial Mathematics student at the University of Waterloo with internships in finance and growth."
       data-i18n-attr="content:meta.homeDescription"
     />
-    <meta property="og:title" content="Your Name — Creative Developer &amp; Designer" />
+    <meta property="og:title" content="Fiona — Finance, Data &amp; Growth" />
     <meta
       property="og:description"
-      content="Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences."
+      content="Portfolio of Fiona, a Financial Mathematics student at the University of Waterloo with internships in finance and growth."
     />
     <meta property="og:type" content="website" />
     <script type="module" src="/src/pages/home.js"></script>
@@ -37,7 +37,7 @@
     <div class="loader" role="status" aria-label="Loading" data-i18n-attr="aria-label:common.loading">
       <canvas class="loader__canvas" aria-hidden="true"></canvas>
       <p class="loader__count" aria-hidden="true"><span class="loader__value">0</span><small>%</small></p>
-      <p class="loader__label eyebrow">Your Name — Portfolio</p>
+      <p class="loader__label eyebrow">Fiona — Portfolio</p>
     </div>
 
     <!-- @include header -->
@@ -56,18 +56,18 @@
         <canvas class="hero__canvas" aria-hidden="true"></canvas>
 
         <div class="hero__meta">
-          <p data-hero-fade data-i18n="hero.eyebrow">Portfolio — Selected work</p>
-          <p data-hero-fade data-i18n="hero.location">Based in Your City</p>
+          <p data-hero-fade data-i18n="hero.eyebrow">Financial Mathematics — University of Waterloo</p>
+          <p data-hero-fade data-i18n="hero.location">Currently in San Jose, CA</p>
           <p class="hero__status" data-hero-fade>
             <span class="status-dot" aria-hidden="true"></span>
-            <span data-i18n="hero.availability">Available for freelance &amp; full-time</span>
+            <span data-i18n="hero.status">Finance Intern at Venu (YC W21)</span>
           </p>
         </div>
 
         <h1 class="hero__title">
-          <span class="visually-hidden">Your Name — </span>
-          <span class="line-mask"><span data-i18n="hero.titleLine1">Creative developer</span></span>
-          <span class="line-mask hero__title-second"><span data-i18n="hero.titleLine2">&amp; designer</span></span>
+          <span class="visually-hidden">Fiona — </span>
+          <span class="line-mask"><span data-i18n="hero.titleLine1">Finance, data</span></span>
+          <span class="line-mask hero__title-second"><span data-i18n="hero.titleLine2">&amp; growth</span></span>
         </h1>
 
         <a class="hero__scroll" href="#about" data-hero-fade>
@@ -87,22 +87,22 @@
         <div class="container about__inner">
           <h2 class="eyebrow" data-i18n="about.label">About</h2>
           <p class="about__statement" data-i18n="about.statement">
-            I build interfaces that move, react and tell stories — where every pixel is designed and every
-            interaction is engineered.
+            I'm Fiona — a Financial Mathematics student at the University of Waterloo, working where finance, data
+            and growth meet.
           </p>
           <p class="about__body" data-reveal data-i18n="about.body">
-            Write two or three sentences about yourself here: your background, the kind of projects you enjoy and
-            what you bring to a team.
+            Right now I'm a Finance Intern at Venu (YC W21) in San Jose. Before that I spent six months as a Growth
+            Intern at Phydata, and I'm a member of the Waterloo Data Science Club.
           </p>
         </div>
       </section>
 
-      <!-- JOURNEY -->
+      <!-- EXPERIENCE -->
       <section
         class="journey"
-        id="journey"
+        id="experience"
         data-section
-        data-section-label="sections.journey"
+        data-section-label="sections.experience"
         data-section-theme="dark"
       >
         <div class="journey__track">
@@ -110,7 +110,7 @@
             <canvas class="journey__canvas" aria-hidden="true"></canvas>
 
             <div class="journey__header">
-              <h2 class="eyebrow" data-i18n="journey.title">Journey</h2>
+              <h2 class="eyebrow" data-i18n="experience.title">Experience</h2>
               <p class="journey__counter" aria-hidden="true">
                 <span class="journey__current">01</span> / 03
               </p>
@@ -118,35 +118,37 @@
 
             <ol class="journey__chapters">
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="journey.chapter1.label">2018 — The spark</p>
+                <p class="journey__label" data-i18n="experience.phydata.label">Apr – Sep 2026 · Phydata Inc.</p>
                 <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="journey.chapter1.line1">It began</span></span>
-                  <span class="line-mask"><span data-i18n="journey.chapter1.line2">with curiosity.</span></span>
+                  <span class="line-mask"><span data-i18n="experience.phydata.line1">Growth Intern</span></span>
+                  <span class="line-mask"><span data-i18n="experience.phydata.line2">at Phydata.</span></span>
                 </p>
-                <p class="journey__detail" data-i18n="journey.chapter1.detail">
-                  Where did it all start? A first sketch, a first line of code, a first job.
+                <p class="journey__detail" data-i18n="experience.phydata.detail">
+                  Phydata builds custom training data for physical AI. Six months on-site in Canada.
                 </p>
               </li>
 
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="journey.chapter2.label">2021 — The craft</p>
-                <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="journey.chapter2.line1">Then came</span></span>
-                  <span class="line-mask"><span data-i18n="journey.chapter2.line2">the craft.</span></span>
+                <p class="journey__label" data-i18n="experience.dsc.label">
+                  Aug 2026 – Present · Waterloo Data Science Club
                 </p>
-                <p class="journey__detail" data-i18n="journey.chapter2.detail">
-                  The years spent learning: schools, studios, side projects and late nights.
+                <p class="journey__statement">
+                  <span class="line-mask"><span data-i18n="experience.dsc.line1">Data Science</span></span>
+                  <span class="line-mask"><span data-i18n="experience.dsc.line2">Club member.</span></span>
+                </p>
+                <p class="journey__detail" data-i18n="experience.dsc.detail">
+                  Member of the Waterloo Data Science Club, a student community at the University of Waterloo.
                 </p>
               </li>
 
               <li class="journey__chapter">
-                <p class="journey__label" data-i18n="journey.chapter3.label">Today — The blend</p>
+                <p class="journey__label" data-i18n="experience.venu.label">Sep 2026 – Present · Venu (YC W21)</p>
                 <p class="journey__statement">
-                  <span class="line-mask"><span data-i18n="journey.chapter3.line1">Now I build</span></span>
-                  <span class="line-mask"><span data-i18n="journey.chapter3.line2">what I imagine.</span></span>
+                  <span class="line-mask"><span data-i18n="experience.venu.line1">Finance Intern</span></span>
+                  <span class="line-mask"><span data-i18n="experience.venu.line2">at Venu.</span></span>
                 </p>
-                <p class="journey__detail" data-i18n="journey.chapter3.detail">
-                  What you do today and the kind of work you want to do next.
+                <p class="journey__detail" data-i18n="experience.venu.detail">
+                  Finance internship at Venu, a Y Combinator W21 company, in San Jose, California.
                 </p>
               </li>
             </ol>
@@ -156,212 +158,113 @@
         </div>
       </section>
 
-      <!-- TOOLKIT -->
+      <!-- FOCUS -->
       <section
         class="toolkit"
-        id="toolkit"
+        id="focus"
         data-section
-        data-section-label="sections.toolkit"
+        data-section-label="sections.focus"
         data-section-theme="light"
       >
         <div class="toolkit__track">
           <div class="toolkit__stage">
             <div class="toolkit__header">
-              <h2 class="toolkit__title" data-i18n="toolkit.title">Toolkit</h2>
+              <h2 class="toolkit__title" data-i18n="focus.title">Focus</h2>
               <div class="toolkit__aside">
                 <p class="toolkit__group">
-                  <span class="toolkit__group-label" data-i18n="toolkit.groups.code">Code</span>
+                  <span class="toolkit__group-label" data-i18n="focus.groups.finance">Finance</span>
                 </p>
-                <p class="toolkit__intro" data-i18n="toolkit.intro">
-                  The tools I reach for, from first sketch to production.
+                <p class="toolkit__intro" data-i18n="focus.intro">
+                  The fields my studies and internships have taken me into.
                 </p>
               </div>
             </div>
 
             <div class="toolkit__scene">
               <ul class="toolkit__ring">
-                <li class="tool-card" data-group="code">
+                <li class="tool-card" data-group="finance">
                   <span class="tool-card__top">
                     <span class="tool-card__index">01</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">JavaScript</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.language">Language</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.financialMath">Financial Mathematics</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.financialMath">University of Waterloo</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="code">
+                <li class="tool-card" data-group="finance">
                   <span class="tool-card__top">
                     <span class="tool-card__index">02</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">TypeScript</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.language">Language</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.finance">Finance</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.finance">Intern at Venu</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="code">
+                <li class="tool-card" data-group="data">
                   <span class="tool-card__top">
                     <span class="tool-card__index">03</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">Vue</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.framework">Framework</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.dataScience">Data Science</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.dataScience">UW Data Science Club</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="code">
+                <li class="tool-card" data-group="data">
                   <span class="tool-card__top">
                     <span class="tool-card__index">04</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">React</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.framework">Framework</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.physicalAi">Physical AI</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.physicalAi">Phydata · training data</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="code">
+                <li class="tool-card" data-group="growth">
                   <span class="tool-card__top">
                     <span class="tool-card__index">05</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">Node.js</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.runtime">Runtime</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.growth">Growth</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.growth">Intern at Phydata</span>
                   </span>
                 </li>
-                <li class="tool-card" data-group="motion">
+                <li class="tool-card" data-group="growth">
                   <span class="tool-card__top">
                     <span class="tool-card__index">06</span><span class="tool-card__shape" aria-hidden="true"></span>
                   </span>
                   <span class="tool-card__bottom">
-                    <span class="tool-card__name">Three.js</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.engine">3D engine</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="motion">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">07</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">GLSL</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.shaders">Shaders</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="motion">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">08</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">GSAP</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.animation">Animation</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="motion">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">09</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">Blender</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.modeling">3D modeling</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="design">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">10</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">Figma</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.interface">Interface design</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="design">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">11</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">Photoshop</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.imaging">Image editing</span>
-                  </span>
-                </li>
-                <li class="tool-card" data-group="design">
-                  <span class="tool-card__top">
-                    <span class="tool-card__index">12</span><span class="tool-card__shape" aria-hidden="true"></span>
-                  </span>
-                  <span class="tool-card__bottom">
-                    <span class="tool-card__name">After Effects</span>
-                    <span class="tool-card__tag" data-i18n="toolkit.tags.motion">Motion design</span>
+                    <span class="tool-card__name" data-i18n="focus.cards.startups">Startups</span>
+                    <span class="tool-card__tag" data-i18n="focus.tags.startups">Venu · YC W21</span>
                   </span>
                 </li>
               </ul>
             </div>
 
-            <p class="toolkit__hint eyebrow" data-i18n="toolkit.hint">Keep scrolling to spin the wheel</p>
+            <p class="toolkit__hint eyebrow" data-i18n="focus.hint">Keep scrolling to spin the wheel</p>
           </div>
         </div>
       </section>
 
-      <!-- WORK -->
+      <!-- EDUCATION -->
       <section
-        class="work"
-        id="work"
+        class="education"
+        id="education"
         data-section
-        data-section-label="sections.work"
+        data-section-label="sections.education"
         data-section-theme="dark"
       >
-        <div class="container">
-          <div class="work__header">
-            <h2 class="work__title" data-i18n="work.title">Selected work</h2>
-            <div class="work__views" role="group" aria-label="Layout" data-i18n-attr="aria-label:work.views">
-              <button class="work__view is-active" type="button" data-view="list" aria-pressed="true" data-i18n="work.list">
-                List
-              </button>
-              <button class="work__view" type="button" data-view="grid" aria-pressed="false" data-i18n="work.grid">
-                Grid
-              </button>
+        <div class="container education__inner">
+          <h2 class="eyebrow" data-i18n="education.label">Education</h2>
+          <p class="education__school" data-reveal data-i18n="education.school">University of Waterloo</p>
+          <dl class="education__meta" data-reveal>
+            <div>
+              <dt data-i18n="education.degreeLabel">Degree</dt>
+              <dd data-i18n="education.degree">Bachelor's Degree</dd>
             </div>
-          </div>
-
-          <ul class="work__list" data-view="list">
-            <li class="work__item">
-              <a
-                class="work__link"
-                href="/projects/aurora/"
-                style="--cover-a: #5b4dff; --cover-b: #ff5fa2; --cover-c: #c6f432"
-              >
-                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">A</span></span>
-                <span class="work__index">01</span>
-                <span class="work__name">Aurora</span>
-                <span class="work__category" data-i18n="projects.aurora.category">WebGL experience</span>
-                <span class="work__year">2026</span>
-              </a>
-            </li>
-            <li class="work__item">
-              <a
-                class="work__link"
-                href="/projects/monolith/"
-                style="--cover-a: #17171b; --cover-b: #c6f432; --cover-c: #efece6"
-              >
-                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">M</span></span>
-                <span class="work__index">02</span>
-                <span class="work__name">Monolith</span>
-                <span class="work__category" data-i18n="projects.monolith.category">Brand &amp; website</span>
-                <span class="work__year">2025</span>
-              </a>
-            </li>
-            <li class="work__item">
-              <a
-                class="work__link"
-                href="/projects/tidal/"
-                style="--cover-a: #0b3b5c; --cover-b: #35d6c8; --cover-c: #efece6"
-              >
-                <span class="work__cover cover-art" aria-hidden="true"><span class="cover-art__glyph">T</span></span>
-                <span class="work__index">03</span>
-                <span class="work__name">Tidal</span>
-                <span class="work__category" data-i18n="projects.tidal.category">E-commerce</span>
-                <span class="work__year">2025</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-
-        <div class="work__preview" aria-hidden="true">
-          <div class="cover-art"><span class="cover-art__glyph"></span></div>
+            <div>
+              <dt data-i18n="education.fieldLabel">Field of study</dt>
+              <dd data-i18n="education.field">Financial Mathematics</dd>
+            </div>
+          </dl>
         </div>
       </section>
 
@@ -376,15 +279,15 @@
         <div class="marquee" aria-hidden="true">
           <div class="marquee__track">
             <div class="marquee__group">
-              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
               <span class="marquee__star">✦</span>
-              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
               <span class="marquee__star">✦</span>
             </div>
             <div class="marquee__group">
-              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
               <span class="marquee__star">✦</span>
-              <span class="marquee__item" data-i18n="contact.marquee">Let's work together</span>
+              <span class="marquee__item" data-i18n="contact.marquee">Let's connect</span>
               <span class="marquee__star">✦</span>
             </div>
           </div>
@@ -393,14 +296,14 @@
         <div class="container contact__body">
           <h2 class="visually-hidden" data-i18n="sections.contact">Contact</h2>
           <p class="contact__lead" data-reveal data-i18n="contact.lead">
-            Have a project, a role or an idea in mind? I'd love to hear about it.
+            Want to talk finance, data or growth? Send me a message.
           </p>
           <a class="contact__email" href="mailto:hello@example.com" data-reveal>
             hello@example.com<span aria-hidden="true">↗</span>
           </a>
           <p class="contact__availability" data-reveal>
             <span class="status-dot" aria-hidden="true"></span>
-            <span data-i18n="contact.availability">Currently available — let's talk</span>
+            <span data-i18n="contact.location">Currently in San Jose, California</span>
           </p>
         </div>
       </section>

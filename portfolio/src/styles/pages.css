@@ -79,11 +79,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.contact-page__response {
-  margin-top: 0.5rem;
-  color: var(--fg-muted);
-}
-
 @media (max-width: 34rem) {
   .contact-page__grid {
     grid-template-columns: 1fr;

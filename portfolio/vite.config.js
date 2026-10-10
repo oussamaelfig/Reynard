@@ -9,7 +9,7 @@ const partialsDir = resolve(root, 'src/partials')
 const ignoredDirs = new Set(['node_modules', 'dist', 'public', 'src', 'scripts', 'models'])
 
 // Every .html file outside the ignored folders becomes a page, so adding
-// projects/<slug>/index.html is enough to publish /projects/<slug>/.
+// resume/index.html is enough to publish /resume/.
 function findPages(dir = root) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     if (entry.name.startsWith('.')) return []

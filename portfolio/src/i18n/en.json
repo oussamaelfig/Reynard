@@ -1,14 +1,14 @@
 {
   "meta": {
-    "homeTitle": "Your Name — Creative Developer & Designer",
-    "homeDescription": "Portfolio of Your Name, a creative developer and designer crafting interactive, motion-driven web experiences.",
-    "playgroundTitle": "Playground — Your Name",
-    "playgroundDescription": "Small interactive experiments: physics, motion and code sketches.",
-    "contactTitle": "Contact — Your Name",
-    "contactDescription": "Get in touch for freelance projects, full-time roles or collaborations.",
-    "legalTitle": "Legal notice — Your Name",
+    "homeTitle": "Fiona — Finance, Data & Growth",
+    "homeDescription": "Portfolio of Fiona, a Financial Mathematics student at the University of Waterloo with internships in finance and growth.",
+    "playgroundTitle": "Playground — Fiona",
+    "playgroundDescription": "A small physics toy made from the keywords of Fiona's path.",
+    "contactTitle": "Contact — Fiona",
+    "contactDescription": "Get in touch with Fiona about internships, finance, data or growth.",
+    "legalTitle": "Legal notice — Fiona",
     "legalDescription": "Publisher, hosting, intellectual property and personal data information.",
-    "notFoundTitle": "Page not found — Your Name"
+    "notFoundTitle": "Page not found — Fiona"
   },
   "common": {
     "skip": "Skip to content",
@@ -17,7 +17,7 @@
   },
   "nav": {
     "main": "Main navigation",
-    "work": "Work",
+    "experience": "Experience",
     "playground": "Playground",
     "contact": "Contact",
     "language": "Switch the website to French",
@@ -26,159 +26,138 @@
   "sections": {
     "hero": "Home",
     "about": "About",
-    "journey": "Journey",
-    "toolkit": "Toolkit",
-    "work": "Work",
+    "experience": "Experience",
+    "focus": "Focus",
+    "education": "Education",
     "contact": "Contact"
   },
   "hero": {
-    "eyebrow": "Portfolio — Selected work",
-    "location": "Based in Your City",
-    "availability": "Available for freelance & full-time",
-    "titleLine1": "Creative developer",
-    "titleLine2": "& designer",
+    "eyebrow": "Financial Mathematics — University of Waterloo",
+    "location": "Currently in San Jose, CA",
+    "status": "Finance Intern at Venu (YC W21)",
+    "titleLine1": "Finance, data",
+    "titleLine2": "& growth",
     "scroll": "Scroll"
   },
   "about": {
     "label": "About",
-    "statement": "I build interfaces that move, react and tell stories — where every pixel is designed and every interaction is engineered.",
-    "body": "Write two or three sentences about yourself here: your background, the kind of projects you enjoy and what you bring to a team."
+    "statement": "I'm Fiona — a Financial Mathematics student at the University of Waterloo, working where finance, data and growth meet.",
+    "body": "Right now I'm a Finance Intern at Venu (YC W21) in San Jose. Before that I spent six months as a Growth Intern at Phydata, and I'm a member of the Waterloo Data Science Club."
   },
-  "journey": {
-    "title": "Journey",
-    "chapter1": {
-      "label": "2018 — The spark",
-      "line1": "It began",
-      "line2": "with curiosity.",
-      "detail": "Where did it all start? A first sketch, a first line of code, a first job."
+  "experience": {
+    "title": "Experience",
+    "phydata": {
+      "label": "Apr – Sep 2026 · Phydata Inc.",
+      "line1": "Growth Intern",
+      "line2": "at Phydata.",
+      "detail": "Phydata builds custom training data for physical AI. Six months on-site in Canada."
     },
-    "chapter2": {
-      "label": "2021 — The craft",
-      "line1": "Then came",
-      "line2": "the craft.",
-      "detail": "The years spent learning: schools, studios, side projects and late nights."
+    "dsc": {
+      "label": "Aug 2026 – Present · Waterloo Data Science Club",
+      "line1": "Data Science",
+      "line2": "Club member.",
+      "detail": "Member of the Waterloo Data Science Club, a student community at the University of Waterloo."
     },
-    "chapter3": {
-      "label": "Today — The blend",
-      "line1": "Now I build",
-      "line2": "what I imagine.",
-      "detail": "What you do today and the kind of work you want to do next."
+    "venu": {
+      "label": "Sep 2026 – Present · Venu (YC W21)",
+      "line1": "Finance Intern",
+      "line2": "at Venu.",
+      "detail": "Finance internship at Venu, a Y Combinator W21 company, in San Jose, California."
     }
   },
-  "toolkit": {
-    "title": "Toolkit",
-    "intro": "The tools I reach for, from first sketch to production.",
+  "focus": {
+    "title": "Focus",
+    "intro": "The fields my studies and internships have taken me into.",
     "hint": "Keep scrolling to spin the wheel",
     "groups": {
-      "code": "Code",
-      "motion": "3D & Motion",
-      "design": "Design"
+      "finance": "Finance",
+      "data": "Data",
+      "growth": "Growth"
+    },
+    "cards": {
+      "financialMath": "Financial Mathematics",
+      "finance": "Finance",
+      "dataScience": "Data Science",
+      "physicalAi": "Physical AI",
+      "growth": "Growth",
+      "startups": "Startups"
     },
     "tags": {
-      "language": "Language",
-      "framework": "Framework",
-      "runtime": "Runtime",
-      "engine": "3D engine",
-      "shaders": "Shaders",
-      "animation": "Animation",
-      "modeling": "3D modeling",
-      "interface": "Interface design",
-      "imaging": "Image editing",
-      "motion": "Motion design"
+      "financialMath": "University of Waterloo",
+      "finance": "Intern at Venu",
+      "dataScience": "UW Data Science Club",
+      "physicalAi": "Phydata · training data",
+      "growth": "Intern at Phydata",
+      "startups": "Venu · YC W21"
     }
   },
-  "work": {
-    "title": "Selected work",
-    "views": "Layout",
-    "list": "List",
-    "grid": "Grid"
-  },
-  "projects": {
-    "aurora": {
-      "category": "WebGL experience",
-      "role": "Creative development",
-      "summary": "An immersive 3D experience exploring light, colour and motion in the browser.",
-      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
-      "approach": "Explain your process: the concept, the technical choices (shaders, physics, performance budgets) and the trade-offs you made along the way.",
-      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
-    },
-    "monolith": {
-      "category": "Brand & website",
-      "role": "Art direction & development",
-      "summary": "A bold identity and editorial website for a fictional architecture studio.",
-      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
-      "approach": "Explain your process: moodboards, typography, layout system, motion principles and how the design translated into code.",
-      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
-    },
-    "tidal": {
-      "category": "E-commerce",
-      "role": "Front-end development",
-      "summary": "A fluid shopping experience for a fictional surf brand, built for speed.",
-      "context": "Describe the brief here: who the client was, what problem they had and what success looked like. Two short paragraphs are usually enough.",
-      "approach": "Explain your process: component architecture, performance work, accessibility and the interactions that make the store feel alive.",
-      "outcome": "Close with the result: numbers, awards, feedback or simply what you learned. Link to the live project if it is still online."
-    }
-  },
-  "project": {
-    "role": "Role",
-    "year": "Year",
-    "stack": "Stack",
-    "link": "Live site",
-    "linkPlaceholder": "Coming soon",
-    "context": "Context",
-    "approach": "Approach",
-    "outcome": "Outcome",
-    "gallery": "Placeholder visual — replace with your own",
-    "next": "Next project",
-    "back": "All projects"
+  "education": {
+    "label": "Education",
+    "school": "University of Waterloo",
+    "degreeLabel": "Degree",
+    "degree": "Bachelor's Degree",
+    "fieldLabel": "Field of study",
+    "field": "Financial Mathematics"
   },
   "contact": {
-    "marquee": "Let's work together",
-    "lead": "Have a project, a role or an idea in mind? I'd love to hear about it.",
-    "availability": "Currently available — let's talk"
+    "marquee": "Let's connect",
+    "lead": "Want to talk finance, data or growth? Send me a message.",
+    "location": "Currently in San Jose, California"
   },
   "footer": {
-    "role": "Creative developer & designer",
+    "role": "Financial Mathematics · University of Waterloo",
     "explore": "Explore",
     "elsewhere": "Elsewhere",
     "time": "Local time",
-    "city": "Your City",
+    "city": "San Jose, CA",
     "legal": "Legal notice",
     "top": "Back to top",
     "rights": "All rights reserved."
   },
   "playground": {
     "title": "Playground",
-    "intro": "Small experiments that don't fit anywhere else.",
-    "hint": "Drag the shapes · Click to add more · Scroll to flip gravity",
-    "hintTouch": "Drag the shapes · Tap to add more",
+    "intro": "My path so far, in words you can throw around.",
+    "hint": "Drag the words · Click to add more · Scroll to flip gravity",
+    "hintTouch": "Drag the words · Tap to add more",
     "flip": "Flip gravity",
     "reset": "Reset",
     "canvas": "Interactive physics playground",
-    "items": ["Shaders", "Physics", "Motion", "Type", "WebGL", "Generative", "Sound", "Prototypes", "Particles", "Interaction"]
+    "items": [
+      "Finance",
+      "Data science",
+      "Growth",
+      "Financial math",
+      "Waterloo",
+      "Venu",
+      "Phydata",
+      "YC W21",
+      "San Jose",
+      "Startups",
+      "Physical AI",
+      "Internships"
+    ]
   },
   "contactPage": {
     "eyebrow": "Contact",
-    "titleLine1": "Let's build",
-    "titleLine2": "something together.",
-    "intro": "Freelance projects, full-time roles or a simple hello — my inbox is open.",
+    "titleLine1": "Let's talk",
+    "titleLine2": "finance & growth.",
+    "intro": "Internships, projects or a coffee chat — my inbox is open.",
     "copy": "Copy email",
     "copied": "Copied!",
-    "socials": "Find me online",
-    "response": "I usually reply within 48 hours."
+    "socials": "Find me online"
   },
   "legal": {
     "title": "Legal notice",
-    "intro": "Fill in this template with your own details before publishing.",
+    "intro": "Fill in the hosting details below before publishing.",
     "publisherTitle": "Publisher",
-    "publisherBody": "Your Name — independent creative developer. Contact: hello@example.com.",
+    "publisherBody": "Fiona — Financial Mathematics student at the University of Waterloo. Contact: hello@example.com.",
     "hostingTitle": "Hosting",
     "hostingBody": "This website is hosted by [hosting provider — company name, address and phone number].",
     "ipTitle": "Intellectual property",
-    "ipBody": "Unless credited otherwise, the texts, visuals, design and code of this website belong to Your Name. Please ask before reusing any of it.",
+    "ipBody": "Unless credited otherwise, the texts, visuals, design and code of this website belong to Fiona. Please ask before reusing any of it.",
     "dataTitle": "Personal data",
     "dataBody": "This website does not collect personal data and uses no tracking cookies. Your language preference is stored locally in your browser only.",
-    "updated": "Last updated: [date]"
+    "updated": "Last updated: October 2026"
   },
   "notFound": {
     "title": "Lost in space",
